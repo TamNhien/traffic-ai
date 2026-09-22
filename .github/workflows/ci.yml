@@ -39,7 +39,7 @@ jobs:
       - name: Run tests
         working-directory: ${{ matrix.component }}
         env:
-          DATABASE_URL_OVERRIDE: sqlite+pysqlite:///:memory:
+          DATABASE_URL_OVERRIDE: "sqlite+pysqlite:///:memory:"
           AI_SERVICE_URL: http://127.0.0.1:8001
           PYTHONPATH: .
         run: python -m pytest -q
@@ -55,6 +55,14 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
+
+      - name: Verify web branding assets
+        working-directory: frontend
+        run: |
+          test -f public/favicon.svg
+          test -f public/favicon.ico
+          test -f public/logo.svg
+          test -f public/site.webmanifest
 
       - name: Install dependencies
         working-directory: frontend

@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Traffic AI logo">
+  <defs>
+    <linearGradient id="g" x1="16" y1="12" x2="112" y2="116" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2DD4BF"/>
+      <stop offset="1" stop-color="#3B82F6"/>
+    </linearGradient>
+    <filter id="s" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="8" flood-color="#000" flood-opacity=".22"/>
+    </filter>
+  </defs>
+  <rect x="8" y="8" width="112" height="112" rx="30" fill="url(#g)" filter="url(#s)"/>
+  <path d="M34 90 49 38h24l15 52H72.5l-2.8-11.5H52.4L49.5 90H34Zm23-23h10.2L62 47.2 57 67Z" fill="#04111E"/>
+  <rect x="91" y="38" width="10" height="52" rx="5" fill="#04111E"/>
+  <path d="M29 99h70" stroke="#E6FFFB" stroke-opacity=".42" stroke-width="4" stroke-linecap="round"/>
+</svg>

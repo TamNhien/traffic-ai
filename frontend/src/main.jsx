@@ -85,9 +85,9 @@ function App() {
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <div className="brand"><div className="brand-mark">AI</div><div><strong>Traffic AI</strong><span>YOLO26 + ByteTrack</span></div></div>
+        <div className="brand"><img className="brand-logo" src="/logo.svg?v=0.2.6" alt="Traffic AI" /><div><strong>Traffic AI</strong><span>YOLO26 + ByteTrack</span></div></div>
         <nav><a className="active" href="#overview">Tổng quan</a><a href="#live">Giám sát</a><a href="#cameras">Camera</a><a href="#events">Sự kiện</a></nav>
-        <div className="sidebar-footer">V0.2.5 · YOLO26n + ByteTrack</div>
+        <div className="sidebar-footer">V0.2.6 · YOLO26n + ByteTrack</div>
       </aside>
       <main>
         <header className="topbar"><div><p className="eyebrow">ĐỒ ÁN TRÍ TUỆ NHÂN TẠO</p><h1>Phát hiện, theo dõi và đếm phương tiện</h1></div><div className={`health ${health?.status === 'ok' ? 'online' : ''}`}><span className="dot" />{health?.status === 'ok' ? 'Hệ thống hoạt động' : 'Đang kết nối'}</div></header>

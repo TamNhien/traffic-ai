@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Traffic AI">
+  <defs>
+    <linearGradient id="g" x1="8" y1="8" x2="56" y2="56" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2DD4BF"/>
+      <stop offset="1" stop-color="#3B82F6"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="60" height="60" rx="16" fill="url(#g)"/>
+  <path d="M18 45 26 18h12l8 27h-8.2l-1.5-6H27.5L26 45H18Zm11.2-12h5.5L32 22.5 29.2 33Z" fill="#04111E"/>
+  <rect x="47" y="18" width="5" height="27" rx="2.5" fill="#04111E"/>
+</svg>

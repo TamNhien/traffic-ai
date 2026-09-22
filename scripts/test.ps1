@@ -78,6 +78,55 @@ function Assert-FrontendUtf8Contract {
   Write-Host "[OK] Frontend UTF-8/Vietnamese text contract" -ForegroundColor Green
 }
 
+
+function Assert-FrontendBrandingContract {
+  Write-Host "`n[Traffic AI] Frontend logo/favicon contract" -ForegroundColor Cyan
+  $frontendRoot = Join-Path $root "frontend"
+  $favicon = Join-Path $frontendRoot "public\favicon.svg"
+  $logo = Join-Path $frontendRoot "public\logo.svg"
+  $manifest = Join-Path $frontendRoot "public\site.webmanifest"
+  $faviconIco = Join-Path $frontendRoot "public\favicon.ico"
+  $appleIcon = Join-Path $frontendRoot "public\apple-touch-icon.png"
+  foreach ($path in @($favicon, $faviconIco, $appleIcon, $logo, $manifest)) {
+    if (-not (Test-Path $path)) { throw "Thiếu tài nguyên nhận diện web: $path" }
+  }
+  $indexText = Get-Content (Join-Path $frontendRoot "index.html") -Raw -Encoding UTF8
+  if ($indexText -notmatch 'rel="icon"' -or $indexText -notmatch '/favicon\.svg') {
+    throw "frontend/index.html chưa khai báo favicon Traffic AI."
+  }
+  if ($indexText -notmatch 'rel="manifest"' -or $indexText -notmatch '/site\.webmanifest') {
+    throw "frontend/index.html chưa khai báo web manifest."
+  }
+  $mainText = Get-Content (Join-Path $frontendRoot "src\main.jsx") -Raw -Encoding UTF8
+  if ($mainText -notmatch '/logo\.svg') {
+    throw "Sidebar chưa sử dụng logo.svg."
+  }
+  Write-Host "[OK] Frontend logo/favicon contract" -ForegroundColor Green
+}
+
+function Assert-ReleaseFallbackContract {
+  Write-Host "`n[Traffic AI] GitHub Release fallback contract" -ForegroundColor Cyan
+  $publishText = Get-Content (Join-Path $PSScriptRoot "publish.ps1") -Raw -Encoding UTF8
+  if ($publishText -notmatch 'New-DirectGitHubRelease -Tag \$tag') {
+    throw "publish.ps1 thiếu fallback tạo GitHub Release trực tiếp."
+  }
+  if ($publishText -match 'GitHub Actions Release thất bại\. Xem chi tiết') {
+    throw "publish.ps1 vẫn dừng cứng khi GitHub Actions Release thất bại."
+  }
+  $releaseText = Get-Content (Join-Path $root ".github\workflows\release.yml") -Raw -Encoding UTF8
+  if ($releaseText -notmatch 'Create GitHub Release' -or $releaseText -notmatch 'Verify VERSION matches tag') {
+    throw "release.yml thiếu verify/release contract."
+  }
+  $workflowFiles = Get-ChildItem (Join-Path $root ".github\workflows") -Filter "*.yml" -File
+  foreach ($workflow in $workflowFiles) {
+    $workflowText = Get-Content $workflow.FullName -Raw -Encoding UTF8
+    if ($workflowText -match '(?m)^\s*DATABASE_URL_OVERRIDE:\s+sqlite\+pysqlite:///:memory:\s*$') {
+      throw "Workflow YAML có DATABASE_URL_OVERRIDE kết thúc bằng dấu ':' nhưng chưa được quote: $($workflow.FullName)"
+    }
+  }
+  Write-Host "[OK] GitHub Release fallback contract" -ForegroundColor Green
+}
+
 function Invoke-Step([string]$Title, [scriptblock]$Action) {
   Write-Host "`n[Traffic AI] $Title" -ForegroundColor Cyan
   & $Action
@@ -88,6 +137,8 @@ function Invoke-Step([string]$Title, [scriptblock]$Action) {
 Assert-LocalHttpsBootstrapContract
 Assert-BackendHealthContract
 Assert-FrontendUtf8Contract
+Assert-FrontendBrandingContract
+Assert-ReleaseFallbackContract
 
 Invoke-Step "Backend syntax check" {
   docker run --rm -v "${root}:/src" -w /src/backend python:3.12-slim python -m compileall -q app tests alembic

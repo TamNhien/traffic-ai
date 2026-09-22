@@ -34,7 +34,7 @@ function Invoke-Checked([scriptblock]$Action, [string]$Message) {
 }
 
 function New-DirectGitHubRelease([string]$Tag) {
-  Write-Host "[Traffic AI] Không thấy workflow Release; chuyển sang tạo Release trực tiếp bằng GitHub CLI..." -ForegroundColor Yellow
+  Write-Host "[Traffic AI] Chuyển sang tạo Release trực tiếp bằng GitHub CLI..." -ForegroundColor Yellow
   $distRoot = Join-Path $root "dist-release"
   if (Test-Path $distRoot) { Remove-Item $distRoot -Recurse -Force }
   New-Item -ItemType Directory -Path $distRoot | Out-Null
@@ -168,12 +168,15 @@ if ($NoWait) {
     Write-Host "[Traffic AI] Theo dõi GitHub Actions run #$runId..." -ForegroundColor Cyan
     gh run watch $runId --repo "$Owner/$Repository" --exit-status
     if ($LASTEXITCODE -ne 0) {
-      throw "GitHub Actions Release thất bại. Xem chi tiết: gh run view $runId --repo $Owner/$Repository --log-failed"
-    }
-
-    gh release view $tag --repo "$Owner/$Repository" 1>$null
-    if ($LASTEXITCODE -ne 0) {
-      throw "Workflow hoàn tất nhưng chưa tìm thấy GitHub Release $tag."
+      Write-Host "[WARNING] GitHub Actions Release thất bại. Đang lấy log lỗi rồi fallback sang GitHub CLI..." -ForegroundColor Yellow
+      gh run view $runId --repo "$Owner/$Repository" --log-failed
+      New-DirectGitHubRelease -Tag $tag
+    } else {
+      gh release view $tag --repo "$Owner/$Repository" 1>$null 2>$null
+      if ($LASTEXITCODE -ne 0) {
+        Write-Host "[WARNING] Workflow đã hoàn tất nhưng chưa tạo Release. Fallback sang GitHub CLI..." -ForegroundColor Yellow
+        New-DirectGitHubRelease -Tag $tag
+      }
     }
   }
 }

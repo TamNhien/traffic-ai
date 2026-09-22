@@ -1,4 +1,4 @@
-# Traffic AI V0.2.5
+# Traffic AI V0.2.6
 
 **Đồ án môn Trí tuệ nhân tạo:** Nghiên cứu và xây dựng hệ thống phát hiện, phân loại, theo dõi và đếm phương tiện giao thông qua camera.
 
@@ -10,7 +10,7 @@
 
 ## 1. Trạng thái hiện tại
 
-V0.2.5 giữ YOLO26n làm model chính, sửa false-positive của kiểm thử UTF-8 khi Vite đã sinh bundle trong `frontend/dist`, và gia cố quy trình phát hành GitHub. Contract UTF-8 từ nay chỉ quét source do con người chỉnh sửa (`frontend/src` cùng các file cấu hình nguồn), không quét `dist`/`node_modules` vì bundler có thể hợp lệ hóa Unicode thành dạng `\uXXXX`. `publish.ps1` cũng nhận diện workflow Release theo commit SHA và tự tạo GitHub Release trực tiếp nếu workflow không xuất hiện sau thời gian chờ.
+V0.2.6 giữ YOLO26n làm model chính, bổ sung bộ nhận diện web Traffic AI (logo sidebar, favicon cho tab trình duyệt và web manifest), đồng thời sửa quy trình phát hành để **GitHub Actions Release lỗi cũng không làm `publish.ps1` dừng cứng**. Workflow Release được đơn giản hóa theo hướng test Backend/AI/Frontend + validate Docker Compose rồi đóng gói; nếu workflow vẫn thất bại hoặc không tạo Release, script tự fallback sang GitHub CLI để tạo ZIP, TAR.GZ và SHA256SUMS.
 
 - PostgreSQL 18, database `traffic_ai_db`.
 - Docker named volume `traffic_ai_postgres_data` để giữ dữ liệu bền vững.
@@ -283,7 +283,7 @@ Kiểm tra .env và khóa riêng TLS không bị commit
          ↓
 Commit source
          ↓
-Tạo tag theo file `VERSION` (ví dụ `v0.2.5`)
+Tạo tag theo file `VERSION` (ví dụ `v0.2.6`)
          ↓
 Push main
          ↓
@@ -586,6 +586,20 @@ Các phiên bản được sắp xếp **tăng dần**:
 - Thêm `.gitattributes` để chuẩn hóa line ending và giảm cảnh báo LF/CRLF trên Windows.
 - Backend, AI Service, Frontend và `VERSION` đồng bộ phiên bản `0.2.5`.
 - Không có migration database mới; schema vẫn ở `0004_runtime_stability`, dữ liệu PostgreSQL được giữ nguyên.
+
+### V0.2.6 — Logo/Favicon web và Release fallback khi GitHub Actions lỗi
+
+- Thêm `frontend/public/logo.svg` và dùng logo thật tại sidebar thay cho ô chữ `AI` thuần CSS.
+- Thêm `frontend/public/favicon.svg`, `favicon.ico`, `apple-touch-icon.png` và `site.webmanifest`; tab trình duyệt từ nay hiển thị logo Traffic AI thay cho biểu tượng mặc định.
+- `frontend/index.html` khai báo favicon có version query để hạn chế cache favicon cũ sau khi nâng cấp.
+- `test.ps1` bổ sung **Frontend logo/favicon contract**, fail nếu thiếu logo, favicon, manifest hoặc sidebar không dùng `logo.svg`.
+- Sửa `release.yml`: workflow Release tự kiểm thử Backend, AI Service, build Frontend và validate Docker Compose trước khi đóng gói; bỏ Docker image build lặp lại ở bước Release vì CI/local test đã thực hiện phần này.
+- Sửa lỗi workflow thực tế của V0.2.5: `DATABASE_URL_OVERRIDE: sqlite+pysqlite:///:memory:` là plain YAML scalar kết thúc bằng dấu `:` nên parser có thể coi workflow gọi lại là không hợp lệ; V0.2.6 quote giá trị thành `"sqlite+pysqlite:///:memory:"` trong toàn bộ workflow.
+- Sửa `publish.ps1`: nếu GitHub Actions Release **có xuất hiện nhưng chạy failure**, script in log lỗi rồi tự fallback tạo Release bằng GitHub CLI thay vì dừng cứng.
+- Nếu workflow thành công nhưng chưa tạo Release, script cũng fallback trực tiếp; mục tiêu là một lệnh `publish.ps1` vẫn khép kín quá trình phát hành.
+- `test.ps1` bổ sung **GitHub Release fallback contract** để ngăn việc quay lại hành vi dừng cứng của V0.2.5.
+- Backend, AI Service, Frontend và `VERSION` đồng bộ phiên bản `0.2.6`.
+- Không có migration database mới; schema PostgreSQL vẫn ở `0004_runtime_stability`.
 
 ## 15. Lộ trình tiếp theo
 
