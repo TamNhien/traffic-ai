@@ -19,6 +19,19 @@ class CameraCreate(BaseModel):
     line_y2: float = Field(default=0.5, ge=0, le=1)
 
 
+class CameraUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=2, max_length=120)
+    source_type: SourceType | None = None
+    source_url: str | None = Field(default=None, min_length=1)
+    location: str | None = None
+    description: str | None = None
+    confidence_threshold: float | None = Field(default=None, ge=0.05, le=0.95)
+    line_x1: float | None = Field(default=None, ge=0, le=1)
+    line_y1: float | None = Field(default=None, ge=0, le=1)
+    line_x2: float | None = Field(default=None, ge=0, le=1)
+    line_y2: float | None = Field(default=None, ge=0, le=1)
+
+
 class CameraRead(CameraCreate):
     id: int
     status: CameraStatus

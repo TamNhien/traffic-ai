@@ -15,6 +15,12 @@ class PipelineState:
     fps: float = 0.0
     processed_frames: int = 0
     total_count: int = 0
+    in_count: int = 0
+    out_count: int = 0
+    detected_tracks: int = 0
+    delivered_events: int = 0
+    pending_events: int = 0
+    delivery_failures: int = 0
     last_error: str | None = None
 
 
@@ -26,8 +32,12 @@ class PipelineRegistry:
 
     def start(self, payload: PipelineStart) -> dict:
         with self._lock:
-            if payload.camera_id in self._workers:
+            existing = self._workers.get(payload.camera_id)
+            if existing is not None and existing.is_alive():
                 raise ValueError("Pipeline already running for this camera")
+            # Clean up a worker that has already exited so the same video/camera
+            # can be started again immediately.
+            self._workers.pop(payload.camera_id, None)
             from app.worker import PipelineWorker
 
             state = PipelineState(camera_id=payload.camera_id, session_id=payload.session_id)
@@ -44,7 +54,7 @@ class PipelineRegistry:
         if worker is None or state is None:
             raise KeyError(camera_id)
         worker.stop()
-        worker.join(timeout=10)
+        worker.join(timeout=15)
         return asdict(state)
 
     def list(self) -> list[dict]:

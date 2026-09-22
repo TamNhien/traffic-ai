@@ -24,6 +24,7 @@ class PipelineWorker(threading.Thread):
         self._stop_event = threading.Event()
         self._jpeg_lock = threading.Lock()
         self._latest_jpeg: bytes | None = None
+        self._pending_events: list[dict] = []
         self.backend_url = os.getenv("BACKEND_INTERNAL_URL", "http://backend:8000/api/internal")
         self.shared_token = os.getenv("AI_SHARED_TOKEN", "TrafficAI-Local-2026")
         self.model_name = payload.model_path or os.getenv("AI_MODEL_NAME", "yolo26n.pt")
@@ -66,6 +67,8 @@ class PipelineWorker(threading.Thread):
             )
             self.state.status = "running"
             class_ids = self._vehicle_class_ids(model.names)
+            if not class_ids:
+                raise RuntimeError("YOLO model does not expose supported vehicle classes")
 
             while not self._stop_event.is_set():
                 ok, frame = cap.read()
@@ -84,7 +87,7 @@ class PipelineWorker(threading.Thread):
                 )
                 result = results[0]
                 height, width = frame.shape[:2]
-                counts = {"in": 0, "out": 0}
+                seen_ids: set[int] = set()
 
                 boxes = result.boxes
                 if boxes is not None and boxes.id is not None:
@@ -94,17 +97,26 @@ class PipelineWorker(threading.Thread):
                     confs = boxes.conf.cpu().tolist()
                     for rect, track_id, cls_id, confidence in zip(xyxy, ids, classes, confs):
                         x1, y1, x2, y2 = rect
-                        center = ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
+                        # Bottom-center represents the point where a vehicle meets
+                        # the road and is much more stable for virtual-gate counting
+                        # than the geometric center of a large bounding box.
+                        anchor = ((x1 + x2) / 2.0, y2)
                         label = str(result.names[int(cls_id)])
-                        direction = counter.update(track_id, center, width, height)
-                        self._draw_detection(cv2, frame, rect, track_id, label, confidence)
+                        seen_ids.add(int(track_id))
+                        direction = counter.update(int(track_id), anchor, width, height)
+                        self._draw_detection(cv2, frame, rect, int(track_id), label, float(confidence), anchor)
                         if direction:
-                            counts[direction] += 1
                             self.state.total_count += 1
-                            snapshot = self._save_snapshot(cv2, frame, track_id)
-                            self._post_event(track_id, label, direction, float(confidence), snapshot)
+                            self.state.in_count = counter.in_count
+                            self.state.out_count = counter.out_count
+                            snapshot = self._save_snapshot(cv2, frame, int(track_id))
+                            event = self._event_payload(int(track_id), label, direction, float(confidence), snapshot)
+                            if not self._deliver_event(event):
+                                self._pending_events.append(event)
 
-                self._draw_overlay(cv2, frame, counter, counts)
+                self.state.detected_tracks = max(self.state.detected_tracks, len(seen_ids))
+                self._flush_pending_events(max_items=5)
+                self._draw_overlay(cv2, frame, counter)
                 ok_jpeg, encoded = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
                 if ok_jpeg:
                     with self._jpeg_lock:
@@ -122,6 +134,13 @@ class PipelineWorker(threading.Thread):
         finally:
             if cap is not None:
                 cap.release()
+            # Give event delivery a final chance before closing the session.
+            for _ in range(4):
+                if not self._pending_events:
+                    break
+                self._flush_pending_events(max_items=100)
+                if self._pending_events:
+                    time.sleep(0.4)
             self._notify_finished()
             self.on_finished(self.payload.camera_id)
 
@@ -136,18 +155,19 @@ class PipelineWorker(threading.Thread):
         return [int(idx) for idx, name in mapping if str(name) in VEHICLE_CLASSES]
 
     @staticmethod
-    def _draw_detection(cv2, frame, rect, track_id: int, label: str, confidence: float) -> None:
+    def _draw_detection(cv2, frame, rect, track_id: int, label: str, confidence: float, anchor) -> None:
         x1, y1, x2, y2 = [int(v) for v in rect]
         cv2.rectangle(frame, (x1, y1), (x2, y2), (60, 220, 120), 2)
+        cv2.circle(frame, (int(anchor[0]), int(anchor[1])), 4, (255, 220, 0), -1)
         cv2.putText(frame, f"{label} #{track_id} {confidence:.2f}", (x1, max(18, y1 - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (60, 220, 120), 2)
 
-    def _draw_overlay(self, cv2, frame, counter: LineCrossingCounter, counts: dict[str, int]) -> None:
+    def _draw_overlay(self, cv2, frame, counter: LineCrossingCounter) -> None:
         h, w = frame.shape[:2]
         a, b = counter.line.denormalize(w, h)
         cv2.line(frame, (int(a[0]), int(a[1])), (int(b[0]), int(b[1])), (0, 200, 255), 3)
-        cv2.putText(frame, f"TOTAL {self.state.total_count} | FPS {self.state.fps:.1f}", (20, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 200, 255), 2)
-        if counts["in"] or counts["out"]:
-            cv2.putText(frame, f"Crossing IN +{counts['in']} OUT +{counts['out']}", (20, 64), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 200, 255), 2)
+        cv2.putText(frame, f"TOTAL {self.state.total_count} | IN {counter.in_count} | OUT {counter.out_count} | FPS {self.state.fps:.1f}", (20, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.72, (0, 200, 255), 2)
+        if self._pending_events:
+            cv2.putText(frame, f"DB PENDING {len(self._pending_events)}", (20, 62), cv2.FONT_HERSHEY_SIMPLEX, 0.62, (0, 165, 255), 2)
 
     def _save_snapshot(self, cv2, frame, track_id: int) -> str | None:
         try:
@@ -160,8 +180,8 @@ class PipelineWorker(threading.Thread):
         except Exception:
             return None
 
-    def _post_event(self, track_id: int, label: str, direction: str, confidence: float, snapshot: str | None) -> None:
-        payload = {
+    def _event_payload(self, track_id: int, label: str, direction: str, confidence: float, snapshot: str | None) -> dict:
+        return {
             "camera_id": self.payload.camera_id,
             "session_id": self.payload.session_id,
             "model_id": self.payload.model_id,
@@ -171,28 +191,58 @@ class PipelineWorker(threading.Thread):
             "confidence": confidence,
             "snapshot_path": snapshot,
         }
-        try:
-            httpx.post(
-                f"{self.backend_url}/events",
-                json=payload,
-                headers={"X-AI-Token": self.shared_token},
-                timeout=3.0,
-            ).raise_for_status()
-        except Exception:
-            pass
+
+    def _deliver_event(self, payload: dict) -> bool:
+        for attempt in range(1, 4):
+            try:
+                response = httpx.post(
+                    f"{self.backend_url}/events",
+                    json=payload,
+                    headers={"X-AI-Token": self.shared_token},
+                    timeout=4.0,
+                )
+                response.raise_for_status()
+                self.state.delivered_events += 1
+                self.state.pending_events = len(self._pending_events)
+                if self.state.last_error and self.state.last_error.startswith("Event delivery attempt"):
+                    self.state.last_error = None
+                return True
+            except Exception as exc:
+                self.state.delivery_failures += 1
+                self.state.last_error = f"Event delivery attempt {attempt} failed: {exc}"
+                if attempt < 3:
+                    time.sleep(0.2 * attempt)
+        return False
+
+    def _flush_pending_events(self, max_items: int) -> None:
+        if not self._pending_events:
+            self.state.pending_events = 0
+            return
+        remaining: list[dict] = []
+        for index, event in enumerate(self._pending_events):
+            if index >= max_items or not self._deliver_event(event):
+                remaining.append(event)
+        self._pending_events = remaining
+        self.state.pending_events = len(remaining)
 
     def _notify_finished(self) -> None:
-        try:
-            httpx.post(
-                f"{self.backend_url}/sessions/{self.payload.session_id}/finish",
-                json={
-                    "status": self.state.status,
-                    "total_vehicles": self.state.total_count,
-                    "average_fps": self.state.fps,
-                    "last_error": self.state.last_error,
-                },
-                headers={"X-AI-Token": self.shared_token},
-                timeout=3.0,
-            ).raise_for_status()
-        except Exception:
-            pass
+        payload = {
+            "status": self.state.status,
+            "total_vehicles": self.state.total_count,
+            "average_fps": self.state.fps,
+            "last_error": self.state.last_error,
+        }
+        for attempt in range(1, 7):
+            try:
+                response = httpx.post(
+                    f"{self.backend_url}/sessions/{self.payload.session_id}/finish",
+                    json=payload,
+                    headers={"X-AI-Token": self.shared_token},
+                    timeout=4.0,
+                )
+                response.raise_for_status()
+                return
+            except Exception as exc:
+                self.state.last_error = f"Session finish notification attempt {attempt} failed: {exc}"
+                if attempt < 6:
+                    time.sleep(0.35 * attempt)

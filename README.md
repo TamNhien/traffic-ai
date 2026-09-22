@@ -1,4 +1,4 @@
-# Traffic AI V0.2.6
+# Traffic AI V0.2.7
 
 **Đồ án môn Trí tuệ nhân tạo:** Nghiên cứu và xây dựng hệ thống phát hiện, phân loại, theo dõi và đếm phương tiện giao thông qua camera.
 
@@ -10,7 +10,7 @@
 
 ## 1. Trạng thái hiện tại
 
-V0.2.6 giữ YOLO26n làm model chính, bổ sung bộ nhận diện web Traffic AI (logo sidebar, favicon cho tab trình duyệt và web manifest), đồng thời sửa quy trình phát hành để **GitHub Actions Release lỗi cũng không làm `publish.ps1` dừng cứng**. Workflow Release được đơn giản hóa theo hướng test Backend/AI/Frontend + validate Docker Compose rồi đóng gói; nếu workflow vẫn thất bại hoặc không tạo Release, script tự fallback sang GitHub CLI để tạo ZIP, TAR.GZ và SHA256SUMS.
+V0.2.7 tập trung vào độ tin cậy của pipeline đếm và lưu dữ liệu: counting line dùng điểm đáy giữa của bounding box và kiểm tra đoạn chuyển động thực sự cắt line; sự kiện được retry khi ghi PostgreSQL; phiên chạy cũ được tự hòa giải nếu callback kết thúc bị mất; cùng một video có thể chạy lại ngay. Dashboard cho phép chỉnh counting line ngang/dọc và hiển thị lịch sử phiên chạy. pip được nâng lên **26.2.1** trong Docker/test/CI, đồng thời loại bỏ warning summary của Starlette TestClient trong pytest.
 
 - PostgreSQL 18, database `traffic_ai_db`.
 - Docker named volume `traffic_ai_postgres_data` để giữ dữ liệu bền vững.
@@ -283,7 +283,7 @@ Kiểm tra .env và khóa riêng TLS không bị commit
          ↓
 Commit source
          ↓
-Tạo tag theo file `VERSION` (ví dụ `v0.2.6`)
+Tạo tag theo file `VERSION` (ví dụ `v0.2.7`)
          ↓
 Push main
          ↓
@@ -600,6 +600,25 @@ Các phiên bản được sắp xếp **tăng dần**:
 - `test.ps1` bổ sung **GitHub Release fallback contract** để ngăn việc quay lại hành vi dừng cứng của V0.2.5.
 - Backend, AI Service, Frontend và `VERSION` đồng bộ phiên bản `0.2.6`.
 - Không có migration database mới; schema PostgreSQL vẫn ở `0004_runtime_stability`.
+
+### V0.2.7 — Đếm ổn định, lưu PostgreSQL và chạy lại video
+
+- Sửa thuật toán crossing: dùng **bottom-center** của bounding box làm điểm đại diện của xe và kiểm tra đoạn chuyển động giữa hai frame có thực sự cắt counting line.
+- Giữ được crossing khi track đi qua đúng pixel của line hoặc nhảy qua line giữa hai frame.
+- Thêm bộ đếm IN/OUT tích lũy và trạng thái `detected_tracks`, `delivered_events`, `pending_events`, `delivery_failures` cho mỗi pipeline.
+- Sự kiện crossing được retry khi Backend/PostgreSQL tạm thời chưa nhận; pending event được flush lại trong lúc chạy và trước khi đóng session.
+- Endpoint ghi event trở thành idempotent theo `session_id + tracking_id`, tránh đếm trùng khi retry mạng.
+- Mỗi event ngoài `vehicle_events` còn cập nhật `vehicle_counts` theo bucket giờ để có dữ liệu thống kê thực sự.
+- Callback kết thúc session được retry nhiều lần; Backend tự hòa giải session `running` bị stale nếu AI pipeline thực tế đã kết thúc, vì vậy cùng một MP4 có thể bấm **Chạy AI** lại.
+- Dashboard cho phép chọn preset counting line **ngang/dọc**, chỉnh X1/Y1/X2/Y2 và confidence, lưu cấu hình cho camera đang chọn.
+- Dashboard hiển thị trạng thái lần chạy gần nhất, số frame, tổng xe, sự kiện đã ghi và lịch sử các counting session.
+- Nâng pip trong Docker, local test và GitHub Actions lên **26.2.1** (bản mới nhất trên PyPI tại thời điểm V0.2.7).
+- Thêm `pytest.ini` để loại warning `anyio.abc.BlockingPortal` từ Starlette TestClient khỏi warning summary, giữ output test sạch.
+- GitHub Actions chuyển sang `actions/checkout@v7`, `actions/setup-python@v7`, `actions/setup-node@v7`, Node 24 và `ubuntu-24.04` để tránh cảnh báo runtime Node 20/runner migration.
+- `release.ps1` chỉ còn là alias đọc version từ file `VERSION`; lệnh phát hành chính thức duy nhất vẫn là `./scripts/publish.ps1`.
+- Thêm migration `0005_counting_reliability`, cập nhật `schema_version` thành `0.2.7`; không xóa dữ liệu cũ.
+
+> Nếu PowerShell hiển thị mờ lệnh cũ như `./scripts/release.ps1 -Version 0.1.3` sau dấu nhắc, đó là **PSReadLine history prediction**, không phải lệnh do Traffic AI tự chạy. Nhấn `Esc` để bỏ gợi ý hoặc tiếp tục dùng `./scripts/publish.ps1`.
 
 ## 15. Lộ trình tiếp theo
 

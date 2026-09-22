@@ -27,3 +27,11 @@ def test_exact_line_frame_does_not_lose_crossing() -> None:
     assert counter.update(40, (50, 25), 100, 100) is None
     assert counter.update(40, (50, 50), 100, 100) is None
     assert counter.update(40, (50, 75), 100, 100) == "in"
+
+
+def test_fast_track_segment_crossing_is_counted() -> None:
+    counter = LineCrossingCounter(CountingLine(0.1, 0.5, 0.9, 0.5))
+    assert counter.update(50, (50, 10), 100, 100) is None
+    assert counter.update(50, (50, 90), 100, 100) == "in"
+    assert counter.in_count == 1
+    assert counter.out_count == 0

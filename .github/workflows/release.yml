@@ -16,10 +16,10 @@ concurrency:
 jobs:
   release:
     name: Verify and create GitHub Release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -35,7 +35,7 @@ jobs:
           fi
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
@@ -46,7 +46,8 @@ jobs:
           AI_SERVICE_URL: http://127.0.0.1:8001
           PYTHONPATH: .
         run: |
-          pip install -r requirements-test.txt
+          python -m pip install --upgrade pip==26.2.1
+          python -m pip install -r requirements-test.txt
           python -m compileall -q app tests alembic
           python -m pytest -q
 
@@ -55,14 +56,15 @@ jobs:
         env:
           PYTHONPATH: .
         run: |
-          pip install -r requirements-test.txt
+          python -m pip install --upgrade pip==26.2.1
+          python -m pip install -r requirements-test.txt
           python -m compileall -q app tests
           python -m pytest -q
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: '22'
+          node-version: '24'
 
       - name: Build frontend
         working-directory: frontend

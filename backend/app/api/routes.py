@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
@@ -9,8 +9,8 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db.session import get_db
-from app.models.all_models import AIModel, Camera, CameraStatus, CountingSession, Direction, SessionStatus, VehicleEvent, VehicleType
-from app.schemas.camera import CameraCreate, CameraRead
+from app.models.all_models import AIModel, Camera, CameraStatus, CountingSession, Direction, SessionStatus, VehicleCount, VehicleEvent, VehicleType
+from app.schemas.camera import CameraCreate, CameraRead, CameraUpdate
 from app.schemas.event import VehicleEventCreate, VehicleEventRead
 
 router = APIRouter(prefix="/api")
@@ -103,6 +103,18 @@ def create_camera(payload: CameraCreate, db: Session = Depends(get_db)) -> Camer
     return camera
 
 
+@router.patch("/cameras/{camera_id}", response_model=CameraRead)
+def update_camera(camera_id: int, payload: CameraUpdate, db: Session = Depends(get_db)) -> Camera:
+    camera = db.get(Camera, camera_id)
+    if camera is None:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    for key, value in payload.model_dump(exclude_unset=True).items():
+        setattr(camera, key, value)
+    db.commit()
+    db.refresh(camera)
+    return camera
+
+
 @router.get("/events", response_model=list[VehicleEventRead])
 def list_events(limit: int = Query(default=50, ge=1, le=500), db: Session = Depends(get_db)) -> list[VehicleEvent]:
     return list(db.scalars(select(VehicleEvent).order_by(VehicleEvent.detected_at.desc()).limit(limit)).all())
@@ -144,9 +156,24 @@ def start_camera(camera_id: int, db: Session = Depends(get_db)) -> dict:
     camera = db.get(Camera, camera_id)
     if camera is None:
         raise HTTPException(status_code=404, detail="Camera not found")
-    running = db.scalar(select(CountingSession).where(CountingSession.camera_id == camera_id, CountingSession.status == SessionStatus.running))
+    running = db.scalar(select(CountingSession).where(CountingSession.camera_id == camera_id, CountingSession.status == SessionStatus.running).order_by(CountingSession.id.desc()))
     if running:
-        raise HTTPException(status_code=409, detail="Camera already has a running session")
+        # Reconcile stale DB state with the real AI registry. This makes replaying
+        # the same MP4 reliable even when a previous finish callback was lost.
+        ai_is_running = False
+        try:
+            probe = httpx.get(f"{settings.ai_service_url}/pipelines/{camera_id}", timeout=2.0)
+            if probe.is_success:
+                ai_state = probe.json()
+                ai_is_running = ai_state.get("status") in {"starting", "running"}
+        except Exception:
+            ai_is_running = False
+        if ai_is_running:
+            raise HTTPException(status_code=409, detail="Camera already has a running session")
+        running.status = SessionStatus.completed
+        running.ended_at = datetime.now(timezone.utc)
+        camera.status = CameraStatus.inactive
+        db.commit()
     model = db.scalar(select(AIModel).where(AIModel.is_active.is_(True)).order_by(AIModel.id.desc()))
     session = CountingSession(camera_id=camera_id, model_id=model.id if model else None, status=SessionStatus.running)
     camera.status = CameraStatus.active
@@ -209,12 +236,48 @@ def list_pipelines() -> list[dict]:
 @router.post("/internal/events", response_model=VehicleEventRead, status_code=201)
 def internal_event(payload: VehicleEventCreate, x_ai_token: str | None = Header(default=None), db: Session = Depends(get_db)) -> VehicleEvent:
     _assert_ai_token(x_ai_token)
+
+    # Event delivery is retried by the AI service. Make this endpoint idempotent
+    # for one ByteTrack ID inside one counting session so a network retry cannot
+    # double-count a vehicle.
+    existing = None
+    if payload.session_id is not None and payload.tracking_id is not None:
+        existing = db.scalar(select(VehicleEvent).where(
+            VehicleEvent.session_id == payload.session_id,
+            VehicleEvent.tracking_id == payload.tracking_id,
+        ).order_by(VehicleEvent.id.desc()))
+    if existing is not None:
+        return existing
+
     event = VehicleEvent(**payload.model_dump(exclude_none=True))
     db.add(event)
     if payload.session_id:
         session = db.get(CountingSession, payload.session_id)
         if session:
             session.total_vehicles += 1
+
+    now = datetime.now(timezone.utc)
+    period_start = now.replace(minute=0, second=0, microsecond=0)
+    period_end = period_start + timedelta(hours=1)
+    bucket = db.scalar(select(VehicleCount).where(
+        VehicleCount.camera_id == payload.camera_id,
+        VehicleCount.vehicle_type == payload.vehicle_type,
+        VehicleCount.direction == payload.direction,
+        VehicleCount.period_start == period_start,
+    ))
+    if bucket is None:
+        bucket = VehicleCount(
+            camera_id=payload.camera_id,
+            vehicle_type=payload.vehicle_type,
+            direction=payload.direction,
+            count=1,
+            period_start=period_start,
+            period_end=period_end,
+        )
+        db.add(bucket)
+    else:
+        bucket.count += 1
+
     db.commit()
     db.refresh(event)
     return event

@@ -41,7 +41,7 @@ if (Test-Path $envPath) {
   }
 }
 
-# V0.2.6: bootstrap HTTPS/hosts tự động.
+# V0.2.7: bootstrap HTTPS/hosts tự động.
 & (Join-Path $PSScriptRoot "ensure-local-https.ps1") -HostName "traffic-ai.test"
 
 $volume = docker volume ls --filter "name=^traffic_ai_postgres_data$" --format "{{.Name}}"
@@ -84,7 +84,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host ""
-Write-Host "[OK] Traffic AI V0.2.6 đã khởi động." -ForegroundColor Green
+Write-Host "[OK] Traffic AI V0.2.7 đã khởi động." -ForegroundColor Green
 Write-Host "Dashboard : https://traffic-ai.test:8443"
 Write-Host "API Docs  : https://traffic-ai.test:8444/docs"
 Write-Host "PostgreSQL: 127.0.0.1:5445 / traffic_ai_db"

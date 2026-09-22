@@ -140,6 +140,17 @@ Assert-FrontendUtf8Contract
 Assert-FrontendBrandingContract
 Assert-ReleaseFallbackContract
 
+Write-Host "`n[Traffic AI] AI counting/persistence contract" -ForegroundColor Cyan
+$workerText = Get-Content (Join-Path $root "ai-service\app\worker.py") -Raw -Encoding UTF8
+$routesText = Get-Content (Join-Path $root "backend\app\api\routes.py") -Raw -Encoding UTF8
+if ($workerText -notmatch 'y2\)' -or $workerText -notmatch '_pending_events' -or $workerText -notmatch '_notify_finished') {
+  throw "AI worker thiếu bottom-center counting/retry persistence contract."
+}
+if ($routesText -notmatch 'Reconcile stale DB state' -or $routesText -notmatch 'VehicleCount') {
+  throw "Backend thiếu stale-session reconciliation hoặc hourly vehicle_counts persistence."
+}
+Write-Host "[OK] AI counting/persistence contract" -ForegroundColor Green
+
 Invoke-Step "Backend syntax check" {
   docker run --rm -v "${root}:/src" -w /src/backend python:3.12-slim python -m compileall -q app tests alembic
 }
@@ -154,16 +165,18 @@ Invoke-Step "Backend unit tests" {
     -e AI_SERVICE_URL=http://127.0.0.1:8001 `
     -e PYTHONPATH=/src/backend `
     -e PIP_ROOT_USER_ACTION=ignore `
+    -e PIP_DISABLE_PIP_VERSION_CHECK=1 `
     -v "${root}:/src" -w /src/backend python:3.12-slim `
-    sh -lc "pip install -q -r requirements-test.txt && python -m pytest -q"
+    sh -lc "python -m pip install -q --upgrade pip==26.2.1 && python -m pip install -q -r requirements-test.txt && python -m pytest -q"
 }
 
 Invoke-Step "AI service unit tests" {
   docker run --rm `
     -e PYTHONPATH=/src/ai-service `
     -e PIP_ROOT_USER_ACTION=ignore `
+    -e PIP_DISABLE_PIP_VERSION_CHECK=1 `
     -v "${root}:/src" -w /src/ai-service python:3.12-slim `
-    sh -lc "pip install -q -r requirements-test.txt && python -m pytest -q"
+    sh -lc "python -m pip install -q --upgrade pip==26.2.1 && python -m pip install -q -r requirements-test.txt && python -m pytest -q"
 }
 
 Invoke-Step "Frontend build" {
