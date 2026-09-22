@@ -1,4 +1,4 @@
-# Traffic AI V0.2.7
+# Traffic AI V0.2.9
 
 **Đồ án môn Trí tuệ nhân tạo:** Nghiên cứu và xây dựng hệ thống phát hiện, phân loại, theo dõi và đếm phương tiện giao thông qua camera.
 
@@ -10,19 +10,51 @@
 
 ## 1. Trạng thái hiện tại
 
-V0.2.7 tập trung vào độ tin cậy của pipeline đếm và lưu dữ liệu: counting line dùng điểm đáy giữa của bounding box và kiểm tra đoạn chuyển động thực sự cắt line; sự kiện được retry khi ghi PostgreSQL; phiên chạy cũ được tự hòa giải nếu callback kết thúc bị mất; cùng một video có thể chạy lại ngay. Dashboard cho phép chỉnh counting line ngang/dọc và hiển thị lịch sử phiên chạy. pip được nâng lên **26.2.1** trong Docker/test/CI, đồng thời loại bỏ warning summary của Starlette TestClient trong pytest.
+V0.2.9 sửa lỗi nâng cấp tại chỗ khi thư mục dự án cũ vẫn còn `scripts/release.ps1` hoặc `scripts/push-github.ps1`. Từ bản này, `scripts/test.ps1` tự nhận diện và xóa hai wrapper phát hành legacy trước khi chạy contract, nên người dùng có thể chép đè full source mới lên `D:\LienThongDH\DoAn\traffic-ai` mà không cần tự dọn file cũ. Lệnh phát hành duy nhất tiếp tục là `scripts/publish.ps1`. Các chức năng nguồn video, YOLO26n + ByteTrack, Smart Counting, PostgreSQL và stack công nghệ của V0.2.8 được giữ nguyên.
 
-- PostgreSQL 18, database `traffic_ai_db`.
-- Docker named volume `traffic_ai_postgres_data` để giữ dữ liệu bền vững.
-- FastAPI + SQLAlchemy 2 + Alembic.
-- React/Vite Dashboard.
-- Nginx HTTPS Gateway.
-- AI Service chạy **YOLO26n + ByteTrack + counting line**, hỗ trợ MP4/RTSP và ghi sự kiện vào PostgreSQL.
-- GitHub Actions CI.
-- Tự động kiểm thử → đẩy GitHub → tạo tag → tạo GitHub Release chỉ bằng **một lệnh**.
-- Hỗ trợ GPU NVIDIA RTX 3060 qua Docker Compose GPU override, tự rơi về CPU nếu khởi động GPU thất bại.
-- `start.ps1` tự tạo certificate HTTPS nếu source mới chưa có certificate.
-- `start.ps1` tự thêm `traffic-ai.test` vào Windows hosts và tin cậy Root CA; khi cần quyền hệ thống, Windows chỉ hiện UAC để người dùng xác nhận.
+Trường hợp như `CAM-001` vẫn lưu `/data/videos/traffic_video.mp4` sau khi file đã đổi thành `demo.mp4` được xử lý theo hai lớp:
+
+1. Dashboard hiển thị rõ nguồn cũ bị thiếu và cho chọn `demo.mp4` rồi bấm **Cập nhật camera** để lưu lại vào PostgreSQL.
+2. Nếu thư mục `videos` chỉ có đúng một video hợp lệ, khi bấm **Chạy AI** Backend có thể tự sửa đường dẫn cũ sang video duy nhất đó, lưu lại database, probe frame đầu bằng OpenCV rồi mới tạo session và khởi động pipeline.
+
+Các thành phần chính:
+
+- PostgreSQL **18.6**, database `traffic_ai_db`, volume `traffic_ai_postgres_data`.
+- Python **3.14.7** cho Backend/AI Service.
+- FastAPI **0.141.1**, Uvicorn **0.53.0**, SQLAlchemy **2.0.54**, Alembic **1.20.0**, Psycopg **3.3.6**.
+- YOLO26n qua Ultralytics **8.4.158**, PyTorch **2.14.0**, TorchVision **0.29.0**, OpenCV headless **5.0.0.93**.
+- React **19.3.0**, Vite **8.3.0**, `@vitejs/plugin-react` **6.1.1**.
+- Node.js **26.9.0 Current**, npm **12.0.2** cho build/test frontend.
+- Nginx **1.31.6 mainline** cho frontend image và HTTPS Gateway.
+- Docker Compose, HTTPS `traffic-ai.test`, GitHub Actions và phát hành tự động bằng `scripts/publish.ps1`.
+- RTX 3060/CUDA vẫn là đường chạy ưu tiên; CPU fallback được giữ nguyên.
+
+## 1.1. Phiên bản công nghệ V0.2.9
+
+| Thành phần | Phiên bản |
+|---|---:|
+| Python | `3.14.7` |
+| pip | `26.2.1` |
+| FastAPI | `0.141.1` |
+| Uvicorn | `0.53.0` |
+| SQLAlchemy | `2.0.54` |
+| Alembic | `1.20.0` |
+| Psycopg | `3.3.6` |
+| Pydantic | `2.13.5` |
+| pydantic-settings | `2.15.0` |
+| PostgreSQL | `18.6` |
+| Ultralytics | `8.4.158` |
+| PyTorch | `2.14.0` |
+| TorchVision | `0.29.0` |
+| OpenCV headless | `5.0.0.93` |
+| React / React DOM | `19.3.0` |
+| Vite | `8.3.0` |
+| @vitejs/plugin-react | `6.1.1` |
+| Node.js | `26.9.0` Current |
+| npm | `12.0.2` |
+| Nginx | `1.31.6` mainline |
+
+Ghi chú: V0.2.9 tiếp tục ưu tiên **bản phát hành mới không phải beta/RC**. Vì vậy PostgreSQL 19 beta và SQLAlchemy 2.1 RC không được đưa vào stack chính.
 
 ## 2. Cổng và địa chỉ cố định
 
@@ -183,6 +215,9 @@ GET  /api/system/status
 GET  /api/dashboard/summary
 GET  /api/cameras
 POST /api/cameras
+PATCH /api/cameras/{camera_id}
+GET  /api/sources/videos
+GET  /api/cameras/{camera_id}/source-status
 GET  /api/events
 POST /api/events
 GET  /api/models
@@ -218,13 +253,14 @@ cd D:\LienThongDH\DoAn\traffic-ai
 
 Các bước kiểm thử gồm:
 
-1. Kiểm tra cú pháp Backend Python.
-2. Kiểm tra cú pháp AI Service Python.
-3. Backend unit tests.
-4. AI Service unit tests.
-5. Build Frontend.
-6. Validate Docker Compose.
-7. Build các Docker image ứng dụng.
+1. Contract HTTPS, Backend health, UTF-8, logo/favicon và GitHub Release.
+2. Contract khóa phiên bản công nghệ V0.2.9.
+3. Contract quản lý nguồn video/camera, preflight và auto-repair đường dẫn cũ.
+4. Kiểm tra cú pháp Backend và AI Service trên Python 3.14.7.
+5. Backend unit tests và AI Service unit tests bằng pytest 9.1.1.
+6. Cài npm 12.0.2, kiểm tra `npm audit --audit-level=high`, build React/Vite bằng Node 26.9.0.
+7. Validate Docker Compose.
+8. Build các Docker image ứng dụng.
 
 Khi thành công sẽ có:
 
@@ -262,7 +298,7 @@ Từ V0.1.4 trở đi, chỉ dùng **một lệnh**. Script tự đọc phiên b
 cd D:\LienThongDH\DoAn\traffic-ai; .\scripts\publish.ps1
 ```
 
-Nếu cần chỉ định phiên bản thủ công, vẫn có thể dùng `-Version X.Y.Z`.
+Không truyền version bằng tham số. `publish.ps1` luôn đọc đúng phiên bản từ file `VERSION` của full source hiện tại để tránh phát hành nhầm tag cũ.
 
 Script sẽ tự động thực hiện theo đúng thứ tự:
 
@@ -283,7 +319,7 @@ Kiểm tra .env và khóa riêng TLS không bị commit
          ↓
 Commit source
          ↓
-Tạo tag theo file `VERSION` (ví dụ `v0.2.7`)
+Tạo tag theo file `VERSION` (ví dụ `v0.2.9`)
          ↓
 Push main
          ↓
@@ -359,6 +395,28 @@ Ví dụ file `demo.mp4` sẽ được AI Service đọc bằng đường dẫn 
 ```
 
 Tạo camera với `source_type=video`, sau đó bấm **Chạy AI** trên Dashboard.
+
+### Sửa camera cũ sau khi đổi tên video
+
+Nếu camera trong PostgreSQL vẫn lưu tên file cũ, ví dụ:
+
+```text
+/data/videos/traffic_video.mp4
+```
+
+nhưng file thật đã đổi thành:
+
+```text
+D:\LienThongDH\DoAn\traffic-ai\videos\demo.mp4
+```
+
+Dashboard V0.2.9 sẽ báo **Nguồn chưa sẵn sàng** và liệt kê video thật trong thư mục `videos`. Chọn `demo.mp4` rồi bấm **Cập nhật camera**. Database sẽ lưu lại:
+
+```text
+/data/videos/demo.mp4
+```
+
+Nếu chỉ có đúng một video hợp lệ, Backend còn có cơ chế auto-repair khi bấm **Chạy AI**: cập nhật `source_url` trong PostgreSQL, đọc thử frame đầu rồi mới tạo session. Vì vậy việc **Lưu cấu hình đếm** không còn dẫn tới một session lỗi chỉ vì camera đang trỏ vào file cũ.
 
 ### Camera RTSP
 
@@ -516,7 +574,7 @@ Các phiên bản được sắp xếp **tăng dần**:
 - Gom quy trình test, GitHub và Release vào `scripts/publish.ps1`.
 - Một lệnh chạy test → tạo repo nếu cần → commit → push → tag → GitHub Actions → Release.
 - Script chờ GitHub Actions hoàn tất và kiểm tra Release đã được tạo.
-- `release.ps1` và `push-github.ps1` được giữ làm wrapper tương thích, nhưng `publish.ps1` là lệnh chính thức.
+- `publish.ps1` là lệnh phát hành chính thức; các wrapper legacy được loại khỏi full source ở V0.2.8 để tránh nhầm lệnh cũ.
 - Lịch sử phiên bản trong README được sắp xếp tăng dần.
 
 ### V0.2.0 — AI Pipeline thực tế
@@ -619,6 +677,31 @@ Các phiên bản được sắp xếp **tăng dần**:
 - Thêm migration `0005_counting_reliability`, cập nhật `schema_version` thành `0.2.7`; không xóa dữ liệu cũ.
 
 > Nếu PowerShell hiển thị mờ lệnh cũ như `./scripts/release.ps1 -Version 0.1.3` sau dấu nhắc, đó là **PSReadLine history prediction**, không phải lệnh do Traffic AI tự chạy. Nhấn `Esc` để bỏ gợi ý hoặc tiếp tục dùng `./scripts/publish.ps1`.
+
+### V0.2.8 — Quản lý nguồn video và nâng toàn bộ stack
+
+- Sửa nguyên nhân CAM-001 vẫn giữ tên video cũ trong PostgreSQL: Dashboard chuyển từ create-only sang **create/update camera** và luôn nạp `source_url` thật của camera đang chọn.
+- AI Service thêm `GET /sources/videos` và `POST /sources/validate`; nguồn video local được kiểm tra tồn tại, định dạng và có thể probe frame đầu bằng OpenCV trước khi pipeline chạy.
+- Backend thêm `GET /api/sources/videos`, `GET /api/cameras/{id}/source-status` và preflight nguồn trước khi tạo `counting_sessions`.
+- Khi đường dẫn video cũ không tồn tại nhưng thư mục `videos` chỉ có đúng một video hợp lệ, Backend tự sửa `source_url`, lưu PostgreSQL rồi mới chạy AI.
+- Dashboard có trạng thái nguồn, danh sách video thật, nút **Dùng nguồn gợi ý**, **Cập nhật camera** và khóa nút Chạy AI khi nguồn không thể sửa an toàn.
+- Thêm migration `0006_source_management`, cập nhật `schema_version=0.2.8`.
+- Nâng Python 3.14.7; FastAPI 0.141.1; Uvicorn 0.53.0; SQLAlchemy 2.0.54; Alembic 1.20.0; Psycopg 3.3.6; Pydantic 2.13.5; pydantic-settings 2.15.0.
+- Nâng PyTorch 2.14.0, TorchVision 0.29.0, OpenCV 5.0.0.93; giữ Ultralytics 8.4.158/YOLO26n là bản Ultralytics mới nhất đã xác minh tại thời điểm phát hành.
+- Nâng React/React DOM 19.3.0, Vite 8.3.0, `@vitejs/plugin-react` 6.1.1, Node.js 26.9.0 Current, npm 12.0.2.
+- Pin PostgreSQL image 18.6 và Nginx 1.31.6 mainline.
+- CI/local test thêm contract khóa phiên bản công nghệ và source-management để tránh tái phát lỗi source stale.
+- Full source chỉ dùng `scripts/publish.ps1` cho quy trình test → GitHub → Release.
+
+
+### V0.2.9 — Tự dọn script phát hành legacy khi nâng cấp tại chỗ
+
+- Sửa blocker `Còn script phát hành legacy release.ps1` khi chép source mới đè lên thư mục dự án cũ.
+- `scripts/test.ps1` tự xóa `release.ps1` và `push-github.ps1` còn sót lại trước khi kiểm tra contract phát hành.
+- Nếu không thể xóa vì quyền file, test dừng với thông báo rõ ràng thay vì gây nhầm lẫn về phiên bản.
+- Chỉ giữ `scripts/publish.ps1` là lệnh test → GitHub → tag → Release chính thức.
+- Thêm migration `0007_release_hygiene`, cập nhật `schema_version=0.2.9`.
+- Giữ nguyên stack công nghệ và pipeline AI của V0.2.8.
 
 ## 15. Lộ trình tiếp theo
 

@@ -9,6 +9,8 @@ def test_health() -> None:
     payload = response.json()
     assert payload["status"] == "ready"
     assert payload["pipeline"] == "yolo-bytetrack-line-crossing"
+    assert payload["version"] == "0.2.9"
+    assert "runtime" in payload
 
 
 def test_default_model_is_yolo26n(monkeypatch) -> None:

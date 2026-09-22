@@ -2,7 +2,7 @@ from fastapi.testclient import TestClient
 
 from app.db.session import get_db
 from app.main import app
-from app.schemas.camera import CameraCreate
+from app.schemas.camera import CameraCreate, CameraUpdate
 
 
 class _FakeSession:
@@ -20,7 +20,7 @@ def test_root_metadata() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["name"] == "Traffic AI"
-    assert payload["version"] == "0.2.7"
+    assert payload["version"] == "0.2.9"
     assert payload["docs"] == "/docs"
     assert payload["health"] == "/api/health"
 
@@ -49,3 +49,10 @@ def test_backend_health_does_not_depend_on_ai(monkeypatch) -> None:
         assert "ai_service" not in payload
     finally:
         app.dependency_overrides.clear()
+
+
+def test_camera_update_can_change_source_and_code() -> None:
+    payload = CameraUpdate(code="CAM-DEMO", source_type="video", source_url=" /data/videos/demo.mp4 ")
+    assert payload.code == "CAM-DEMO"
+    assert payload.source_type.value == "video"
+    assert payload.source_url == "/data/videos/demo.mp4"

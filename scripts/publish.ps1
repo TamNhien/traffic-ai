@@ -1,7 +1,5 @@
 [CmdletBinding()]
 param(
-  [ValidatePattern('^\d+\.\d+\.\d+$')]
-  [string]$Version,
   [string]$Owner = "TamNhien",
   [string]$Repository = "traffic-ai",
   [ValidateSet("public", "private")]
@@ -14,12 +12,10 @@ param(
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
-if (-not $Version) {
-  $versionFile = Join-Path $root "VERSION"
-  if (-not (Test-Path $versionFile)) { throw "Không tìm thấy file VERSION." }
-  $Version = (Get-Content $versionFile -Raw -Encoding utf8).Trim()
-  if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw "VERSION hiện tại không hợp lệ: '$Version'" }
-}
+$versionFile = Join-Path $root "VERSION"
+if (-not (Test-Path $versionFile)) { throw "Không tìm thấy file VERSION." }
+$Version = (Get-Content $versionFile -Raw -Encoding utf8).Trim()
+if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw "VERSION hiện tại không hợp lệ: '$Version'" }
 $tag = "v$Version"
 
 function Assert-Command([string]$Name) {

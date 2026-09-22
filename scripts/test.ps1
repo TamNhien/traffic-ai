@@ -104,6 +104,28 @@ function Assert-FrontendBrandingContract {
   Write-Host "[OK] Frontend logo/favicon contract" -ForegroundColor Green
 }
 
+function Remove-LegacyReleaseScripts {
+  Write-Host "`n[Traffic AI] Legacy release script cleanup" -ForegroundColor Cyan
+  $removed = @()
+  foreach ($legacy in @("release.ps1", "push-github.ps1")) {
+    $legacyPath = Join-Path $PSScriptRoot $legacy
+    if (Test-Path $legacyPath) {
+      try {
+        Remove-Item $legacyPath -Force -ErrorAction Stop
+      } catch {
+        throw "Không thể xóa script legacy '$legacyPath'. Hãy đóng file nếu đang mở và kiểm tra quyền ghi. Chi tiết: $($_.Exception.Message)"
+      }
+      $removed += $legacy
+      Write-Host "[CLEAN] Đã xóa script cũ còn sót lại: $legacy" -ForegroundColor Yellow
+    }
+  }
+  if ($removed.Count -eq 0) {
+    Write-Host "[OK] Không còn script phát hành legacy." -ForegroundColor Green
+  } else {
+    Write-Host "[OK] Đã dọn script legacy. Từ nay chỉ dùng .\\scripts\\publish.ps1." -ForegroundColor Green
+  }
+}
+
 function Assert-ReleaseFallbackContract {
   Write-Host "`n[Traffic AI] GitHub Release fallback contract" -ForegroundColor Cyan
   $publishText = Get-Content (Join-Path $PSScriptRoot "publish.ps1") -Raw -Encoding UTF8
@@ -112,6 +134,14 @@ function Assert-ReleaseFallbackContract {
   }
   if ($publishText -match 'GitHub Actions Release thất bại\. Xem chi tiết') {
     throw "publish.ps1 vẫn dừng cứng khi GitHub Actions Release thất bại."
+  }
+  if ($publishText -match '\[string\]\$Version') {
+    throw "publish.ps1 không được nhận version thủ công; phải đọc từ file VERSION."
+  }
+  foreach ($legacy in @("release.ps1", "push-github.ps1")) {
+    if (Test-Path (Join-Path $PSScriptRoot $legacy)) {
+      throw "Không dọn được script legacy $legacy. Hãy kiểm tra quyền ghi trong thư mục scripts."
+    }
   }
   $releaseText = Get-Content (Join-Path $root ".github\workflows\release.yml") -Raw -Encoding UTF8
   if ($releaseText -notmatch 'Create GitHub Release' -or $releaseText -notmatch 'Verify VERSION matches tag') {
@@ -127,6 +157,72 @@ function Assert-ReleaseFallbackContract {
   Write-Host "[OK] GitHub Release fallback contract" -ForegroundColor Green
 }
 
+
+function Assert-TechnologyVersionsContract {
+  Write-Host "`n[Traffic AI] Technology versions contract" -ForegroundColor Cyan
+  $checks = @(
+    @{ Path = "backend\requirements.txt"; Needle = "fastapi==0.141.1" },
+    @{ Path = "backend\requirements.txt"; Needle = "uvicorn[standard]==0.53.0" },
+    @{ Path = "backend\requirements.txt"; Needle = "SQLAlchemy==2.0.54" },
+    @{ Path = "backend\requirements.txt"; Needle = "psycopg[binary]==3.3.6" },
+    @{ Path = "backend\requirements.txt"; Needle = "alembic==1.20.0" },
+    @{ Path = "backend\requirements.txt"; Needle = "pydantic==2.13.5" },
+    @{ Path = "backend\requirements.txt"; Needle = "pydantic-settings==2.15.0" },
+    @{ Path = "ai-service\requirements.txt"; Needle = "opencv-python-headless==5.0.0.93" },
+    @{ Path = "ai-service\requirements.txt"; Needle = "torch==2.14.0" },
+    @{ Path = "ai-service\requirements.txt"; Needle = "torchvision==0.29.0" },
+    @{ Path = "ai-service\requirements.txt"; Needle = "ultralytics==8.4.158" },
+    @{ Path = "frontend\package.json"; Needle = '"react": "19.3.0"' },
+    @{ Path = "frontend\package.json"; Needle = '"react-dom": "19.3.0"' },
+    @{ Path = "frontend\package.json"; Needle = '"vite": "8.3.0"' },
+    @{ Path = "frontend\package.json"; Needle = '"@vitejs/plugin-react": "6.1.1"' },
+    @{ Path = "docker-compose.yml"; Needle = "postgres:18.6" },
+    @{ Path = "docker-compose.yml"; Needle = "nginx:1.31.6-alpine" },
+    @{ Path = "backend\Dockerfile"; Needle = "python:3.14.7-slim" },
+    @{ Path = "ai-service\Dockerfile"; Needle = "python:3.14.7-slim" },
+    @{ Path = "frontend\Dockerfile"; Needle = "node:26.9.0-alpine" },
+    @{ Path = "frontend\Dockerfile"; Needle = "nginx:1.31.6-alpine" }
+  )
+  foreach ($check in $checks) {
+    $path = Join-Path $root $check.Path
+    $text = Get-Content $path -Raw -Encoding UTF8
+    if (-not $text.Contains($check.Needle)) {
+      throw "Thiếu phiên bản công nghệ đã chốt '$($check.Needle)' trong $($check.Path)."
+    }
+  }
+  Write-Host "[OK] Technology versions contract" -ForegroundColor Green
+}
+
+function Assert-SourceManagementContract {
+  Write-Host "`n[Traffic AI] Camera/video source management contract" -ForegroundColor Cyan
+  $routes = Get-Content (Join-Path $root "backend\app\api\routes.py") -Raw -Encoding UTF8
+  $aiMain = Get-Content (Join-Path $root "ai-service\app\main.py") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  if ($routes -notmatch '/sources/videos' -or $routes -notmatch '/source-status' -or $routes -notmatch '/sources/validate' -or $routes -notmatch 'source_repaired') {
+    throw "Backend thiếu source listing/status/preflight/auto-repair."
+  }
+  if ($aiMain -notmatch '/sources/validate' -or $aiMain -notmatch 'inspect_source') {
+    throw "AI Service thiếu source validation trước khi chạy pipeline."
+  }
+  if ($frontend -notmatch 'Cập nhật camera' -or $frontend -notmatch 'videoSources' -or $frontend -notmatch 'Dùng nguồn gợi ý') {
+    throw "Frontend thiếu workflow sửa nguồn camera/video cũ."
+  }
+  Write-Host "[OK] Camera/video source management contract" -ForegroundColor Green
+}
+
+function Assert-VersionConsistencyContract {
+  Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
+  $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
+  if ($version -ne "0.2.9") { throw "VERSION phải là 0.2.9, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0007_release_hygiene.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0007_release_hygiene.py." }
+  $migrationText = Get-Content $migration -Raw -Encoding UTF8
+  if ($migrationText -notmatch 'revision = "0007_release_hygiene"' -or $migrationText -notmatch "value='0.2.9'") {
+    throw "Migration 0007_release_hygiene không đúng contract V0.2.9."
+  }
+  Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
+}
+
 function Invoke-Step([string]$Title, [scriptblock]$Action) {
   Write-Host "`n[Traffic AI] $Title" -ForegroundColor Cyan
   & $Action
@@ -134,11 +230,15 @@ function Invoke-Step([string]$Title, [scriptblock]$Action) {
   Write-Host "[OK] $Title" -ForegroundColor Green
 }
 
+Remove-LegacyReleaseScripts
 Assert-LocalHttpsBootstrapContract
 Assert-BackendHealthContract
 Assert-FrontendUtf8Contract
 Assert-FrontendBrandingContract
 Assert-ReleaseFallbackContract
+Assert-TechnologyVersionsContract
+Assert-SourceManagementContract
+Assert-VersionConsistencyContract
 
 Write-Host "`n[Traffic AI] AI counting/persistence contract" -ForegroundColor Cyan
 $workerText = Get-Content (Join-Path $root "ai-service\app\worker.py") -Raw -Encoding UTF8
@@ -152,11 +252,11 @@ if ($routesText -notmatch 'Reconcile stale DB state' -or $routesText -notmatch '
 Write-Host "[OK] AI counting/persistence contract" -ForegroundColor Green
 
 Invoke-Step "Backend syntax check" {
-  docker run --rm -v "${root}:/src" -w /src/backend python:3.12-slim python -m compileall -q app tests alembic
+  docker run --rm -v "${root}:/src" -w /src/backend python:3.14.7-slim python -m compileall -q app tests alembic
 }
 
 Invoke-Step "AI service syntax check" {
-  docker run --rm -v "${root}:/src" -w /src/ai-service python:3.12-slim python -m compileall -q app tests
+  docker run --rm -v "${root}:/src" -w /src/ai-service python:3.14.7-slim python -m compileall -q app tests
 }
 
 Invoke-Step "Backend unit tests" {
@@ -166,7 +266,7 @@ Invoke-Step "Backend unit tests" {
     -e PYTHONPATH=/src/backend `
     -e PIP_ROOT_USER_ACTION=ignore `
     -e PIP_DISABLE_PIP_VERSION_CHECK=1 `
-    -v "${root}:/src" -w /src/backend python:3.12-slim `
+    -v "${root}:/src" -w /src/backend python:3.14.7-slim `
     sh -lc "python -m pip install -q --upgrade pip==26.2.1 && python -m pip install -q -r requirements-test.txt && python -m pytest -q"
 }
 
@@ -175,15 +275,17 @@ Invoke-Step "AI service unit tests" {
     -e PYTHONPATH=/src/ai-service `
     -e PIP_ROOT_USER_ACTION=ignore `
     -e PIP_DISABLE_PIP_VERSION_CHECK=1 `
-    -v "${root}:/src" -w /src/ai-service python:3.12-slim `
+    -v "${root}:/src" -w /src/ai-service python:3.14.7-slim `
     sh -lc "python -m pip install -q --upgrade pip==26.2.1 && python -m pip install -q -r requirements-test.txt && python -m pytest -q"
 }
 
 Invoke-Step "Frontend build" {
   $frontendDist = Join-Path $root "frontend\dist"
+  $frontendLock = Join-Path $root "frontend\package-lock.json"
   if (Test-Path $frontendDist) { Remove-Item $frontendDist -Recurse -Force }
-  docker run --rm -v "${root}:/src" -w /src/frontend node:22-alpine `
-    sh -lc "npm install && npm run build"
+  if (Test-Path $frontendLock) { Remove-Item $frontendLock -Force }
+  docker run --rm -v "${root}:/src" -w /src/frontend node:26.9.0-alpine `
+    sh -lc "npm install -g npm@12.0.2 && npm install && npm audit --audit-level=high && npm run build"
 }
 
 if (-not $SkipDockerBuild) {

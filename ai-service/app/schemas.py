@@ -1,6 +1,11 @@
 from pydantic import BaseModel, Field
 
 
+class SourceValidationRequest(BaseModel):
+    source_type: str
+    source_url: str
+
+
 class PipelineStart(BaseModel):
     camera_id: int
     session_id: int

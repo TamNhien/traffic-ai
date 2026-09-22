@@ -108,11 +108,59 @@ def update_camera(camera_id: int, payload: CameraUpdate, db: Session = Depends(g
     camera = db.get(Camera, camera_id)
     if camera is None:
         raise HTTPException(status_code=404, detail="Camera not found")
-    for key, value in payload.model_dump(exclude_unset=True).items():
+
+    changes = payload.model_dump(exclude_unset=True)
+    if not changes:
+        return camera
+
+    running = db.scalar(select(CountingSession.id).where(
+        CountingSession.camera_id == camera_id,
+        CountingSession.status == SessionStatus.running,
+    ).limit(1))
+    runtime_keys = {"source_type", "source_url", "confidence_threshold", "line_x1", "line_y1", "line_x2", "line_y2"}
+    if running and runtime_keys.intersection(changes):
+        raise HTTPException(status_code=409, detail="Hãy dừng AI trước khi đổi nguồn hoặc vùng đếm.")
+
+    source_changed = bool({"source_type", "source_url"}.intersection(changes))
+    for key, value in changes.items():
         setattr(camera, key, value)
-    db.commit()
+    if source_changed and camera.status == CameraStatus.error:
+        camera.status = CameraStatus.inactive
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Camera code already exists") from exc
     db.refresh(camera)
     return camera
+
+
+@router.get("/sources/videos")
+def list_video_sources() -> list[dict]:
+    try:
+        response = httpx.get(f"{settings.ai_service_url}/sources/videos", timeout=3.0)
+        response.raise_for_status()
+        return response.json()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Không đọc được danh sách video từ AI Service: {exc}") from exc
+
+
+@router.get("/cameras/{camera_id}/source-status")
+def camera_source_status(camera_id: int, probe: bool = Query(default=False), db: Session = Depends(get_db)) -> dict:
+    camera = db.get(Camera, camera_id)
+    if camera is None:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    try:
+        response = httpx.post(
+            f"{settings.ai_service_url}/sources/validate",
+            params={"probe": str(probe).lower()},
+            json={"source_type": camera.source_type.value, "source_url": camera.source_url},
+            timeout=8.0 if probe else 3.0,
+        )
+        response.raise_for_status()
+        return response.json()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Không kiểm tra được nguồn camera/video: {exc}") from exc
 
 
 @router.get("/events", response_model=list[VehicleEventRead])
@@ -174,6 +222,54 @@ def start_camera(camera_id: int, db: Session = Depends(get_db)) -> dict:
         running.ended_at = datetime.now(timezone.utc)
         camera.status = CameraStatus.inactive
         db.commit()
+    # Preflight source before creating a session. This prevents a stale video path
+    # (for example after renaming traffic_video.mp4 -> demo.mp4) from creating an
+    # error session and from showing a false "AI started" success message.
+    try:
+        source_probe = httpx.post(
+            f"{settings.ai_service_url}/sources/validate",
+            params={"probe": "true" if camera.source_type.value == "video" else "false"},
+            json={"source_type": camera.source_type.value, "source_url": camera.source_url},
+            timeout=10.0,
+        )
+        source_probe.raise_for_status()
+        source_state = source_probe.json()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Không kiểm tra được nguồn camera/video: {exc}") from exc
+    source_repaired = False
+    if not source_state.get("valid"):
+        suggestion = source_state.get("suggested_source_url")
+        # Nếu video local cũ đã bị đổi tên và thư mục videos chỉ còn đúng một
+        # ứng viên, có thể sửa an toàn đường dẫn đã lưu trong PostgreSQL. Nhờ đó
+        # camera cũ (ví dụ CAM-001) không tiếp tục giữ tên file đã biến mất.
+        if camera.source_type.value == "video" and suggestion:
+            try:
+                repaired_probe = httpx.post(
+                    f"{settings.ai_service_url}/sources/validate",
+                    params={"probe": "true"},
+                    json={"source_type": "video", "source_url": suggestion},
+                    timeout=10.0,
+                )
+                repaired_probe.raise_for_status()
+                repaired_state = repaired_probe.json()
+            except Exception as exc:
+                raise HTTPException(status_code=502, detail=f"Không kiểm tra được video gợi ý: {exc}") from exc
+            if repaired_state.get("valid"):
+                camera.source_url = repaired_state.get("source_url") or suggestion
+                if camera.status == CameraStatus.error:
+                    camera.status = CameraStatus.inactive
+                db.commit()
+                db.refresh(camera)
+                source_state = repaired_state
+                source_repaired = True
+
+        if not source_state.get("valid"):
+            detail = source_state.get("message", "Nguồn camera/video không hợp lệ.")
+            suggestion = source_state.get("suggested_source_url")
+            if suggestion:
+                detail += f" Gợi ý nguồn đang có: {suggestion}"
+            raise HTTPException(status_code=422, detail=detail)
+
     model = db.scalar(select(AIModel).where(AIModel.is_active.is_(True)).order_by(AIModel.id.desc()))
     session = CountingSession(camera_id=camera_id, model_id=model.id if model else None, status=SessionStatus.running)
     camera.status = CameraStatus.active
@@ -200,7 +296,7 @@ def start_camera(camera_id: int, db: Session = Depends(get_db)) -> dict:
         camera.status = CameraStatus.error
         db.commit()
         raise HTTPException(status_code=502, detail=f"AI service could not start pipeline: {exc}") from exc
-    return {"session_id": session.id, "camera_id": camera_id, "pipeline": response.json()}
+    return {"session_id": session.id, "camera_id": camera_id, "source_repaired": source_repaired, "source_url": camera.source_url, "pipeline": response.json()}
 
 
 @router.post("/cameras/{camera_id}/stop")

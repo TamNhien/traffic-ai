@@ -1,11 +1,18 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.models.all_models import CameraStatus, SourceType
 
 
-class CameraCreate(BaseModel):
+class _CameraSourceBase(BaseModel):
+    @field_validator('source_url', mode='before', check_fields=False)
+    @classmethod
+    def normalize_source_url(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+
+class CameraCreate(_CameraSourceBase):
     name: str = Field(min_length=2, max_length=120)
     code: str = Field(min_length=2, max_length=50)
     source_type: SourceType
@@ -19,8 +26,9 @@ class CameraCreate(BaseModel):
     line_y2: float = Field(default=0.5, ge=0, le=1)
 
 
-class CameraUpdate(BaseModel):
+class CameraUpdate(_CameraSourceBase):
     name: str | None = Field(default=None, min_length=2, max_length=120)
+    code: str | None = Field(default=None, min_length=2, max_length=50)
     source_type: SourceType | None = None
     source_url: str | None = Field(default=None, min_length=1)
     location: str | None = None
