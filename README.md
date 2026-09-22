@@ -1,36 +1,43 @@
-# Traffic AI V0.1.3
+# Traffic AI V0.1.4
 
-Do an Tri tue nhan tao: he thong phat hien, theo doi va dem phuong tien giao thong qua camera.
+**Đồ án môn Trí tuệ nhân tạo:** Nghiên cứu và xây dựng hệ thống phát hiện, phân loại, theo dõi và đếm phương tiện giao thông qua camera.
 
-## Trang thai V0.1.3
+> Thư mục làm việc mặc định trên máy phát triển:
+>
+> ```powershell
+> D:\LienThongDH\DoAn\traffic-ai
+> ```
 
-V0.1 tap trung vao ha tang chay duoc truoc khi gan YOLO/ByteTrack:
+## 1. Trạng thái hiện tại
 
-- PostgreSQL 18, database `traffic_ai_db`
-- Docker named volume `traffic_ai_postgres_data`
-- FastAPI + SQLAlchemy 2 + Alembic
-- React/Vite dashboard
-- Nginx HTTPS gateway
-- AI service scaffold de V0.2 gan YOLO + ByteTrack
-- Schema co san cho camera, AI model, counting session, vehicle event, aggregate count va system settings
+V0.1.x tập trung xây dựng nền tảng ổn định trước khi tích hợp pipeline AI thực tế ở V0.2:
 
-## Cong duoc co dinh
+- PostgreSQL 18, database `traffic_ai_db`.
+- Docker named volume `traffic_ai_postgres_data` để giữ dữ liệu bền vững.
+- FastAPI + SQLAlchemy 2 + Alembic.
+- React/Vite Dashboard.
+- Nginx HTTPS Gateway.
+- AI Service scaffold, chuẩn bị cho YOLO + ByteTrack.
+- GitHub Actions CI.
+- Tự động kiểm thử → đẩy GitHub → tạo tag → tạo GitHub Release chỉ bằng **một lệnh**.
 
-| Thanh phan | Dia chi |
+## 2. Cổng và địa chỉ cố định
+
+| Thành phần | Địa chỉ |
 |---|---|
 | Dashboard HTTPS | `https://traffic-ai.test:8443` |
-| API HTTPS | `https://traffic-ai.test:8444` |
+| Backend API HTTPS | `https://traffic-ai.test:8444` |
 | Swagger | `https://traffic-ai.test:8444/docs` |
-| PostgreSQL tu Windows/pgAdmin | `127.0.0.1:5445` |
-| PostgreSQL noi bo Docker | `postgres:5432` |
+| PostgreSQL từ Windows/pgAdmin | `127.0.0.1:5445` |
+| PostgreSQL nội bộ Docker | `postgres:5432` |
 | Database | `traffic_ai_db` |
-| User | `traffic_admin` |
+| PostgreSQL user | `traffic_admin` |
 
-Khong su dung port 3000, 5432 tren host, hoac 5434.
+Dự án **không sử dụng** port `3000`, host port `5432` hoặc port `5434`.
 
-## Database tables V0.1
+## 3. Database hiện có
 
-Sau khi Alembic chay, database se co:
+Sau khi Alembic chạy thành công, schema `public` có các bảng:
 
 - `users`
 - `cameras`
@@ -41,19 +48,15 @@ Sau khi Alembic chay, database se co:
 - `system_settings`
 - `alembic_version`
 
-## Chuan bi tren may hien tai
+## 4. Chuẩn bị máy phát triển
 
-May da co container PostgreSQL tao thu cong va volume `traffic_ai_postgres_data`. Khong xoa volume nay.
-
-### 1. Giai nen source
-
-Vi du:
+### 4.1. Mở thư mục dự án
 
 ```powershell
 cd D:\LienThongDH\DoAn\traffic-ai
 ```
 
-### 2. Hosts
+### 4.2. Cấu hình hosts
 
 File:
 
@@ -61,85 +64,81 @@ File:
 C:\Windows\System32\drivers\etc\hosts
 ```
 
-Can co:
+Cần có:
 
 ```text
 127.0.0.1 traffic-ai.test
 ```
 
-### 3. Tao certificate HTTPS
+### 4.3. Tạo và tin cậy certificate HTTPS
 
-Docker Desktop phai dang chay:
+Docker Desktop phải đang chạy.
 
 ```powershell
 .\scripts\generate-dev-cert.ps1
 ```
 
-Sau do mo PowerShell bang **Run as Administrator**:
+Sau đó mở PowerShell bằng **Run as Administrator**:
 
 ```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
 .\scripts\trust-dev-cert.ps1
 ```
 
-Certificate server co SAN cho:
+Certificate server có SAN cho:
 
 - `traffic-ai.test`
 - `localhost`
 - `127.0.0.1`
 
-### 4. Chuyen container PostgreSQL thu cong sang Docker Compose
+### 4.4. PostgreSQL 18
 
-Container hien tai co ten `traffic-ai-postgres`. Script nay chi xoa container, KHONG xoa named volume:
+Nếu máy đã có container `traffic-ai-postgres` được tạo thủ công và volume `traffic_ai_postgres_data`, chỉ chuyển quyền quản lý container sang Docker Compose:
 
 ```powershell
 .\scripts\adopt-existing-postgres.ps1
 ```
 
-Kiem tra volume van con:
+Script **không xóa volume database**.
+
+Kiểm tra volume:
 
 ```powershell
 docker volume ls --filter "name=traffic_ai_postgres_data"
 ```
 
-### 5. Khoi dong toan bo he thong
+## 5. Chạy hệ thống
 
 ```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
 .\scripts\start.ps1
 ```
 
-Script se chay:
+Hoặc trực tiếp:
 
 ```powershell
 docker compose up -d --build
 ```
 
-Backend se tu dong chay:
+Backend tự chạy:
 
 ```text
 alembic upgrade head
 ```
 
-nen schema V0.1 duoc tao trong `traffic_ai_db` ma khong can tao table bang tay.
-
-## Kiem tra sau khi chay
-
-```powershell
-docker compose ps
-```
-
-hoac:
+### Kiểm tra trạng thái
 
 ```powershell
 .\scripts\status.ps1
 ```
 
-Kiem tra database:
+Kiểm tra database:
 
 ```powershell
 .\scripts\verify-database.ps1
 ```
 
-Mo:
+Dashboard:
 
 ```text
 https://traffic-ai.test:8443
@@ -151,9 +150,9 @@ Swagger:
 https://traffic-ai.test:8444/docs
 ```
 
-## pgAdmin Desktop
+## 6. pgAdmin Desktop
 
-Server `Traffic AI PostgreSQL`:
+Kết nối server `Traffic AI PostgreSQL`:
 
 ```text
 Host:                 127.0.0.1
@@ -163,19 +162,19 @@ Username:             traffic_admin
 Password:             TrafficAI@2026
 ```
 
-Sau khi V0.1.1 chay, vao:
+Trong pgAdmin:
 
 ```text
 Databases
-  -> traffic_ai_db
-     -> Schemas
-        -> public
-           -> Tables
+  └── traffic_ai_db
+      └── Schemas
+          └── public
+              └── Tables
 ```
 
-va Refresh de thay cac bang moi.
+Nếu chưa thấy bảng mới, nhấn chuột phải vào **Tables → Refresh**.
 
-## API hien co
+## 7. API hiện có
 
 ```text
 GET  /api/health
@@ -189,223 +188,249 @@ GET  /api/meta/vehicle-types
 GET  /api/meta/directions
 ```
 
-Vi du tao camera tu Swagger:
+Ví dụ tạo camera từ Swagger:
 
 ```json
 {
-  "name": "Camera cong chinh",
+  "name": "Camera cổng chính",
   "code": "CAM-001",
   "source_type": "rtsp",
   "source_url": "rtsp://user:password@192.168.1.100:554/stream1",
-  "location": "Cong chinh",
+  "location": "Cổng chính",
   "description": "Camera demo Traffic AI"
 }
 ```
 
-## Lenh thuong dung
+## 8. Kiểm thử tự động
 
-Khoi dong/build:
-
-```powershell
-.\scripts\start.ps1
-```
-
-Xem log:
-
-```powershell
-docker compose logs -f
-```
-
-Chi xem backend:
-
-```powershell
-docker compose logs -f backend
-```
-
-Dung he thong ma giu database:
-
-```powershell
-.\scripts\stop.ps1
-```
-
-**Khong dung** lenh sau neu khong chu dich xoa database:
-
-```powershell
-docker compose down -v
-```
-
-Volume database phai duoc giu:
-
-```text
-traffic_ai_postgres_data
-```
-
-## Bao mat local
-
-`.env` hien dung mat khau local de tuong thich voi database da tao:
-
-```text
-TrafficAI@2026
-```
-
-Truoc khi dua source len Git hoac trien khai sang may khac, hay doi mat khau va khong commit file `.env`.
-
-## Lo trinh tiep theo
-
-### V0.2 - AI pipeline
-
-- NVIDIA RTX 3060 / CUDA
-- YOLO detector
-- ByteTrack tracker
-- MP4, webcam va RTSP input
-- Bounding box + class + confidence + Track ID
-- Counting line
-- Dem IN/OUT, chong dem trung
-- Ghi `vehicle_events` vao PostgreSQL
-- Live preview tren dashboard
-
-### V0.3 - Training
-
-- Dataset giao thong Viet Nam
-- Fine-tune model
-- Precision, Recall, mAP50, mAP50-95
-- FPS va counting error
-- Quan ly phien train/model trong database
-
-### V0.4 - Bao cao/thong ke
-
-- Theo gio/ngay/camera/loai xe
-- Bieu do dashboard
-- Export CSV/Excel
-- Snapshot su kien
-
-
-## V0.1.1 - sua loi khoi dong
-
-- Sua Alembic/ConfigParser khi password PostgreSQL co ky tu `@` (URL encoding tao `%40`).
-- Danh dau `traffic_ai_postgres_data` la external volume de Compose dung dung volume da tao truoc do.
-- Sua kiem tra `hosts` tren PowerShell; truoc day mang dong hosts lam script canh bao sai.
-- Them `scripts\diagnose.ps1` de thu thap nhanh trang thai va log.
-
-Thu muc mac dinh cua do an:
+Chạy toàn bộ kiểm thử tại máy phát triển:
 
 ```powershell
 cd D:\LienThongDH\DoAn\traffic-ai
-```
-
-## V0.1.2 - CI/CD and GitHub Release automation
-
-This version adds a fail-closed release workflow:
-
-- Local test suite: `scripts/test.ps1`
-- GitHub Actions CI on push and pull request
-- Python unit tests for Backend and AI Service
-- Frontend production build verification
-- Docker Compose validation and image builds
-- One-time GitHub remote setup: `scripts/github-init.ps1`
-- One-command release: `scripts/release.ps1 -Version X.Y.Z`
-- Tag-driven GitHub Release with ZIP, TAR.GZ and SHA256SUMS assets
-
-Recommended workflow from the project root (`D:\LienThongDH\DoAn\traffic-ai`):
-
-```powershell
 .\scripts\test.ps1
-.\scripts\github-init.ps1 -RepositoryUrl "https://github.com/<OWNER>/<REPO>.git"
-.\scripts\release.ps1 -Version 0.1.2
 ```
 
-Before the first release, install/authenticate GitHub CLI:
+Các bước kiểm thử gồm:
 
-```powershell
-gh auth login
-```
+1. Kiểm tra cú pháp Backend Python.
+2. Kiểm tra cú pháp AI Service Python.
+3. Backend unit tests.
+4. AI Service unit tests.
+5. Build Frontend.
+6. Validate Docker Compose.
+7. Build các Docker image ứng dụng.
 
-The release script runs the local test suite, updates `VERSION` and the frontend package version, commits changes, creates an annotated `vX.Y.Z` tag, pushes `main` plus the tag, then GitHub Actions verifies the tag and creates the GitHub Release automatically.
-
-## GitHub automation (TamNhien)
-
-Repository mac dinh cua project:
+Khi thành công sẽ có:
 
 ```text
-https://github.com/TamNhien/traffic-ai
+[SUCCESS] All Traffic AI tests passed.
 ```
 
-De tranh vo tinh cong khai source, script mac dinh tao repository **private**. Neu muon public, truyen `-Visibility public`.
+## 9. Một lệnh duy nhất để test + GitHub + Release
 
-### Dang nhap GitHub CLI mot lan
+### Chuẩn bị một lần
+
+Cài GitHub CLI và đăng nhập đúng tài khoản `TamNhien`:
 
 ```powershell
 gh auth login
 ```
 
-Kiem tra tai khoan:
+Kiểm tra:
 
 ```powershell
 gh api user --jq .login
 ```
 
-Ket qua phai la:
+Kết quả phải là:
 
 ```text
 TamNhien
 ```
 
-### Tu dong tao repo neu chua co va push source
+### Lệnh phát hành chính thức
+
+Từ V0.1.4, chỉ dùng **một lệnh**. Script tự đọc phiên bản trong file `VERSION`:
 
 ```powershell
-cd D:\LienThongDH\DoAn\traffic-ai
-.\scripts\push-github.ps1
+cd D:\LienThongDH\DoAn\traffic-ai; .\scripts\publish.ps1
 ```
 
-Neu muon repository public ngay tu dau:
+Nếu cần chỉ định phiên bản thủ công, vẫn có thể dùng `-Version X.Y.Z`.
+
+Script sẽ tự động thực hiện theo đúng thứ tự:
+
+```text
+Kiểm thử local
+    ↓
+Tất cả PASS?
+    ├── Không → Dừng, không push, không release
+    └── Có
+         ↓
+Kiểm tra đăng nhập GitHub TamNhien
+         ↓
+Tạo TamNhien/traffic-ai nếu repository chưa tồn tại
+         ↓
+Cập nhật VERSION + frontend/package.json
+         ↓
+Kiểm tra .env và khóa riêng TLS không bị commit
+         ↓
+Commit source
+         ↓
+Tạo tag v0.1.4
+         ↓
+Push main
+         ↓
+Push tag
+         ↓
+GitHub Actions kiểm thử Release
+         ↓
+Tạo ZIP + TAR.GZ + SHA256SUMS.txt
+         ↓
+Tạo GitHub Release
+         ↓
+Script chờ workflow hoàn tất và xác nhận Release tồn tại
+```
+
+Nếu muốn tạo repository ở chế độ public trong lần đầu:
 
 ```powershell
-.\scripts\push-github.ps1 -Visibility public
+.\scripts\publish.ps1 -Visibility public
 ```
 
-Script se tu:
+Không nên dùng `-SkipTests` khi phát hành chính thức.
 
-1. Chay full test.
-2. Xac minh `gh` dang dang nhap dung tai khoan `TamNhien`.
-3. Tao `TamNhien/traffic-ai` neu repository chua ton tai.
-4. Khoi tao Git neu can.
-5. Cau hinh `origin`.
-6. Chan `.env` va private key TLS neu bi track nham.
-7. Commit source.
-8. Push branch `main`.
+Repository mặc định:
 
-### Tao version + tag + GitHub Release tu dong
+```text
+https://github.com/TamNhien/traffic-ai
+```
 
-Vi du:
+Release:
+
+```text
+https://github.com/TamNhien/traffic-ai/releases
+```
+
+## 10. Các lệnh thường dùng
+
+Khởi động/build:
 
 ```powershell
-cd D:\LienThongDH\DoAn\traffic-ai
-.\scripts\release.ps1 -Version 0.1.3
+.\scripts\start.ps1
 ```
 
-Neu repository chua ton tai, script release cung se tu tao repository truoc khi push.
-Sau khi tag `v0.1.3` duoc push, GitHub Actions se:
-
-- test Backend;
-- test AI Service;
-- build Frontend;
-- validate/build Docker images;
-- tao release archives;
-- tao `SHA256SUMS.txt`;
-- tao GitHub Release.
-
-Theo doi workflow:
+Xem toàn bộ log:
 
 ```powershell
-gh run watch
+docker compose logs -f
 ```
 
-## V0.1.3 - test fix + TamNhien GitHub bootstrap
+Chỉ xem Backend:
 
-- Sua `PYTHONPATH` cho backend/AI unit test de khong con `ModuleNotFoundError: No module named 'app'`.
-- Dong bo GitHub Actions test cung mot cach import voi local test.
-- Dong bo hostname development sang `traffic-ai.test` de tranh xung dot `.local`/mDNS.
-- `github-init.ps1` tu xac minh tai khoan `TamNhien` va tao `TamNhien/traffic-ai` neu chua co.
-- `push-github.ps1` chay test, commit va push source sau khi test xanh.
-- `release.ps1` chay test, tu tao repo neu can, commit, tag, push va kich hoat GitHub Release workflow.
-- Fail-closed neu `.env` hoac TLS private key bi track nham.
+```powershell
+docker compose logs -f backend
+```
+
+Chẩn đoán lỗi:
+
+```powershell
+.\scripts\diagnose.ps1
+```
+
+Dừng hệ thống nhưng giữ database:
+
+```powershell
+.\scripts\stop.ps1
+```
+
+**Không chạy** lệnh dưới đây nếu không chủ đích xóa dữ liệu:
+
+```powershell
+docker compose down -v
+```
+
+Volume cần giữ:
+
+```text
+traffic_ai_postgres_data
+```
+
+## 11. Bảo mật local
+
+File `.env` không được commit lên GitHub. Khóa riêng certificate trong `gateway/certs/*.key` cũng bị chặn khỏi Git.
+
+Mật khẩu local hiện tại được giữ để tương thích database đã tạo:
+
+```text
+TrafficAI@2026
+```
+
+Khi triển khai ngoài máy phát triển, phải thay mật khẩu và quản lý secret bằng cơ chế phù hợp.
+
+## 12. Lịch sử phát triển
+
+Các phiên bản được sắp xếp **tăng dần**:
+
+### V0.1.0 — Nền tảng ban đầu
+
+- Khởi tạo kiến trúc Traffic AI.
+- PostgreSQL 18 + `traffic_ai_db`.
+- FastAPI, SQLAlchemy 2, Alembic.
+- React/Vite Dashboard.
+- Nginx HTTPS.
+- AI Service scaffold.
+- Docker Compose.
+
+### V0.1.1 — Ổn định Backend và PostgreSQL
+
+- Sửa lỗi Alembic/SQLAlchemy khi mật khẩu PostgreSQL chứa ký tự đặc biệt.
+- Sử dụng volume PostgreSQL hiện có dưới dạng external volume.
+- Cải thiện kiểm tra hosts và script chẩn đoán.
+
+### V0.1.2 — CI/CD và kiểm thử tự động
+
+- Thêm `scripts/test.ps1`.
+- Thêm Backend/AI unit test pipeline.
+- Thêm GitHub Actions CI.
+- Thêm workflow tạo GitHub Release tự động.
+- Sửa `PYTHONPATH` cho test Backend và AI Service.
+
+### V0.1.3 — Tự động hóa GitHub
+
+- Mặc định GitHub owner là `TamNhien`.
+- Tự tạo repository `TamNhien/traffic-ai` nếu chưa tồn tại.
+- Tự commit/push/tag.
+- Chặn commit `.env` và khóa riêng TLS.
+- Chuẩn hóa full-source workflow sau mỗi lần sửa lỗi.
+
+### V0.1.4 — Một lệnh phát hành hoàn chỉnh
+
+- README chuyển hoàn toàn sang **tiếng Việt có dấu**.
+- Gom quy trình test, GitHub và Release vào `scripts/publish.ps1`.
+- Một lệnh chạy test → tạo repo nếu cần → commit → push → tag → GitHub Actions → Release.
+- Script chờ GitHub Actions hoàn tất và kiểm tra Release đã được tạo.
+- `release.ps1` và `push-github.ps1` được giữ làm wrapper tương thích, nhưng `publish.ps1` là lệnh chính thức.
+- Lịch sử phiên bản trong README được sắp xếp tăng dần.
+
+## 13. Lộ trình tiếp theo
+
+### V0.2 — AI Pipeline
+
+- NVIDIA RTX 3060 / CUDA.
+- YOLO detector.
+- ByteTrack tracker.
+- Input MP4, webcam và RTSP.
+- Track ID ổn định.
+- Counting line.
+- Đếm IN/OUT và chống đếm trùng.
+- Ghi `vehicle_events` vào PostgreSQL.
+- Live Dashboard cập nhật dữ liệu AI.
+
+### Các giai đoạn sau
+
+- Fine-tune dataset giao thông Việt Nam.
+- So sánh model và lưu metric huấn luyện.
+- Thống kê theo giờ/ngày/camera/loại xe.
+- Xuất báo cáo Excel/CSV.
+- Nhiều camera và tối ưu hiệu năng GPU.
