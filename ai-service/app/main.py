@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from app.runtime import registry
 from app.schemas import PipelineStart
 
-app = FastAPI(title="Traffic AI Service", version="0.2.3")
+app = FastAPI(title="Traffic AI Service", version="0.2.5")
 SNAPSHOT_DIR = Path(os.getenv("SNAPSHOT_DIR", "/tmp/traffic-ai-snapshots"))
 SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/snapshots", StaticFiles(directory=SNAPSHOT_DIR), name="snapshots")

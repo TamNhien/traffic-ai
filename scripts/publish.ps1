@@ -33,6 +33,38 @@ function Invoke-Checked([scriptblock]$Action, [string]$Message) {
   if ($LASTEXITCODE -ne 0) { throw $Message }
 }
 
+function New-DirectGitHubRelease([string]$Tag) {
+  Write-Host "[Traffic AI] Không thấy workflow Release; chuyển sang tạo Release trực tiếp bằng GitHub CLI..." -ForegroundColor Yellow
+  $distRoot = Join-Path $root "dist-release"
+  if (Test-Path $distRoot) { Remove-Item $distRoot -Recurse -Force }
+  New-Item -ItemType Directory -Path $distRoot | Out-Null
+
+  $zip = Join-Path $distRoot "traffic-ai-$Tag.zip"
+  $tar = Join-Path $distRoot "traffic-ai-$Tag.tar.gz"
+  $sums = Join-Path $distRoot "SHA256SUMS.txt"
+  $prefix = "traffic-ai-$Tag/"
+
+  Invoke-Checked { git archive --format=zip --prefix=$prefix -o $zip $Tag } "Không tạo được ZIP release."
+  Invoke-Checked { git archive --format=tar.gz --prefix=$prefix -o $tar $Tag } "Không tạo được TAR.GZ release."
+
+  $lines = @()
+  foreach ($artifact in @($zip, $tar)) {
+    $hash = (Get-FileHash -Algorithm SHA256 $artifact).Hash.ToLowerInvariant()
+    $lines += "$hash  $(Split-Path $artifact -Leaf)"
+  }
+  Set-Content -Path $sums -Value $lines -Encoding ascii
+
+  gh release view $Tag --repo "$Owner/$Repository" 1>$null 2>$null
+  if ($LASTEXITCODE -eq 0) {
+    Write-Host "[OK] GitHub Release $Tag đã tồn tại." -ForegroundColor Green
+    return
+  }
+
+  gh release create $Tag $zip $tar $sums --repo "$Owner/$Repository" --title "Traffic AI $Tag" --generate-notes --verify-tag
+  if ($LASTEXITCODE -ne 0) { throw "Tạo GitHub Release trực tiếp thất bại." }
+  Write-Host "[OK] Đã tạo GitHub Release trực tiếp: $Tag" -ForegroundColor Green
+}
+
 Write-Host "" 
 Write-Host "============================================================" -ForegroundColor DarkCyan
 Write-Host " Traffic AI - Kiểm thử, đẩy GitHub và tạo Release tự động" -ForegroundColor Cyan
@@ -115,33 +147,34 @@ if ($NoWait) {
   Write-Host "Theo dõi: gh run list --workflow release.yml" -ForegroundColor Yellow
 } else {
   $runId = $null
-  for ($i = 1; $i -le 30; $i++) {
+  $tagSha = (git rev-list -n 1 $tag).Trim()
+  for ($i = 1; $i -le 45; $i++) {
     Start-Sleep -Seconds 2
-    $json = gh run list --workflow release.yml --limit 20 --json databaseId,headBranch,status,conclusion 2>$null
+    $json = gh run list --repo "$Owner/$Repository" --workflow release.yml --limit 30 --json databaseId,headBranch,headSha,status,conclusion 2>$null
     if ($LASTEXITCODE -eq 0 -and $json) {
       $runs = $json | ConvertFrom-Json
-      $match = $runs | Where-Object { $_.headBranch -eq $tag } | Select-Object -First 1
+      $match = $runs | Where-Object { $_.headSha -eq $tagSha -or $_.headBranch -eq $tag } | Select-Object -First 1
       if ($match) {
         $runId = $match.databaseId
         break
       }
     }
-    Write-Host "  Đang chờ workflow Release xuất hiện... ($i/30)"
+    Write-Host "  Đang chờ workflow Release xuất hiện... ($i/45)"
   }
 
   if (-not $runId) {
-    throw "Không tìm thấy workflow Release cho tag $tag sau 60 giây. Hãy kiểm tra: gh run list --workflow release.yml"
-  }
+    New-DirectGitHubRelease -Tag $tag
+  } else {
+    Write-Host "[Traffic AI] Theo dõi GitHub Actions run #$runId..." -ForegroundColor Cyan
+    gh run watch $runId --repo "$Owner/$Repository" --exit-status
+    if ($LASTEXITCODE -ne 0) {
+      throw "GitHub Actions Release thất bại. Xem chi tiết: gh run view $runId --repo $Owner/$Repository --log-failed"
+    }
 
-  Write-Host "[Traffic AI] Theo dõi GitHub Actions run #$runId..." -ForegroundColor Cyan
-  gh run watch $runId --exit-status
-  if ($LASTEXITCODE -ne 0) {
-    throw "GitHub Actions Release thất bại. Xem chi tiết: gh run view $runId --log-failed"
-  }
-
-  gh release view $tag --repo "$Owner/$Repository" 1>$null
-  if ($LASTEXITCODE -ne 0) {
-    throw "Workflow hoàn tất nhưng chưa tìm thấy GitHub Release $tag."
+    gh release view $tag --repo "$Owner/$Repository" 1>$null
+    if ($LASTEXITCODE -ne 0) {
+      throw "Workflow hoàn tất nhưng chưa tìm thấy GitHub Release $tag."
+    }
   }
 }
 

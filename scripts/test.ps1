@@ -47,6 +47,37 @@ function Assert-BackendHealthContract {
   Write-Host "[OK] Backend healthcheck dependency contract" -ForegroundColor Green
 }
 
+
+function Assert-FrontendUtf8Contract {
+  Write-Host "`n[Traffic AI] Frontend UTF-8/Vietnamese text contract" -ForegroundColor Cyan
+  $frontendRoot = Join-Path $root "frontend"
+  $sourceRoot = Join-Path $frontendRoot "src"
+
+  # Chỉ kiểm tra source do con người chỉnh sửa. Không quét dist/node_modules vì
+  # Vite/esbuild có thể serialize Unicode thành \uXXXX trong bundle sinh tự động.
+  $files = @()
+  if (Test-Path $sourceRoot) {
+    $files += Get-ChildItem $sourceRoot -Recurse -File | Where-Object { $_.Extension -in @(".jsx", ".js", ".css", ".html", ".json") }
+  }
+  foreach ($name in @("index.html", "vite.config.js", "package.json")) {
+    $path = Join-Path $frontendRoot $name
+    if (Test-Path $path) { $files += Get-Item $path }
+  }
+
+  foreach ($file in $files) {
+    $text = Get-Content $file.FullName -Raw -Encoding UTF8
+    if ($text -match '\\u[0-9A-Fa-f]{4}') {
+      throw "Frontend source còn Unicode escape dạng literal trong $($file.FullName). Hãy lưu trực tiếp tiếng Việt UTF-8 thay vì \uXXXX trong JSX/HTML source."
+    }
+  }
+
+  $indexText = Get-Content (Join-Path $frontendRoot "index.html") -Raw -Encoding UTF8
+  if ($indexText -notmatch '<meta charset="UTF-8"') {
+    throw "frontend/index.html thiếu meta charset UTF-8."
+  }
+  Write-Host "[OK] Frontend UTF-8/Vietnamese text contract" -ForegroundColor Green
+}
+
 function Invoke-Step([string]$Title, [scriptblock]$Action) {
   Write-Host "`n[Traffic AI] $Title" -ForegroundColor Cyan
   & $Action
@@ -56,6 +87,7 @@ function Invoke-Step([string]$Title, [scriptblock]$Action) {
 
 Assert-LocalHttpsBootstrapContract
 Assert-BackendHealthContract
+Assert-FrontendUtf8Contract
 
 Invoke-Step "Backend syntax check" {
   docker run --rm -v "${root}:/src" -w /src/backend python:3.12-slim python -m compileall -q app tests alembic
@@ -84,6 +116,8 @@ Invoke-Step "AI service unit tests" {
 }
 
 Invoke-Step "Frontend build" {
+  $frontendDist = Join-Path $root "frontend\dist"
+  if (Test-Path $frontendDist) { Remove-Item $frontendDist -Recurse -Force }
   docker run --rm -v "${root}:/src" -w /src/frontend node:22-alpine `
     sh -lc "npm install && npm run build"
 }

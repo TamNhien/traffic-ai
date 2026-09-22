@@ -1,4 +1,4 @@
-# Traffic AI V0.2.3
+# Traffic AI V0.2.5
 
 **Đồ án môn Trí tuệ nhân tạo:** Nghiên cứu và xây dựng hệ thống phát hiện, phân loại, theo dõi và đếm phương tiện giao thông qua camera.
 
@@ -10,7 +10,7 @@
 
 ## 1. Trạng thái hiện tại
 
-V0.2.3 giữ YOLO26n làm model chính, đồng thời sửa blocker runtime khiến Backend bị đánh dấu `unhealthy` sau khi toàn bộ test/build đã PASS. Backend healthcheck nay chỉ phụ thuộc Backend + PostgreSQL; trạng thái AI được tách sang endpoint riêng để loại bỏ phụ thuộc vòng khi Docker khởi động:
+V0.2.5 giữ YOLO26n làm model chính, sửa false-positive của kiểm thử UTF-8 khi Vite đã sinh bundle trong `frontend/dist`, và gia cố quy trình phát hành GitHub. Contract UTF-8 từ nay chỉ quét source do con người chỉnh sửa (`frontend/src` cùng các file cấu hình nguồn), không quét `dist`/`node_modules` vì bundler có thể hợp lệ hóa Unicode thành dạng `\uXXXX`. `publish.ps1` cũng nhận diện workflow Release theo commit SHA và tự tạo GitHub Release trực tiếp nếu workflow không xuất hiện sau thời gian chờ.
 
 - PostgreSQL 18, database `traffic_ai_db`.
 - Docker named volume `traffic_ai_postgres_data` để giữ dữ liệu bền vững.
@@ -283,7 +283,7 @@ Kiểm tra .env và khóa riêng TLS không bị commit
          ↓
 Commit source
          ↓
-Tạo tag theo file `VERSION` (ví dụ `v0.2.3`)
+Tạo tag theo file `VERSION` (ví dụ `v0.2.5`)
          ↓
 Push main
          ↓
@@ -566,6 +566,26 @@ Các phiên bản được sắp xếp **tăng dần**:
 - `diagnose.ps1` hiển thị health từng container, Backend logs, AI logs, Backend health, system status và AI health.
 - `test.ps1` bổ sung contract chống tái xuất hiện phụ thuộc vòng Backend ↔ AI.
 - Backend, AI Service, Frontend và `VERSION` đồng bộ phiên bản `0.2.3`.
+
+### V0.2.4 — Chuẩn hóa tiếng Việt UTF-8 trên Dashboard
+
+- Sửa lỗi giao diện hiển thị nguyên chuỗi dạng `\u00e1`, `\u1ed5`, `\u0111` thay vì chữ tiếng Việt có dấu.
+- Chuyển toàn bộ text frontend sang ký tự Unicode UTF-8 thực trong `frontend/src/main.jsx`, bao gồm nội dung JSX, thuộc tính JSX và chuỗi JavaScript.
+- Giữ `<meta charset="UTF-8">` trong `frontend/index.html` và bổ sung test contract kiểm tra charset.
+- `test.ps1` fail-closed nếu frontend còn literal Unicode escape dạng `\uXXXX`, ngăn tái phát lỗi sau các lần sinh/cập nhật source.
+- Backend, AI Service, Frontend và `VERSION` đồng bộ phiên bản `0.2.4`.
+- Không có migration database mới; dữ liệu PostgreSQL hiện tại được giữ nguyên.
+
+### V0.2.5 — Sửa false-positive UTF-8 và gia cố Release tự động
+
+- Sửa `test.ps1`: contract UTF-8 chỉ quét source frontend (`frontend/src`, `index.html`, `vite.config.js`, `package.json`), không quét `frontend/dist` hoặc `node_modules`.
+- Bundle do Vite/esbuild sinh có thể chứa `\uXXXX` hợp lệ; đây không phải lỗi hiển thị nếu source JSX đã là UTF-8 thực.
+- Xóa `frontend/dist` cũ trước mỗi lần frontend build để tránh artifact stale gây nhiễu khi kiểm tra thủ công.
+- Gia cố `publish.ps1`: tìm GitHub Actions Release theo commit SHA của tag thay vì chỉ dựa vào `headBranch`.
+- Nếu workflow Release không xuất hiện sau thời gian chờ, script tự tạo ZIP, TAR.GZ, `SHA256SUMS.txt` và GitHub Release trực tiếp bằng `gh`, không dừng ở lỗi timeout.
+- Thêm `.gitattributes` để chuẩn hóa line ending và giảm cảnh báo LF/CRLF trên Windows.
+- Backend, AI Service, Frontend và `VERSION` đồng bộ phiên bản `0.2.5`.
+- Không có migration database mới; schema vẫn ở `0004_runtime_stability`, dữ liệu PostgreSQL được giữ nguyên.
 
 ## 15. Lộ trình tiếp theo
 
