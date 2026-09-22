@@ -13,6 +13,7 @@ class PipelineState:
     session_id: int
     status: str = "starting"
     fps: float = 0.0
+    inference_ms: float = 0.0
     processed_frames: int = 0
     total_count: int = 0
     in_count: int = 0
@@ -21,6 +22,11 @@ class PipelineState:
     delivered_events: int = 0
     pending_events: int = 0
     delivery_failures: int = 0
+    model_name: str | None = None
+    imgsz: int | None = None
+    half_precision: bool = False
+    frame_width: int | None = None
+    frame_height: int | None = None
     last_error: str | None = None
 
 
@@ -35,8 +41,6 @@ class PipelineRegistry:
             existing = self._workers.get(payload.camera_id)
             if existing is not None and existing.is_alive():
                 raise ValueError("Pipeline already running for this camera")
-            # Clean up a worker that has already exited so the same video/camera
-            # can be started again immediately.
             self._workers.pop(payload.camera_id, None)
             from app.worker import PipelineWorker
 

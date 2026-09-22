@@ -20,14 +20,14 @@ def test_root_metadata() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["name"] == "Traffic AI"
-    assert payload["version"] == "0.2.9"
+    assert payload["version"] == "0.3.0"
     assert payload["docs"] == "/docs"
     assert payload["health"] == "/api/health"
 
 
 def test_camera_pipeline_defaults() -> None:
     camera = CameraCreate(name="Demo", code="CAM-001", source_type="video", source_url="/data/videos/demo.mp4")
-    assert camera.confidence_threshold == 0.35
+    assert camera.confidence_threshold == 0.25
     assert camera.line_y1 == 0.5
     assert camera.line_y2 == 0.5
 

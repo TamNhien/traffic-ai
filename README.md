@@ -1,4 +1,4 @@
-# Traffic AI V0.2.9
+# Traffic AI V0.3.0
 
 **Đồ án môn Trí tuệ nhân tạo:** Nghiên cứu và xây dựng hệ thống phát hiện, phân loại, theo dõi và đếm phương tiện giao thông qua camera.
 
@@ -10,26 +10,34 @@
 
 ## 1. Trạng thái hiện tại
 
-V0.2.9 sửa lỗi nâng cấp tại chỗ khi thư mục dự án cũ vẫn còn `scripts/release.ps1` hoặc `scripts/push-github.ps1`. Từ bản này, `scripts/test.ps1` tự nhận diện và xóa hai wrapper phát hành legacy trước khi chạy contract, nên người dùng có thể chép đè full source mới lên `D:\LienThongDH\DoAn\traffic-ai` mà không cần tự dọn file cũ. Lệnh phát hành duy nhất tiếp tục là `scripts/publish.ps1`. Các chức năng nguồn video, YOLO26n + ByteTrack, Smart Counting, PostgreSQL và stack công nghệ của V0.2.8 được giữ nguyên.
+V0.3.0 tập trung vào độ tin cậy khi đếm thật trên video giao thông: tăng tốc pipeline, giảm bỏ sót xe nhỏ/xa, ổn định nhãn theo toàn bộ Track ID, xử lý riêng nhầm lẫn xe buýt/xe tải tại thời điểm cắt vạch, đếm hai chiều IN/OUT và cho phép chỉnh vạch trực tiếp trên ảnh xem trước. **Chỉ phương tiện thực sự đi từ một phía của vạch vàng sang phía còn lại mới được ghi nhận vào PostgreSQL.**
 
-Trường hợp như `CAM-001` vẫn lưu `/data/videos/traffic_video.mp4` sau khi file đã đổi thành `demo.mp4` được xử lý theo hai lớp:
+Các thay đổi chính:
 
-1. Dashboard hiển thị rõ nguồn cũ bị thiếu và cho chọn `demo.mp4` rồi bấm **Cập nhật camera** để lưu lại vào PostgreSQL.
-2. Nếu thư mục `videos` chỉ có đúng một video hợp lệ, khi bấm **Chạy AI** Backend có thể tự sửa đường dẫn cũ sang video duy nhất đó, lưu lại database, probe frame đầu bằng OpenCV rồi mới tạo session và khởi động pipeline.
+- **Smart Gate 2.0:** dead-band chống rung, kiểm tra đoạn chuyển động cắt đúng đoạn vạch hữu hạn, hỗ trợ cùng Track ID đi qua rồi quay lại theo chiều ngược lại.
+- **ByteTrack traffic profile:** tăng `track_buffer` để giảm rớt ID khi xe bị che khuất ngắn hoặc khung hình bị chói.
+- **Track-level class smoothing:** nhãn phương tiện không còn lấy từ đúng một frame; hệ thống tích lũy confidence của cả Track ID.
+- **Heavy-vehicle refinement:** khi xe được ổn định là `bus/truck`, crop xe tại vạch được kiểm tra lại ở độ phân giải cao hơn trước khi ghi event.
+- **Tối ưu RTX 3060:** xử lý frame ở chiều rộng tối đa 1280 px, inference `imgsz=960`, FP16 khi CUDA khả dụng và JPEG stream giảm chất lượng xuống mức hợp lý để tăng FPS.
+- **Confidence mặc định 0,25** thay cho 0,35 để giảm bỏ sót xe nhỏ/xa; migration chỉ hạ các camera còn đúng giá trị mặc định cũ.
+- **Trình chỉnh vạch trực tiếp:** khi AI dừng, kéo cả vạch để di chuyển hoặc kéo hai đầu tròn để xoay/đổi chiều dài; có nút Lên/Xuống/Trái/Phải/Dài hơn/Ngắn hơn.
+- **Khóa cấu hình khi đang đếm:** UI và Backend đều không cho đổi nguồn/vạch/confidence khi session đang chạy.
+- **Ảnh xem trước khi chưa chạy AI:** Backend/AI Service đọc một frame từ video/camera để đặt vạch trước khi bắt đầu session.
 
-Các thành phần chính:
+### 1.1. Vạch khuyến nghị cho video `clip1.mp4`
 
-- PostgreSQL **18.6**, database `traffic_ai_db`, volume `traffic_ai_postgres_data`.
-- Python **3.14.7** cho Backend/AI Service.
-- FastAPI **0.141.1**, Uvicorn **0.53.0**, SQLAlchemy **2.0.54**, Alembic **1.20.0**, Psycopg **3.3.6**.
-- YOLO26n qua Ultralytics **8.4.158**, PyTorch **2.14.0**, TorchVision **0.29.0**, OpenCV headless **5.0.0.93**.
-- React **19.3.0**, Vite **8.3.0**, `@vitejs/plugin-react` **6.1.1**.
-- Node.js **26.9.0 Current**, npm **12.0.2** cho build/test frontend.
-- Nginx **1.31.6 mainline** cho frontend image và HTTPS Gateway.
-- Docker Compose, HTTPS `traffic-ai.test`, GitHub Actions và phát hành tự động bằng `scripts/publish.ps1`.
-- RTX 3060/CUDA vẫn là đường chạy ưu tiên; CPU fallback được giữ nguyên.
+Video bạn gửi có luồng xe chủ yếu đi theo trục **trên ↔ dưới** của khung hình. Vạch đếm nên cắt ngang phần lòng đường, gần vuông góc với hướng chuyển động. Preset **Gợi ý cho clip hiện tại** dùng:
 
-## 1.1. Phiên bản công nghệ V0.2.9
+```text
+X1 = 0.32
+Y1 = 0.59
+X2 = 0.84
+Y2 = 0.59
+```
+
+Đây là điểm khởi đầu. Dùng ảnh xem trước để kéo vạch sao cho hai đầu nằm trong lòng đường, không kéo sang vỉa hè nơi có nhiều xe đỗ. Nếu cần đưa vạch lên/xuống, dùng nút **↑ Lên / ↓ Xuống** hoặc kéo trực tiếp thân vạch.
+
+### 1.2. Phiên bản công nghệ
 
 | Thành phần | Phiên bản |
 |---|---:|
@@ -53,8 +61,6 @@ Các thành phần chính:
 | Node.js | `26.9.0` Current |
 | npm | `12.0.2` |
 | Nginx | `1.31.6` mainline |
-
-Ghi chú: V0.2.9 tiếp tục ưu tiên **bản phát hành mới không phải beta/RC**. Vì vậy PostgreSQL 19 beta và SQLAlchemy 2.1 RC không được đưa vào stack chính.
 
 ## 2. Cổng và địa chỉ cố định
 
@@ -254,7 +260,7 @@ cd D:\LienThongDH\DoAn\traffic-ai
 Các bước kiểm thử gồm:
 
 1. Contract HTTPS, Backend health, UTF-8, logo/favicon và GitHub Release.
-2. Contract khóa phiên bản công nghệ V0.2.9.
+2. Contract khóa phiên bản công nghệ V0.3.0.
 3. Contract quản lý nguồn video/camera, preflight và auto-repair đường dẫn cũ.
 4. Kiểm tra cú pháp Backend và AI Service trên Python 3.14.7.
 5. Backend unit tests và AI Service unit tests bằng pytest 9.1.1.
@@ -319,7 +325,7 @@ Kiểm tra .env và khóa riêng TLS không bị commit
          ↓
 Commit source
          ↓
-Tạo tag theo file `VERSION` (ví dụ `v0.2.9`)
+Tạo tag theo file `VERSION` (ví dụ `v0.3.0`)
          ↓
 Push main
          ↓
@@ -703,9 +709,23 @@ Các phiên bản được sắp xếp **tăng dần**:
 - Thêm migration `0007_release_hygiene`, cập nhật `schema_version=0.2.9`.
 - Giữ nguyên stack công nghệ và pipeline AI của V0.2.8.
 
+### V0.3.0 — Smart Gate 2.0, đếm hai chiều và chỉnh vạch trực tiếp
+
+- Phân tích video camera thực tế và bổ sung preset vạch ngang trong lòng đường.
+- Smart Gate 2.0 dùng dead-band, finite-segment crossing và re-arm để giảm bỏ sót nhưng vẫn chỉ đếm xe thật sự cắt vạch.
+- Cùng Track ID có thể được đếm một lần `IN` và một lần `OUT` khi phương tiện thật sự quay lại qua vạch.
+- Backend idempotency đổi thành `session_id + tracking_id + direction` để không chặn lượt quay lại hợp lệ.
+- ByteTrack dùng profile giao thông riêng với `track_buffer=75`, giảm mất ID ngắn hạn.
+- Thêm `TrackLabelSmoother` để bỏ dao động class theo từng frame; xe buýt/xe tải được kiểm tra lại bằng crop ở thời điểm crossing.
+- Tối ưu tốc độ bằng resize frame xử lý, `imgsz=960`, FP16 CUDA và JPEG stream nhẹ hơn.
+- Confidence mặc định giảm từ `0.35` xuống `0.25` cho camera còn dùng default cũ.
+- Thêm ảnh preview và trình kéo vạch trực tiếp; khi AI đang chạy toàn bộ chỉnh sửa runtime bị khóa.
+- Thêm nút Lên/Xuống/Trái/Phải/Dài hơn/Ngắn hơn và preset phù hợp video hiện tại.
+- Thêm migration `0008_smart_gate_v2`, cập nhật `schema_version=0.3.0`.
+
 ## 15. Lộ trình tiếp theo
 
-### V0.3 — Huấn luyện và đánh giá model riêng
+### V0.4 — Huấn luyện và đánh giá model riêng
 
 - Thu thập và gán nhãn dữ liệu giao thông Việt Nam.
 - Fine-tune model từ dataset riêng.

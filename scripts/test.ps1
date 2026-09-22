@@ -213,12 +213,12 @@ function Assert-SourceManagementContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.2.9") { throw "VERSION phải là 0.2.9, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0007_release_hygiene.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0007_release_hygiene.py." }
+  if ($version -ne "0.3.0") { throw "VERSION phải là 0.3.0, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0008_smart_gate_v2.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0008_smart_gate_v2.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0007_release_hygiene"' -or $migrationText -notmatch "value='0.2.9'") {
-    throw "Migration 0007_release_hygiene không đúng contract V0.2.9."
+  if ($migrationText -notmatch 'revision = "0008_smart_gate_v2"' -or $migrationText -notmatch "value='0.3.0'") {
+    throw "Migration 0008_smart_gate_v2 không đúng contract V0.3.0."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
@@ -239,6 +239,23 @@ Assert-ReleaseFallbackContract
 Assert-TechnologyVersionsContract
 Assert-SourceManagementContract
 Assert-VersionConsistencyContract
+
+Write-Host "`n[Traffic AI] Smart Gate 2.0 / interactive counting-line contract" -ForegroundColor Cyan
+$countingText = Get-Content (Join-Path $root "ai-service\app\counting.py") -Raw -Encoding UTF8
+$classText = Get-Content (Join-Path $root "ai-service\app\classification.py") -Raw -Encoding UTF8
+$frontendText = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+$trackerText = Get-Content (Join-Path $root "ai-service\app\bytetrack_traffic.yaml") -Raw -Encoding UTF8
+$smartRoutesText = Get-Content (Join-Path $root "backend\app\api\routes.py") -Raw -Encoding UTF8
+if ($countingText -notmatch 'dead_band_ratio' -or $countingText -notmatch 'counted_directions' -or $countingText -notmatch 'total_crossings') {
+  throw "Smart Gate 2.0 thiếu dead-band hoặc đếm hai chiều."
+}
+if ($classText -notmatch 'TrackLabelSmoother' -or $frontendText -notmatch 'CountingLineEditor' -or $frontendText -notmatch 'Dừng AI để chỉnh vạch') {
+  throw "Thiếu ổn định nhãn theo Track ID hoặc trình chỉnh vạch trực tiếp/khóa khi AI chạy."
+}
+if ($trackerText -notmatch 'track_buffer: 75' -or $smartRoutesText -notmatch 'preview.jpg') {
+  throw "Thiếu ByteTrack traffic profile hoặc endpoint preview để đặt vạch."
+}
+Write-Host "[OK] Smart Gate 2.0 / interactive counting-line contract" -ForegroundColor Green
 
 Write-Host "`n[Traffic AI] AI counting/persistence contract" -ForegroundColor Cyan
 $workerText = Get-Content (Join-Path $root "ai-service\app\worker.py") -Raw -Encoding UTF8

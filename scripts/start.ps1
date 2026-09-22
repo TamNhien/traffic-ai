@@ -84,7 +84,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host ""
-Write-Host "[OK] Traffic AI V0.2.9 đã khởi động." -ForegroundColor Green
+Write-Host "[OK] Traffic AI V0.3.0 đã khởi động." -ForegroundColor Green
 Write-Host "Dashboard : https://traffic-ai.test:8443"
 Write-Host "API Docs  : https://traffic-ai.test:8444/docs"
 Write-Host "PostgreSQL: 127.0.0.1:5445 / traffic_ai_db"

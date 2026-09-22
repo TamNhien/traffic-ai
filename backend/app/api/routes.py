@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 import httpx
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
 from pydantic import BaseModel
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
@@ -161,6 +161,23 @@ def camera_source_status(camera_id: int, probe: bool = Query(default=False), db:
         return response.json()
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Không kiểm tra được nguồn camera/video: {exc}") from exc
+
+
+@router.get("/cameras/{camera_id}/preview.jpg")
+def camera_preview(camera_id: int, db: Session = Depends(get_db)) -> Response:
+    camera = db.get(Camera, camera_id)
+    if camera is None:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    try:
+        response = httpx.post(
+            f"{settings.ai_service_url}/sources/preview",
+            json={"source_type": camera.source_type.value, "source_url": camera.source_url},
+            timeout=12.0,
+        )
+        response.raise_for_status()
+        return Response(content=response.content, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Không lấy được ảnh xem trước: {exc}") from exc
 
 
 @router.get("/events", response_model=list[VehicleEventRead])
@@ -338,9 +355,13 @@ def internal_event(payload: VehicleEventCreate, x_ai_token: str | None = Header(
     # double-count a vehicle.
     existing = None
     if payload.session_id is not None and payload.tracking_id is not None:
+        # One ByteTrack ID may legitimately cross the gate once in each direction
+        # (two-way traffic / turn-around). Network retries for the same crossing
+        # must remain idempotent, so direction is part of the key.
         existing = db.scalar(select(VehicleEvent).where(
             VehicleEvent.session_id == payload.session_id,
             VehicleEvent.tracking_id == payload.tracking_id,
+            VehicleEvent.direction == payload.direction,
         ).order_by(VehicleEvent.id.desc()))
     if existing is not None:
         return existing

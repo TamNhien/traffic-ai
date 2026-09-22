@@ -6,14 +6,14 @@ import platform
 import time
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.runtime import registry
 from app.schemas import PipelineStart, SourceValidationRequest
-from app.sources import inspect_source, list_video_sources
+from app.sources import inspect_source, list_video_sources, read_source_preview
 
-APP_VERSION = '0.2.9'
+APP_VERSION = '0.3.0'
 app = FastAPI(title='Traffic AI Service', version=APP_VERSION)
 SNAPSHOT_DIR = Path(os.getenv('SNAPSHOT_DIR', '/tmp/traffic-ai-snapshots'))
 SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
@@ -42,9 +42,14 @@ def health() -> dict:
         'status': 'ready',
         'service': 'ai-service',
         'version': APP_VERSION,
-        'pipeline': 'yolo-bytetrack-line-crossing',
+        'pipeline': 'yolo26-bytetrack-smart-gate-v2',
         'model': os.getenv('AI_MODEL_NAME', 'yolo26n.pt'),
         'device': os.getenv('AI_DEVICE', 'auto'),
+        'performance': {
+            'imgsz': int(os.getenv('AI_IMGSZ', '960')),
+            'process_max_width': int(os.getenv('AI_PROCESS_MAX_WIDTH', '1280')),
+            'heavy_refine': os.getenv('AI_HEAVY_REFINE', '1'),
+        },
         'gpu': gpu,
         'active_pipelines': len([p for p in registry.list() if p['status'] in {'starting', 'running'}]),
         'runtime': {
@@ -67,6 +72,15 @@ def video_sources() -> list[dict]:
 @app.post('/sources/validate')
 def validate_source(payload: SourceValidationRequest, probe: bool = Query(default=False)) -> dict:
     return inspect_source(payload.source_type, payload.source_url, probe=probe)
+
+
+@app.post('/sources/preview')
+def source_preview(payload: SourceValidationRequest) -> Response:
+    try:
+        jpeg = read_source_preview(payload.source_type, payload.source_url)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return Response(content=jpeg, media_type='image/jpeg', headers={'Cache-Control': 'no-store'})
 
 
 @app.get('/pipelines')

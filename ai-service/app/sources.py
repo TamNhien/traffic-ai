@@ -122,3 +122,42 @@ def inspect_source(source_type: str, source_url: str, *, probe: bool = False) ->
         return {'valid': True, 'source_type': 'webcam', 'source_url': str(index), 'message': 'Chỉ số webcam hợp lệ.'}
 
     return {'valid': False, 'source_type': source_type, 'source_url': source_url, 'message': f'Loại nguồn không hỗ trợ: {source_type}.'}
+
+
+def read_source_preview(source_type: str, source_url: str, *, max_width: int = 1280, jpeg_quality: int = 82) -> bytes:
+    """Read one representative frame without starting the AI pipeline."""
+    import cv2
+
+    source_type = (source_type or '').strip().lower()
+    source_url = (source_url or '').strip()
+    if source_type == 'video':
+        path = _safe_video_path(source_url)
+        if not path.exists() or not path.is_file():
+            raise ValueError(f'Không tìm thấy video: {source_url}')
+        source: str | int = str(path)
+    elif source_type == 'webcam':
+        source = int(source_url)
+    else:
+        source = source_url
+
+    cap = cv2.VideoCapture(source)
+    try:
+        if not cap.isOpened():
+            raise ValueError(f'Không mở được nguồn: {source_url}')
+        if source_type == 'video':
+            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+            if frame_count > 10:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, max(0, int(frame_count * 0.12)))
+        ok, frame = cap.read()
+        if not ok or frame is None:
+            raise ValueError('Không đọc được frame xem trước.')
+        h, w = frame.shape[:2]
+        if max_width > 0 and w > max_width:
+            scale = max_width / float(w)
+            frame = cv2.resize(frame, (max_width, max(2, int(round(h * scale)))), interpolation=cv2.INTER_AREA)
+        ok, encoded = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality])
+        if not ok:
+            raise ValueError('Không mã hóa được ảnh xem trước.')
+        return encoded.tobytes()
+    finally:
+        cap.release()
