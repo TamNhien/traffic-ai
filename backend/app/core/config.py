@@ -2,6 +2,7 @@ from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy import URL
+from sqlalchemy.engine import make_url
 
 
 class Settings(BaseSettings):
@@ -13,11 +14,15 @@ class Settings(BaseSettings):
     postgres_host: str = "postgres"
     postgres_port: int = 5432
     ai_service_url: str = "http://ai-service:8001"
+    ai_shared_token: str = "TrafficAI-Local-2026"
+    database_url_override: str | None = None
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     @property
     def database_url(self) -> URL:
+        if self.database_url_override:
+            return make_url(self.database_url_override)
         return URL.create(
             drivername="postgresql+psycopg",
             username=self.postgres_user,

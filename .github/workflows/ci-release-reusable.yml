@@ -21,22 +21,18 @@ jobs:
       - name: Test backend
         working-directory: backend
         env:
-          POSTGRES_DB: traffic_ai_db
-          POSTGRES_USER: traffic_admin
-          POSTGRES_PASSWORD: ci-only-password
-          POSTGRES_HOST: 127.0.0.1
-          POSTGRES_PORT: '5432'
+          DATABASE_URL_OVERRIDE: sqlite+pysqlite:///:memory:
           AI_SERVICE_URL: http://127.0.0.1:8001
           PYTHONPATH: .
         run: |
-          pip install -r requirements-dev.txt
+          pip install -r requirements-test.txt
           python -m compileall -q app tests
           python -m pytest -q
 
       - name: Test AI service
         working-directory: ai-service
         run: |
-          pip install -r requirements-dev.txt
+          pip install -r requirements-test.txt
           python -m compileall -q app tests
           PYTHONPATH=. python -m pytest -q
 
@@ -54,5 +50,5 @@ jobs:
       - name: Validate Docker Compose
         run: |
           cp .env.example .env
-          docker compose config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.gpu.yml config --quiet
           docker compose build backend ai-service frontend
