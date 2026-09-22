@@ -1,0 +1,32 @@
+from datetime import datetime
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from app.models.all_models import Direction, VehicleType
+
+
+class VehicleEventCreate(BaseModel):
+    camera_id: int
+    session_id: int | None = None
+    model_id: int | None = None
+    tracking_id: int | None = None
+    vehicle_type: VehicleType
+    direction: Direction = Direction.unknown
+    confidence: float = Field(ge=0.0, le=1.0)
+    detected_at: datetime | None = None
+    snapshot_path: str | None = None
+
+
+class VehicleEventRead(BaseModel):
+    id: int
+    camera_id: int
+    session_id: int | None
+    model_id: int | None
+    tracking_id: int | None
+    vehicle_type: VehicleType
+    direction: Direction
+    confidence: float
+    detected_at: datetime
+    snapshot_path: str | None
+
+    model_config = ConfigDict(from_attributes=True)
