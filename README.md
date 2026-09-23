@@ -1,10 +1,67 @@
-# Traffic AI V0.5.10 — Node 26.10 + GitHub Actions CI Fix 🚗⚙️
+# Traffic AI V0.5.11 — Road Zone Counting + Frame Browser 🚗🛣️
+
+> **V0.5.11:** thêm vùng đa giác **Lòng đường** 4 điểm kéo trực tiếp trên ảnh. Một phương tiện chỉ tăng IN/OUT khi quỹ đạo cắt đúng đoạn vạch vàng **và** vùng nhỏ quanh điểm cắt nằm trong vùng xanh Lòng đường. Xe trên lề/vỉa hè có thể vẫn được nhận diện để quan sát nhưng không được đếm. Annotation Studio bỏ `<select size>` cũ và dùng Frame Browser dạng card cuộn dễ đọc.
+
+## Cấu hình sau khi cập nhật
+
+1. Bấm **Dừng AI**.
+2. Mở **ROAD ZONE + COUNTING LINE**.
+3. Kéo 4 chấm xanh để vùng **LÒNG ĐƯỜNG** chỉ phủ phần xe chạy, loại lề/vỉa hè ra ngoài.
+4. Đặt vạch vàng trong vùng xanh và vuông góc hướng xe chạy.
+5. Bấm **Lưu vạch + vùng lòng đường**.
+6. Chạy AI. Telemetry `loại ngoài lòng đường` sẽ tăng khi quỹ đạo cắt vạch nhưng bị Road Zone loại.
+
+```text
+Xe trên lề ───────→   ngoài vùng xanh   → KHÔNG ĐẾM
+
+        ┌──────────── LÒNG ĐƯỜNG ────────────┐
+Xe     │                 ↓                    │
+chạy   │          ====== VẠCH ======          │
+đường  │                 ↓                    │
+        └──────────────────────────────────────┘
+                         → ĐẾM IN/OUT
+```
+
+## Phát hành
+
+Sau khi chạy ổn vẫn chỉ một lệnh:
+
+```powershell
+.\scripts\publish.ps1
+```
+
+```text
+→ test → build → push GitHub → tag v0.5.11 → GitHub Actions → Release
+```
+
+---
+
+# Traffic AI V0.5.10-R1 — Dataset Studio UI Visibility Hotfix 🚗🧰
 
 
+
+
+> **V0.5.10-R1 hotfix:** sửa Dataset Studio khi nằm trong cột hẹp trên màn hình desktop: `Ngưỡng thay đổi`, checkbox `Loại frame gần trùng` và nút `1. Tạo dataset · Trích frame thông minh` không còn tràn ra ngoài panel. Layout giờ phản ứng theo **chiều rộng panel** bằng CSS container query, không dựa riêng vào chiều rộng toàn viewport. Runtime/database vẫn là **0.5.10 / 0024_ci_node_v0510**.
 
 > **V0.5.10:** nâng Node.js frontend từ **26.9.0 → 26.10.0**, nâng GitHub Actions lên `actions/checkout@v7`, `actions/setup-python@v7`, `actions/setup-node@v7` để không còn action runtime Node.js 20, và sửa lỗi GitHub runner không có quyền ghi `/data` bằng `runner.temp`. Clean Retrain + Smart Review của V0.5.9 được giữ nguyên.
 
 > **V0.5.9-R1 hotfix:** sửa `scripts/test.ps1` để contract Dataset & Fine-tune Studio kiểm tra handler thật `startTraining` / `activateTraining` thay vì phụ thuộc nguyên văn nút `Bắt đầu fine-tune RTX 3060`. Runtime, database schema và migration vẫn là **0.5.9 / 0023_clean_retrain_v059**.
+
+
+## V0.5.10-R1 sửa giao diện tạo dataset
+
+Ở V0.5.10, JSX đã có đủ `min_change_ratio`, `smart_dedupe` và `createDataset`, nhưng CSS dùng media query theo chiều rộng toàn cửa sổ. Khi Dashboard desktop rộng nhưng Dataset Studio chỉ nằm trong một cột hẹp, các control thứ 4–6 bị tràn sang bên phải nên người dùng chỉ thấy Tên dataset / Mỗi N frame / Tối đa ảnh.
+
+R1 bố trí lại để ở panel hẹp luôn thấy đủ:
+
+```text
+Tên dataset
+Mỗi N frame        | Tối đa ảnh
+Ngưỡng thay đổi    | ☑ Loại frame gần trùng
+[ 1. Tạo dataset · Trích frame thông minh ]
+```
+
+`Ngưỡng thay đổi = 0.008` nghĩa là frame ứng viên phải có ít nhất khoảng **0,8% điểm ảnh đại diện thay đổi đủ rõ** so với frame đã giữ gần nhất thì mới được giữ lại. Giá trị thấp giữ nhiều ảnh hơn; giá trị cao lọc mạnh hơn. Khuyến nghị bắt đầu ở `0.008`.
 
 ## V0.5.10 sửa lỗi publish trên GitHub Actions
 

@@ -300,18 +300,18 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.10") { throw "VERSION phải là 0.5.10, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0024_ci_node_v0510.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0024_ci_node_v0510.py." }
+  if ($version -ne "0.5.11") { throw "VERSION phải là 0.5.11, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0025_road_zone_v0511.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0025_road_zone_v0511.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0024_ci_node_v0510"' -or $migrationText -notmatch 'down_revision = "0023_clean_retrain_v059"' -or $migrationText -notmatch "value='0.5.10'") {
-    throw "Migration 0024_ci_node_v0510 không đúng contract V0.5.10."
+  if ($migrationText -notmatch 'revision = "0025_road_zone_v0511"' -or $migrationText -notmatch 'down_revision = "0024_ci_node_v0510"' -or $migrationText -notmatch "value='0.5.11'") {
+    throw "Migration 0025_road_zone_v0511 không đúng contract V0.5.11."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
 
 function Assert-AlembicRevisionSafetyContract {
-  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.10" -ForegroundColor Cyan
+  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.11" -ForegroundColor Cyan
   $versionsDir = Join-Path $root "backend\alembic\versions"
   $bad = @()
   Get-ChildItem $versionsDir -Filter "*.py" | ForEach-Object {
@@ -335,7 +335,7 @@ function Assert-AlembicRevisionSafetyContract {
   if ($v17 -notmatch 'revision = "0017_ai_test_dep_v053"') {
     throw "Migration V0.5.3 chưa dùng revision ID rút gọn an toàn."
   }
-  Write-Host "[OK] Alembic revision-length safety V0.5.10" -ForegroundColor Green
+  Write-Host "[OK] Alembic revision-length safety V0.5.11" -ForegroundColor Green
 }
 
 
@@ -517,6 +517,23 @@ function Assert-CleanRetrainV059Contract {
 }
 
 
+
+function Assert-DatasetControlsVisibilityV0510R1Contract {
+  Write-Host "`n[Traffic AI] Dataset controls visibility V0.5.10-R1" -ForegroundColor Cyan
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  $styles = Get-Content (Join-Path $root "frontend\src\styles.css") -Raw -Encoding UTF8
+  if ($frontend -notmatch 'Ngưỡng thay đổi' -or $frontend -notmatch 'Loại frame gần trùng' -or $frontend -notmatch 'dataset-create-button' -or $frontend -notmatch 'Tạo dataset · Trích frame thông minh') {
+    throw "Frontend thiếu control tạo dataset / lọc frame thông minh."
+  }
+  if ($frontend -notmatch 'datasetForm\.min_change_ratio' -or $frontend -notmatch 'datasetForm\.smart_dedupe' -or $frontend -notmatch 'onClick=\{createDataset\}') {
+    throw "Frontend Dataset Studio chưa nối control vào createDataset."
+  }
+  if ($styles -notmatch 'container-type:inline-size' -or $styles -notmatch '\.dataset-form \.dataset-create-button\{grid-column:1/-1' -or $styles -notmatch '@container') {
+    throw "CSS Dataset Studio chưa chống tràn control theo chiều rộng panel."
+  }
+  Write-Host "[OK] Dataset controls visibility V0.5.10-R1" -ForegroundColor Green
+}
+
 function Invoke-Step([string]$Title, [scriptblock]$Action) {
   Write-Host "`n[Traffic AI] $Title" -ForegroundColor Cyan
   & $Action
@@ -546,6 +563,18 @@ Assert-AnnotationStudioContract
 Assert-AnnotationUxClarityContract
 Assert-StrictGateV058Contract
 Assert-CleanRetrainV059Contract
+Assert-DatasetControlsVisibilityV0510R1Contract
+
+Write-Host "`n[Traffic AI] Road Zone + Frame Browser V0.5.11" -ForegroundColor Cyan
+$frontendV511 = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+$cssV511 = Get-Content (Join-Path $root "frontend\src\styles.css") -Raw -Encoding UTF8
+$countingV511 = Get-Content (Join-Path $root "ai-service\app\counting.py") -Raw -Encoding UTF8
+$cameraSchemaV511 = Get-Content (Join-Path $root "backend\app\schemas\camera.py") -Raw -Encoding UTF8
+if ($frontendV511 -notmatch 'LÒNG ĐƯỜNG' -or $frontendV511 -notmatch 'road-zone-handle' -or $frontendV511 -notmatch 'annotation-frame-list') { throw "Frontend thiếu Road Zone editor hoặc Frame Browser V0.5.11." }
+if ($cssV511 -notmatch '\.annotation-frame-item' -or $cssV511 -notmatch '\.road-zone-editor') { throw "CSS thiếu Frame Browser/Road Zone V0.5.11." }
+if ($countingV511 -notmatch 'class RoadZone' -or $countingV511 -notmatch 'rejected_outside_road') { throw "AI counting thiếu Road Zone rejection." }
+if ($cameraSchemaV511 -notmatch 'road_x1' -or $cameraSchemaV511 -notmatch 'road_y4') { throw "Backend camera schema thiếu Road Zone." }
+Write-Host "[OK] Road Zone + Frame Browser V0.5.11" -ForegroundColor Green
 
 Write-Host "`n[Traffic AI] Realtime Gate 4.0 / accuracy + non-blocking runtime contract" -ForegroundColor Cyan
 $countingText = Get-Content (Join-Path $root "ai-service\app\counting.py") -Raw -Encoding UTF8

@@ -31,6 +31,7 @@ class PipelineState:
     delivery_failures: int = 0
     stitch_recoveries: int = 0
     rescued_crossings: int = 0
+    rejected_outside_road: int = 0
     stream_frames_encoded: int = 0
     stream_frames_dropped: int = 0
     frame_policy: str = "all-frames"

@@ -11,7 +11,7 @@ import httpx2 as httpx
 
 from app.async_tasks import EventDispatcher, LatestFrameEncoder
 from app.classification import TrackLabelSmoother, VehicleClassPolicy
-from app.counting import CountingLine, LineCrossingCounter
+from app.counting import CountingLine, LineCrossingCounter, RoadZone
 from app.gate_roi import gate_roi_for_line
 from app.schemas import PipelineStart
 from app.tracking import TrackContinuityResolver, motion_leading_anchor
@@ -154,6 +154,10 @@ class PipelineWorker(threading.Thread):
 
             counter = LineCrossingCounter(
                 CountingLine(self.payload.line_x1, self.payload.line_y1, self.payload.line_x2, self.payload.line_y2),
+                road_zone=RoadZone(
+                    self.payload.road_x1, self.payload.road_y1, self.payload.road_x2, self.payload.road_y2,
+                    self.payload.road_x3, self.payload.road_y3, self.payload.road_x4, self.payload.road_y4,
+                ),
                 segment_margin=float(os.getenv("AI_GATE_SEGMENT_MARGIN", "0.0")),
                 dead_band_ratio=float(os.getenv("AI_GATE_DEAD_BAND_RATIO", "0.006")),
                 rearm_distance_ratio=float(os.getenv("AI_GATE_REARM_DISTANCE_RATIO", "0.028")),
@@ -253,6 +257,7 @@ class PipelineWorker(threading.Thread):
                         stable_label, class_certainty, class_hits = self._labels.stable_label(track_id, current_label)
 
                         direction = counter.update(track_id, anchor, width, height, frame_index=frame_index)
+                        self.state.rejected_outside_road = counter.rejected_outside_road
                         display_label = self._class_policy.display_label(
                             current_label, stable_label, class_certainty, class_hits, confidence_f
                         )
@@ -300,6 +305,7 @@ class PipelineWorker(threading.Thread):
                             self.state.in_count = counter.in_count
                             self.state.out_count = counter.out_count
                             self.state.rescued_crossings = counter.rescued_crossings
+                            self.state.rejected_outside_road = counter.rejected_outside_road
                             pending_crossing_events.append((track_id, event_label, direction, event_confidence))
 
                 self.state.detected_tracks = len(self._seen_track_ids)
@@ -429,8 +435,17 @@ class PipelineWorker(threading.Thread):
         cv2.putText(frame, text, (x1, max(18, y1 - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (60, 220, 120), 2)
 
     def _draw_overlay(self, cv2, frame, counter: LineCrossingCounter) -> None:
+        import numpy as np
         h, w = frame.shape[:2]
         a, b = counter.line.denormalize(w, h)
+        if counter.road_zone is not None:
+            zone = np.array([[int(x), int(y)] for x, y in counter.road_zone.denormalize(w, h)], dtype=np.int32)
+            overlay = frame.copy()
+            cv2.fillPoly(overlay, [zone], (55, 190, 110))
+            cv2.addWeighted(overlay, 0.12, frame, 0.88, 0, frame)
+            cv2.polylines(frame, [zone], True, (55, 220, 130), 2)
+            zx, zy = zone[0]
+            cv2.putText(frame, "ROAD ZONE", (int(zx) + 8, max(24, int(zy) + 24)), cv2.FONT_HERSHEY_SIMPLEX, 0.56, (55, 220, 130), 2)
         cv2.line(frame, (int(a[0]), int(a[1])), (int(b[0]), int(b[1])), (0, 200, 255), 3)
         cv2.circle(frame, (int(a[0]), int(a[1])), 7, (0, 200, 255), -1)
         cv2.circle(frame, (int(b[0]), int(b[1])), 7, (0, 200, 255), -1)
@@ -445,7 +460,7 @@ class PipelineWorker(threading.Thread):
         rt = f"x{self.state.realtime_factor:.2f}" if self.state.source_fps > 0 else "live"
         cv2.putText(
             frame,
-            f"TOTAL {self.state.total_count} | IN {counter.in_count} | OUT {counter.out_count} | FPS {self.state.fps:.1f} ({rt}) | {self.state.inference_ms:.0f}ms | RESCUE {counter.rescued_crossings}",
+            f"TOTAL {self.state.total_count} | IN {counter.in_count} | OUT {counter.out_count} | FPS {self.state.fps:.1f} ({rt}) | {self.state.inference_ms:.0f}ms | RESCUE {counter.rescued_crossings} | ROAD-REJECT {counter.rejected_outside_road}",
             (20, 32),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.62,

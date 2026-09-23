@@ -185,7 +185,11 @@ def update_camera(camera_id: int, payload: CameraUpdate, db: Session = Depends(g
         CountingSession.camera_id == camera_id,
         CountingSession.status == SessionStatus.running,
     ).limit(1))
-    runtime_keys = {"source_type", "source_url", "confidence_threshold", "line_x1", "line_y1", "line_x2", "line_y2"}
+    runtime_keys = {
+        "source_type", "source_url", "confidence_threshold",
+        "line_x1", "line_y1", "line_x2", "line_y2",
+        "road_x1", "road_y1", "road_x2", "road_y2", "road_x3", "road_y3", "road_x4", "road_y4",
+    }
     if running and runtime_keys.intersection(changes):
         raise HTTPException(status_code=409, detail="Hãy dừng AI trước khi đổi nguồn hoặc vùng đếm.")
 
@@ -371,6 +375,10 @@ def start_camera(camera_id: int, db: Session = Depends(get_db)) -> dict:
         "confidence_threshold": camera.confidence_threshold,
         "line_x1": camera.line_x1, "line_y1": camera.line_y1,
         "line_x2": camera.line_x2, "line_y2": camera.line_y2,
+        "road_x1": camera.road_x1, "road_y1": camera.road_y1,
+        "road_x2": camera.road_x2, "road_y2": camera.road_y2,
+        "road_x3": camera.road_x3, "road_y3": camera.road_y3,
+        "road_x4": camera.road_x4, "road_y4": camera.road_y4,
     }
     try:
         response = httpx.post(f"{settings.ai_service_url}/pipelines/start", json=payload, timeout=10.0)

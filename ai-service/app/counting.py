@@ -18,6 +18,64 @@ class CountingLine:
         return (self.x1 * width, self.y1 * height), (self.x2 * width, self.y2 * height)
 
 
+@dataclass(slots=True)
+class RoadZone:
+    """Normalized clockwise quadrilateral containing only drivable roadway."""
+
+    x1: float = 0.20
+    y1: float = 0.16
+    x2: float = 0.80
+    y2: float = 0.16
+    x3: float = 0.96
+    y3: float = 0.98
+    x4: float = 0.04
+    y4: float = 0.98
+
+    def denormalize(self, width: int, height: int) -> list[Point]:
+        return [
+            (self.x1 * width, self.y1 * height),
+            (self.x2 * width, self.y2 * height),
+            (self.x3 * width, self.y3 * height),
+            (self.x4 * width, self.y4 * height),
+        ]
+
+    def contains(self, point: Point, width: int, height: int) -> bool:
+        return point_in_polygon(point, self.denormalize(width, height))
+
+
+def _point_on_segment(point: Point, a: Point, b: Point, eps: float = 1e-6) -> bool:
+    ax, ay = a
+    bx, by = b
+    px, py = point
+    cross = abs((px - ax) * (by - ay) - (py - ay) * (bx - ax))
+    if cross > eps * max(1.0, hypot(bx - ax, by - ay)):
+        return False
+    return min(ax, bx) - eps <= px <= max(ax, bx) + eps and min(ay, by) - eps <= py <= max(ay, by) + eps
+
+
+def point_in_polygon(point: Point, polygon: list[Point]) -> bool:
+    """Boundary-inclusive ray casting for the editable road polygon."""
+    if len(polygon) < 3:
+        return False
+    x, y = point
+    inside = False
+    j = len(polygon) - 1
+    for i in range(len(polygon)):
+        a, b = polygon[j], polygon[i]
+        if _point_on_segment(point, a, b):
+            return True
+        xi, yi = b
+        xj, yj = a
+        if (yi > y) != (yj > y):
+            denom = yj - yi
+            if abs(denom) > 1e-12:
+                x_at_y = (xj - xi) * (y - yi) / denom + xi
+                if x < x_at_y:
+                    inside = not inside
+        j = i
+    return inside
+
+
 def signed_side(point: Point, a: Point, b: Point) -> float:
     return (b[0] - a[0]) * (point[1] - a[1]) - (b[1] - a[1]) * (point[0] - a[0])
 
@@ -99,6 +157,7 @@ class LineCrossingCounter:
     def __init__(
         self,
         line: CountingLine,
+        road_zone: RoadZone | None = None,
         segment_margin: float = 0.0,
         dead_band_ratio: float = 0.006,
         rearm_distance_ratio: float = 0.028,
@@ -107,6 +166,7 @@ class LineCrossingCounter:
         min_crossing_motion_ratio: float = 0.004,
     ) -> None:
         self.line = line
+        self.road_zone = road_zone
         self.segment_margin = max(0.0, float(segment_margin))
         self.dead_band_ratio = max(0.0, float(dead_band_ratio))
         self.rearm_distance_ratio = max(self.dead_band_ratio, float(rearm_distance_ratio))
@@ -118,6 +178,7 @@ class LineCrossingCounter:
         self.out_count = 0
         self.rescued_crossings = 0
         self.rejected_outside_segment = 0
+        self.rejected_outside_road = 0
 
     def update(
         self,
@@ -176,6 +237,22 @@ class LineCrossingCounter:
         if crossing is None:
             self.rejected_outside_segment += 1
             return None
+
+        if self.road_zone is not None:
+            move_x_zone = anchor[0] - previous.point[0]
+            move_y_zone = anchor[1] - previous.point[1]
+            move_len_zone = max(hypot(move_x_zone, move_y_zone), 1e-6)
+            ux, uy = move_x_zone / move_len_zone, move_y_zone / move_len_zone
+            zone_probe = max(3.0, min(frame_width, frame_height) * 0.01)
+            before = (crossing[0] - ux * zone_probe, crossing[1] - uy * zone_probe)
+            after = (crossing[0] + ux * zone_probe, crossing[1] + uy * zone_probe)
+            if not (
+                self.road_zone.contains(crossing, frame_width, frame_height)
+                and self.road_zone.contains(before, frame_width, frame_height)
+                and self.road_zone.contains(after, frame_width, frame_height)
+            ):
+                self.rejected_outside_road += 1
+                return None
 
         move_x = anchor[0] - previous.point[0]
         move_y = anchor[1] - previous.point[1]

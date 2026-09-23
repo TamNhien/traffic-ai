@@ -1,4 +1,4 @@
-from app.counting import CountingLine, LineCrossingCounter
+from app.counting import CountingLine, LineCrossingCounter, RoadZone
 
 
 def test_line_crossing_in_is_counted_once() -> None:
@@ -103,3 +103,28 @@ def test_multiple_tracks_crossing_same_frame_are_all_counted() -> None:
     for track_id, x in ((201, 25), (202, 50), (203, 75)):
         assert counter.update(track_id, (x, 80), 100, 100, 2) == "in"
     assert counter.in_count == 3
+
+
+def test_sidewalk_crossing_is_rejected_by_road_zone() -> None:
+    zone = RoadZone(0.20, 0.0, 0.80, 0.0, 0.80, 1.0, 0.20, 1.0)
+    counter = LineCrossingCounter(CountingLine(0.0, 0.5, 1.0, 0.5), road_zone=zone)
+    assert counter.update(301, (8, 20), 100, 100, 1) is None
+    assert counter.update(301, (8, 80), 100, 100, 2) is None
+    assert counter.total_crossings == 0
+    assert counter.rejected_outside_road == 1
+
+
+def test_roadway_crossing_inside_road_zone_is_counted() -> None:
+    zone = RoadZone(0.20, 0.0, 0.80, 0.0, 0.80, 1.0, 0.20, 1.0)
+    counter = LineCrossingCounter(CountingLine(0.0, 0.5, 1.0, 0.5), road_zone=zone)
+    assert counter.update(302, (50, 20), 100, 100, 1) is None
+    assert counter.update(302, (50, 80), 100, 100, 2) == "in"
+    assert counter.in_count == 1
+
+
+def test_fast_crossing_still_counts_when_road_zone_is_valid() -> None:
+    zone = RoadZone(0.15, 0.0, 0.85, 0.0, 0.85, 1.0, 0.15, 1.0)
+    counter = LineCrossingCounter(CountingLine(0.1, 0.5, 0.9, 0.5), road_zone=zone, history_gap_frames=45)
+    assert counter.update(303, (50, 8), 100, 100, 2) is None
+    assert counter.update(303, (52, 92), 100, 100, 22) == "in"
+    assert counter.rescued_crossings == 1

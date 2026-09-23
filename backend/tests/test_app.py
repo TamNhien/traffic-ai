@@ -20,7 +20,7 @@ def test_root_metadata() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["name"] == "Traffic AI"
-    assert payload["version"] == "0.5.10"
+    assert payload["version"] == "0.5.11"
     assert payload["docs"] == "/docs"
     assert payload["health"] == "/api/health"
 
@@ -30,6 +30,8 @@ def test_camera_pipeline_defaults() -> None:
     assert camera.confidence_threshold == 0.12
     assert camera.line_y1 == 0.5
     assert camera.line_y2 == 0.5
+    assert camera.road_x1 == 0.20
+    assert camera.road_x3 == 0.96
 
 
 def test_backend_health_does_not_depend_on_ai(monkeypatch) -> None:
