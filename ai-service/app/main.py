@@ -10,11 +10,12 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.runtime import registry
-from app.schemas import DatasetAutoLabelRequest, DatasetExtractRequest, DatasetPrepareRequest, PipelineStart, SourceValidationRequest, TrainingStartRequest
+from app.schemas import AnnotationSaveRequest, DatasetAutoLabelRequest, DatasetExtractRequest, DatasetPrepareRequest, PipelineStart, SourceValidationRequest, TrainingStartRequest
 from app.sources import inspect_source, list_video_sources, read_source_preview, resolve_video_path
 from app.training import auto_label, dataset_stats, extract_frames, prepare_dataset, training_registry
+from app.annotation import get_annotation, get_annotation_image, list_annotations, save_annotation
 
-APP_VERSION = '0.5.5'
+APP_VERSION = '0.5.8'
 app = FastAPI(title='Traffic AI Service', version=APP_VERSION)
 SNAPSHOT_DIR = Path(os.getenv('SNAPSHOT_DIR', '/tmp/traffic-ai-snapshots'))
 SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
@@ -43,7 +44,7 @@ def health() -> dict:
         'status': 'ready',
         'service': 'ai-service',
         'version': APP_VERSION,
-        'pipeline': 'yolo26s-bytetrack-smooth-gate-v4.1',
+        'pipeline': 'yolo26s-bytetrack-strict-gate-v5.8',
         'model': os.getenv('AI_MODEL_NAME', 'yolo26s.pt'),
         'device': os.getenv('AI_DEVICE', 'auto'),
         'performance': {
@@ -54,7 +55,9 @@ def health() -> dict:
             'refine_model': os.getenv('AI_REFINE_MODEL_NAME', 'yolo26m.pt'),
             'track_stitch_max_gap': int(os.getenv('AI_STITCH_MAX_GAP', '30')),
             'gate_roi': os.getenv('AI_GATE_ROI', '1'),
-            'gate_roi_margin': float(os.getenv('AI_GATE_ROI_MARGIN', '0.22')),
+            'gate_roi_margin': float(os.getenv('AI_GATE_ROI_MARGIN', '0.16')),
+            'gate_segment_margin': float(os.getenv('AI_GATE_SEGMENT_MARGIN', '0.0')),
+            'gate_history_gap': int(os.getenv('AI_GATE_HISTORY_GAP', '45')),
             'async_event_writer': True,
             'async_stream_encoder': True,
             'native_video_playback': os.getenv('AI_NATIVE_VIDEO_PREVIEW', '1'),
@@ -154,6 +157,45 @@ def dataset_statistics(slug: str) -> dict:
         return dataset_stats(slug)
     except Exception as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get('/datasets/{slug}/annotations')
+def dataset_annotations(slug: str, offset: int = Query(default=0, ge=0), limit: int = Query(default=200, ge=1, le=1000)) -> dict:
+    try:
+        return list_annotations(slug, offset=offset, limit=limit)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get('/datasets/{slug}/annotations/{image_name}')
+def dataset_annotation(slug: str, image_name: str) -> dict:
+    try:
+        return get_annotation(slug, image_name)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail='Không tìm thấy ảnh annotation.') from exc
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get('/datasets/{slug}/images/{image_name}')
+def dataset_annotation_image(slug: str, image_name: str) -> FileResponse:
+    try:
+        path = get_annotation_image(slug, image_name)
+        return FileResponse(path, headers={'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff'})
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail='Không tìm thấy ảnh annotation.') from exc
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.put('/datasets/{slug}/annotations/{image_name}')
+def dataset_annotation_save(slug: str, image_name: str, payload: AnnotationSaveRequest) -> dict:
+    try:
+        return save_annotation(slug, image_name, [box.model_dump() for box in payload.boxes], payload.reviewed, payload.difficult)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail='Không tìm thấy ảnh annotation.') from exc
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.post('/training/start', status_code=201)

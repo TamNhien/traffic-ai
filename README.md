@@ -1,6 +1,8 @@
-# Traffic AI V0.5.5 — best.pt Activation Reliability & UI Spacing
+# Traffic AI V0.5.8-R1 — Strict Gate + Fast Crossing (Test Contract Hotfix)
 
 **Đồ án môn Trí tuệ nhân tạo:** Nghiên cứu và xây dựng hệ thống phát hiện, phân loại, theo dõi và đếm phương tiện giao thông qua camera.
+
+> **R1 là hotfix cho `scripts/test.ps1`, không đổi runtime/schema.** Phiên bản ứng dụng, Docker image contract và Alembic vẫn là `0.5.8` / `0022_strict_gate_v058`. Hotfix thay assertion Annotation Studio từ việc phụ thuộc literal trình bày `1–5` sang kiểm tra trực tiếp hotkey handler `/^[1-5]$/.test(event.key)` và đủ hướng dẫn `1 Xe máy` ... `5 Xe tải`.
 
 > Thư mục làm việc mặc định:
 >
@@ -8,62 +10,41 @@
 > D:\LienThongDH\DoAn\traffic-ai
 > ```
 
-## 1. Mục tiêu V0.5.5
+## 1. Mục tiêu V0.5.8
 
-> **Hotfix V0.5.5:** sửa lỗi Backend không khởi động sau khi toàn bộ test đã PASS do Alembic cố ghi revision ID `0017_ai_test_dependency_isolation_v053` dài 38 ký tự vào cột `alembic_version.version_num` mặc định chỉ `VARCHAR(32)`. V0.5.5 rút gọn revision V0.5.3 thành `0017_ai_test_dep_v053`, thêm bước self-heal trước migration để nới cột lên `VARCHAR(128)`, và thêm contract kiểm tra tất cả revision ID không vượt quá 32 ký tự.
+V0.5.8 tập trung trực tiếp vào độ tin cậy khi **đếm xe qua vạch**:
 
-> V0.5.3 vẫn giữ nguyên fix lazy import OpenCV/PyYAML cho unit test AI Service; V0.5.5 chỉ harden chuỗi migration/startup, không xóa dữ liệu camera, đếm xe, dataset hay training run.
+- **không đếm xe trên lề / ngoài hai đầu vạch**: crossing chỉ hợp lệ khi quỹ đạo cắt đúng đoạn vạch hữu hạn đang nhìn thấy; mặc định `AI_GATE_SEGMENT_MARGIN=0.0`;
+- **bắt xe chạy nhanh tốt hơn**: lịch sử crossing tăng lên 45 frame, ByteTrack hạ ngưỡng tạo track và ROI chỉ tập trung quanh vùng vạch;
+- **nhiều xe qua vạch cùng lúc**: mỗi track được xét độc lập, một frame có thể ghi nhiều crossing; snapshot chỉ ghi một lần cho cả crossing frame để giảm I/O;
+- **giảm nhầm xe máy thành xe đạp**: nhãn `bicycle` cần bằng chứng thời gian mạnh, còn trường hợp mơ hồ được giữ là `motorcycle`; refiner được giới hạn để không làm tụt realtime.
+- **khôi phục blocker Backend trong source V0.5.7**: bổ sung lại `backend/app/models/all_models.py` và `backend/app/models/__init__.py` theo đúng schema Alembic hiện có; source mới không còn lỗi import model khi Backend khởi động.
 
-V0.5.0 chuyển dự án từ giai đoạn chỉ tối ưu **pretrained COCO + runtime** sang giai đoạn **huấn luyện model riêng cho cảnh giao thông Việt Nam**. Đây là bước cần thiết để giảm các nhầm lẫn như:
+> **Kích hoạt `best.pt` không phải train.** Fine-tune đã kết thúc trước đó và tạo ra `best.pt`. Khi kích hoạt, model này chỉ được chọn làm model **inference** cho các phiên `Chạy AI` tiếp theo. Chạy AI sẽ phát hiện/theo dõi/đếm bằng `best.pt`, không tự huấn luyện tiếp và không tự thay đổi trọng số. Muốn train tiếp phải tạo/chỉnh dataset rồi bấm fine-tune một training run mới.
 
-- xe máy ↔ xe đạp;
-- ô tô ↔ xe tải nhẹ;
-- xe tải ↔ xe buýt;
-- xe nhỏ ở xa;
-- xe bị che khuất hoặc đi qua vùng nắng/bóng cây;
-- cùng một loại xe nhưng hình dáng khác dữ liệu COCO.
-
-Không có hệ thống camera + AI thực tế nào có thể cam kết **100% chính xác trong mọi tình huống**. V0.5.0 bổ sung quy trình đo lường để biết model đạt bao nhiêu thay vì suy đoán.
-
-Pipeline phát hiện/đếm V0.4.1 vẫn được giữ nguyên:
+Luồng inference V0.5.8:
 
 ```text
-MP4 / RTSP
-    ↓
-YOLO26s
-    ↓
-ByteTrack + Track Continuity
-    ↓
-Realtime Gate Engine 4.0
-    ↓
-IN / OUT
-    ↓
-PostgreSQL 18
+Video / Camera
+      ↓
+Compact Gate ROI
+      ↓
+YOLO26 / best.pt
+      ↓
+ByteTrack nhạy hơn với xe nhanh
+      ↓
+Track continuity + trajectory history
+      ↓
+STRICT FINITE LINE CROSSING
+      ↓
+Chỉ khi quỹ đạo cắt đúng đoạn vạch
+      ↓
+Policy phân loại xe máy / xe đạp
+      ↓
+IN / OUT + PostgreSQL
 ```
 
-V0.5.0 bổ sung pipeline huấn luyện:
-
-```text
-Video thật từ camera
-      ↓
-Trích frame
-      ↓
-Auto-label bằng YOLO26
-      ↓
-Rà soát/sửa nhãn YOLO
-      ↓
-Train / Val / Test
-      ↓
-Fine-tune YOLO26s hoặc YOLO26m
-      ↓
-Precision / Recall / mAP50 / mAP50-95
-      ↓
-best.pt
-      ↓
-Kích hoạt model tùy biến
-      ↓
-Các phiên đếm mới dùng best.pt
-```
+Annotation Studio của V0.5.6–V0.5.7 vẫn được giữ nguyên để sửa ground truth và fine-tune lại `best.pt` khi cần.
 
 ## 2. Công nghệ chính
 
@@ -113,7 +94,7 @@ Docker mount vào AI Service:
 
 Các thư mục runtime được `.gitignore` để không đẩy hàng GB ảnh/weights lên GitHub.
 
-## 5. Database V0.5.5
+## 5. Database V0.5.8
 
 Chuỗi migration hiện tại:
 
@@ -127,14 +108,22 @@ Chuỗi migration hiện tại:
 0017_ai_test_dep_v053
         ↓
 0018_alembic_guard_v054
+        ↓
+0019_activation_ui_v055
+        ↓
+0020_annotation_studio_v056
+        ↓
+0021_annotation_ux_v057
+        ↓
+0022_strict_gate_v058
 ```
 
-Migration `0014` tạo các bảng Dataset/Fine-tune; `0015` dọn UI/test harness; `0016` đồng bộ contract Smooth Playback; `0017` đánh dấu hotfix tách dependency unit-test/runtime; `0018` nới `alembic_version.version_num` lên `VARCHAR(128)` trên PostgreSQL và đánh dấu V0.5.5. Các migration hotfix không xóa dữ liệu nghiệp vụ.
+Migration `0014` tạo các bảng Dataset/Fine-tune; `0015` dọn UI/test harness; `0016` đồng bộ contract Smooth Playback; `0017` tách dependency unit-test/runtime; `0018` nới `alembic_version.version_num`; `0019` ổn định kích hoạt `best.pt`; `0020` thêm trạng thái review cho Annotation Studio; `0021` đồng bộ `schema_version` cho UX Annotation V0.5.7; `0022` bật Strict Gate V0.5.8, hạ confidence mặc định từ `0.18` xuống `0.12` và không xóa dữ liệu nghiệp vụ.
 
 `schema_version`:
 
 ```text
-0.5.4
+0.5.8
 ```
 
 Hai bảng mới:
@@ -433,7 +422,7 @@ Test local
 → PASS
 → Commit
 → Push main
-→ Tag v0.5.5
+→ Tag v0.5.8
 → GitHub Actions
 → ZIP / TAR.GZ / SHA256
 → GitHub Release
@@ -447,22 +436,14 @@ https://github.com/TamNhien/traffic-ai
 
 ## 13. Lộ trình tiếp theo
 
-### V0.5.5 — Ground-truth Benchmark
+### V0.5.9 — Ground-truth Benchmark
 
-- nhập số xe đúng theo từng loại và IN/OUT;
 - benchmark cùng một clip với pretrained và `best.pt`;
+- nhập/đối chiếu ground-truth theo từng loại và IN/OUT;
 - confusion matrix;
 - Precision/Recall/F1;
 - counting MAE/MAPE/accuracy;
 - báo cáo so sánh tự động.
-
-### V0.5.6 — Annotation Studio tích hợp
-
-- vẽ/sửa bounding box trực tiếp trên Dashboard;
-- hotkey đổi class;
-- review pseudo-label;
-- đánh dấu ảnh khó;
-- kiểm tra class imbalance.
 
 ### V0.6.0 — Multi-camera / RTSP Production
 
@@ -572,7 +553,7 @@ Tách native video playback khỏi AI Overlay/MJPEG; thêm progress, realtime fa
 - Revision thực tế của migration V0.5.3 được rút gọn thành `0017_ai_test_dep_v053` để tương thích giới hạn 32 ký tự của Alembic mặc định.
 - Cập nhật `schema_version = 0.5.3`.
 
-### V0.5.5 — Alembic Revision Guard
+### V0.5.4 — Alembic Revision Guard
 - Sửa lỗi `StringDataRightTruncation: value too long for type character varying(32)` khi Backend chạy `alembic upgrade head`.
 - Rút gọn revision ID V0.5.3 từ 38 ký tự xuống `0017_ai_test_dep_v053`.
 - Thêm `0018_alembic_guard_v054`, cập nhật `schema_version = 0.5.4`.
@@ -588,3 +569,41 @@ Tách native video playback khỏi AI Overlay/MJPEG; thêm progress, realtime fa
 - Training run đang được dùng hiển thị badge **✓ ĐANG DÙNG best.pt**.
 - Tách khoảng cách giữa khối Dataset/Fine-tune và Lịch sử PostgreSQL/Phiên chạy để các panel không dính sát nhau.
 - Thêm migration `0019_activation_ui_v055`, `schema_version = 0.5.5`.
+
+### V0.5.6 — Annotation Studio tích hợp
+
+- Vẽ bounding box trực tiếp trên Dashboard.
+- Sửa class bằng dropdown hoặc hotkey `1..5`; xóa box bằng `Delete`.
+- Đánh dấu ảnh đã rà soát và ảnh khó trong `annotation_review.json`.
+- Hiển thị class balance và hệ số mất cân bằng.
+- Thêm API đọc/ghi annotation an toàn qua Backend → AI Service.
+- PostgreSQL lưu `reviewed_images` và `difficult_images` cho từng dataset.
+- Dataset bị sửa nhãn quay lại trạng thái `labeled`; phải chia lại train/val/test trước khi fine-tune.
+- Thêm migration `0020_annotation_studio_v056`, `schema_version = 0.5.6`.
+
+### V0.5.7 — Annotation Studio UX rõ ràng
+
+- Nhãn trên ảnh đổi từ dạng dễ nhầm `1. Xe đạp` thành `Box 1 · Xe đạp`.
+- Dropdown class chỉ hiển thị tên phương tiện, không dùng số thứ tự gây nhầm với số box.
+- Khi nhấp bounding box, dropdown tự đồng bộ đúng class hiện tại của box.
+- Hiển thị trạng thái rõ ràng `Đang chọn: Box N · Class` hoặc `Chưa chọn box`.
+- Phân biệt `Đổi class box đã chọn` và `Class cho box mới`.
+- Click vùng trống của ảnh bỏ chọn box và chuyển về chế độ tạo box mới.
+- Thêm regression contract `Annotation UX clarity V0.5.7`.
+- Thêm migration `0021_annotation_ux_v057`, `schema_version = 0.5.7`.
+
+
+
+### V0.5.8 — Strict Gate + Fast Crossing
+
+- Chỉ đếm khi quỹ đạo track cắt đúng **đoạn vạch hữu hạn**; mặc định không nới ra ngoài hai đầu vạch.
+- Compact Gate ROI giảm vùng inference thừa quanh lề đường, tăng khả năng theo kịp video.
+- ByteTrack: `track_high_thresh=0.10`, `new_track_thresh=0.10`, `track_low_thresh=0.015`, `match_thresh=0.84`.
+- Confidence mặc định cho camera mới và camera còn giá trị chuẩn cũ giảm từ `0.18` xuống `0.12`.
+- Crossing history tăng mặc định lên 45 frame để cứu xe nhanh / mất detect ngắn.
+- Một frame có thể đếm nhiều track độc lập; snapshot ghi một lần cho cả crossing frame.
+- Refiner giới hạn `1` lần/frame và bỏ qua khi video lag trên `0.35s`.
+- Nhãn xe đạp hiển thị/lưu chỉ khi có bằng chứng đủ mạnh; trường hợp mơ hồ hai bánh ưu tiên `motorcycle`.
+- `start.ps1` tự nâng các tuning cũ trong `.env` sang V0.5.8 nhưng vẫn giữ các thiết lập tùy chỉnh khác của người dùng.
+- Khôi phục đầy đủ `backend/app/models/all_models.py` bị thiếu trong gói V0.5.7 gốc, đồng bộ ORM với chuỗi migration hiện có.
+- Thêm migration `0022_strict_gate_v058`, `schema_version = 0.5.8`.

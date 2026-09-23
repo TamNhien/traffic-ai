@@ -41,6 +41,12 @@ class TrainingCreate(BaseModel):
     device: str = "auto"
 
 
+class AnnotationUpdate(BaseModel):
+    boxes: list[dict] = []
+    reviewed: bool = True
+    difficult: bool = False
+
+
 def _dataset_slug(name: str) -> str:
     value = re.sub(r"[^a-z0-9_-]+", "-", name.strip().lower())
     value = re.sub(r"-+", "-", value).strip("-_")
@@ -56,6 +62,7 @@ def _dataset_payload(row: DatasetRecord) -> dict:
         "sample_every_n_frames": row.sample_every_n_frames, "image_count": row.image_count,
         "labeled_images": row.labeled_images, "box_count": row.box_count,
         "train_count": row.train_count, "val_count": row.val_count, "test_count": row.test_count,
+        "reviewed_images": row.reviewed_images, "difficult_images": row.difficult_images,
         "classes": json.loads(row.classes_json or "[]"), "created_at": row.created_at, "updated_at": row.updated_at,
     }
 
@@ -494,7 +501,7 @@ def create_dataset(payload: DatasetCreate, db: Session = Depends(get_db)) -> dic
     if camera is None:
         raise HTTPException(status_code=404, detail="Camera not found")
     if camera.source_type.value != "video":
-        raise HTTPException(status_code=422, detail="V0.5.5 trích dataset tự động từ video local trước; RTSP sẽ bổ sung ở bản sau.")
+        raise HTTPException(status_code=422, detail="V0.5.8 trích dataset tự động từ video local trước; RTSP sẽ bổ sung ở bản sau.")
     base_slug = _dataset_slug(payload.name)
     slug = base_slug
     suffix = 1
@@ -540,6 +547,60 @@ def dataset_stats_route(dataset_id: int, db: Session = Depends(get_db)) -> dict:
     response = httpx.get(f"{settings.ai_service_url}/datasets/{row.slug}/stats", timeout=30.0)
     if not response.is_success: raise HTTPException(status_code=502, detail=response.text)
     return response.json()
+
+
+@router.get("/datasets/{dataset_id}/annotations")
+def list_dataset_annotations(dataset_id: int, offset: int = Query(default=0, ge=0), limit: int = Query(default=200, ge=1, le=1000), db: Session = Depends(get_db)) -> dict:
+    row = db.get(DatasetRecord, dataset_id)
+    if row is None: raise HTTPException(status_code=404, detail="Dataset not found")
+    response = httpx.get(f"{settings.ai_service_url}/datasets/{row.slug}/annotations", params={"offset": offset, "limit": limit}, timeout=30.0)
+    if not response.is_success: raise HTTPException(status_code=502, detail=response.text)
+    info = response.json()
+    row.reviewed_images = int(info.get("reviewed_images", row.reviewed_images or 0))
+    row.difficult_images = int(info.get("difficult_images", row.difficult_images or 0))
+    db.commit()
+    return info
+
+
+@router.get("/datasets/{dataset_id}/annotations/{image_name}")
+def get_dataset_annotation(dataset_id: int, image_name: str, db: Session = Depends(get_db)) -> dict:
+    row = db.get(DatasetRecord, dataset_id)
+    if row is None: raise HTTPException(status_code=404, detail="Dataset not found")
+    response = httpx.get(f"{settings.ai_service_url}/datasets/{row.slug}/annotations/{image_name}", timeout=30.0)
+    if not response.is_success: raise HTTPException(status_code=response.status_code if response.status_code < 500 else 502, detail=response.text)
+    return response.json()
+
+
+@router.get("/datasets/{dataset_id}/images/{image_name}")
+def get_dataset_image(dataset_id: int, image_name: str, db: Session = Depends(get_db)) -> Response:
+    row = db.get(DatasetRecord, dataset_id)
+    if row is None: raise HTTPException(status_code=404, detail="Dataset not found")
+    response = httpx.get(f"{settings.ai_service_url}/datasets/{row.slug}/images/{image_name}", timeout=30.0)
+    if not response.is_success: raise HTTPException(status_code=response.status_code if response.status_code < 500 else 502, detail=response.text)
+    return Response(content=response.content, media_type=response.headers.get("content-type", "image/jpeg"), headers={"Cache-Control": "no-store"})
+
+
+@router.put("/datasets/{dataset_id}/annotations/{image_name}")
+def save_dataset_annotation(dataset_id: int, image_name: str, payload: AnnotationUpdate, db: Session = Depends(get_db)) -> dict:
+    row = db.get(DatasetRecord, dataset_id)
+    if row is None: raise HTTPException(status_code=404, detail="Dataset not found")
+    response = httpx.put(f"{settings.ai_service_url}/datasets/{row.slug}/annotations/{image_name}", json=payload.model_dump(), timeout=30.0)
+    if not response.is_success: raise HTTPException(status_code=response.status_code if response.status_code < 500 else 502, detail=response.text)
+    info = response.json()
+    row.reviewed_images = int(info.get("reviewed_images", row.reviewed_images or 0))
+    row.difficult_images = int(info.get("difficult_images", row.difficult_images or 0))
+    row.status = "labeled" if row.reviewed_images > 0 else row.status
+    # Recompute the dataset counters after manual label edits.
+    try:
+        stats_response = httpx.get(f"{settings.ai_service_url}/datasets/{row.slug}/stats", timeout=15.0)
+        if stats_response.is_success:
+            stats = stats_response.json()
+            row.labeled_images = int(stats.get("labeled_images", row.labeled_images))
+            row.box_count = int(stats.get("box_count", row.box_count))
+    except Exception:
+        pass
+    db.commit(); db.refresh(row)
+    return {**info, "dataset": _dataset_payload(row)}
 
 
 @router.post("/datasets/{dataset_id}/prepare")

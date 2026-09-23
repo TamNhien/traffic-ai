@@ -35,16 +35,44 @@ class TrackLabelSmoother:
 class VehicleClassPolicy:
     """Conservative traffic-class policy for Vietnamese road scenes.
 
-    The COCO detector can flip motorcycle/bicycle and bus/truck on overhead
-    footage. Bicycle is therefore accepted only with repeated strong evidence;
-    ambiguous two-wheelers fall back to motorcycle instead of creating false
-    bicycle counts. Heavy vehicles prefer a preloaded crossing refiner when the
-    temporal vote is uncertain.
+    Motorcycle/bicycle confusion is asymmetric in typical road footage: a false
+    bicycle label is much more common than a real bicycle having many repeated,
+    high-confidence bicycle observations. V0.5.8 therefore requires strong
+    temporal evidence before showing or persisting `bicycle`; ambiguous two-wheel
+    tracks remain `motorcycle`. A very strong primary-model vote can confirm a
+    bicycle even when the optional crossing refiner is skipped to protect FPS.
     """
 
-    def __init__(self, bicycle_certainty: float = 0.76, bicycle_hits: int = 4) -> None:
+    def __init__(
+        self,
+        bicycle_certainty: float = 0.80,
+        bicycle_hits: int = 5,
+        strong_bicycle_certainty: float = 0.90,
+        strong_bicycle_hits: int = 8,
+    ) -> None:
         self.bicycle_certainty = float(bicycle_certainty)
         self.bicycle_hits = int(bicycle_hits)
+        self.strong_bicycle_certainty = float(strong_bicycle_certainty)
+        self.strong_bicycle_hits = int(strong_bicycle_hits)
+
+    def display_label(
+        self,
+        current_label: str,
+        stable_label: str,
+        certainty: float,
+        hits: int,
+        current_confidence: float,
+    ) -> str:
+        if stable_label in {"bicycle", "motorcycle"} or current_label in {"bicycle", "motorcycle"}:
+            bicycle_ok = (
+                stable_label == "bicycle"
+                and current_label == "bicycle"
+                and hits >= self.bicycle_hits
+                and certainty >= self.bicycle_certainty
+                and current_confidence >= 0.28
+            )
+            return "bicycle" if bicycle_ok else "motorcycle"
+        return stable_label if hits >= 2 else current_label
 
     def final_label(
         self,
@@ -58,16 +86,20 @@ class VehicleClassPolicy:
         base_conf = float(certainty)
 
         if stable_label in {"bicycle", "motorcycle"} or current_label in {"bicycle", "motorcycle"}:
-            bicycle_ok = (
+            strong_primary_bicycle = (
+                stable_label == "bicycle"
+                and hits >= self.strong_bicycle_hits
+                and certainty >= self.strong_bicycle_certainty
+            )
+            refined_bicycle = (
                 stable_label == "bicycle"
                 and hits >= self.bicycle_hits
                 and certainty >= self.bicycle_certainty
                 and refined_label == "bicycle"
                 and refined_conf >= 0.52
             )
-            if bicycle_ok:
+            if strong_primary_bicycle or refined_bicycle:
                 return "bicycle", max(base_conf, refined_conf)
-            # Strongly bias ambiguous powered two-wheel traffic to motorcycle.
             return "motorcycle", max(base_conf, refined_conf if refined_label == "motorcycle" else 0.0)
 
         if stable_label in {"car", "bus", "truck"} or current_label in {"car", "bus", "truck"}:

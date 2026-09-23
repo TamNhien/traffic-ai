@@ -1,27 +1,27 @@
 from __future__ import annotations
 
-import enum
 from datetime import datetime
+from enum import Enum
 
-from sqlalchemy import Boolean, DateTime, Enum, Float, ForeignKey, Integer, String, Text, UniqueConstraint, func
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy import Boolean, DateTime, Enum as SAEnum, Float, ForeignKey, Integer, String, Text, UniqueConstraint, func, text
+from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
 
 
-class CameraStatus(str, enum.Enum):
+class CameraStatus(str, Enum):
     active = "active"
     inactive = "inactive"
     error = "error"
 
 
-class SourceType(str, enum.Enum):
+class SourceType(str, Enum):
     rtsp = "rtsp"
     video = "video"
     webcam = "webcam"
 
 
-class VehicleType(str, enum.Enum):
+class VehicleType(str, Enum):
     motorcycle = "motorcycle"
     bicycle = "bicycle"
     car = "car"
@@ -30,28 +30,34 @@ class VehicleType(str, enum.Enum):
     other = "other"
 
 
-class Direction(str, enum.Enum):
+class Direction(str, Enum):
     in_ = "in"
     out = "out"
     unknown = "unknown"
 
 
-class SessionStatus(str, enum.Enum):
+class SessionStatus(str, Enum):
     running = "running"
     completed = "completed"
     stopped = "stopped"
     error = "error"
 
 
+def _enum(enum_cls: type[Enum], name: str) -> SAEnum:
+    # PostgreSQL enums created by migration 0001 store the enum *values*.
+    # Direction therefore stores "in", not the Python-safe member name "in_".
+    return SAEnum(enum_cls, name=name, values_callable=lambda cls: [item.value for item in cls])
+
+
 class User(Base):
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    username: Mapped[str] = mapped_column(String(80), unique=True, nullable=False, index=True)
+    username: Mapped[str] = mapped_column(String(80), nullable=False, unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     full_name: Mapped[str | None] = mapped_column(String(160))
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
 class Camera(Base):
@@ -59,26 +65,28 @@ class Camera(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(120), nullable=False)
-    code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
-    source_type: Mapped[SourceType] = mapped_column(Enum(SourceType, name="source_type", values_callable=lambda x: [e.value for e in x]), nullable=False)
+    code: Mapped[str] = mapped_column(String(50), nullable=False, unique=True, index=True)
+    source_type: Mapped[SourceType] = mapped_column(_enum(SourceType, "source_type"), nullable=False)
     source_url: Mapped[str] = mapped_column(Text, nullable=False)
     location: Mapped[str | None] = mapped_column(String(255))
     description: Mapped[str | None] = mapped_column(Text)
-    confidence_threshold: Mapped[float] = mapped_column(Float, default=0.18, nullable=False)
-    line_x1: Mapped[float] = mapped_column(Float, default=0.1, nullable=False)
-    line_y1: Mapped[float] = mapped_column(Float, default=0.5, nullable=False)
-    line_x2: Mapped[float] = mapped_column(Float, default=0.9, nullable=False)
-    line_y2: Mapped[float] = mapped_column(Float, default=0.5, nullable=False)
-    status: Mapped[CameraStatus] = mapped_column(Enum(CameraStatus, name="camera_status", values_callable=lambda x: [e.value for e in x]), default=CameraStatus.inactive, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
-
-    sessions: Mapped[list[CountingSession]] = relationship(back_populates="camera")
-    events: Mapped[list[VehicleEvent]] = relationship(back_populates="camera")
+    status: Mapped[CameraStatus] = mapped_column(
+        _enum(CameraStatus, "camera_status"), nullable=False, server_default="inactive"
+    )
+    confidence_threshold: Mapped[float] = mapped_column(Float, nullable=False, server_default="0.12")
+    line_x1: Mapped[float] = mapped_column(Float, nullable=False, server_default="0.1")
+    line_y1: Mapped[float] = mapped_column(Float, nullable=False, server_default="0.5")
+    line_x2: Mapped[float] = mapped_column(Float, nullable=False, server_default="0.9")
+    line_y2: Mapped[float] = mapped_column(Float, nullable=False, server_default="0.5")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
 
 
 class AIModel(Base):
     __tablename__ = "ai_models"
+    __table_args__ = (UniqueConstraint("name", "version", name="uq_ai_model_name_version"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(120), nullable=False)
@@ -90,13 +98,8 @@ class AIModel(Base):
     recall: Mapped[float | None] = mapped_column(Float)
     map50: Mapped[float | None] = mapped_column(Float)
     map50_95: Mapped[float | None] = mapped_column(Float)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-
-    sessions: Mapped[list[CountingSession]] = relationship(back_populates="model")
-    events: Mapped[list[VehicleEvent]] = relationship(back_populates="model")
-
-    __table_args__ = (UniqueConstraint("name", "version", name="uq_ai_model_name_version"),)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
 class CountingSession(Base):
@@ -105,16 +108,14 @@ class CountingSession(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     camera_id: Mapped[int] = mapped_column(ForeignKey("cameras.id", ondelete="CASCADE"), nullable=False, index=True)
     model_id: Mapped[int | None] = mapped_column(ForeignKey("ai_models.id", ondelete="SET NULL"), index=True)
-    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    status: Mapped[SessionStatus] = mapped_column(Enum(SessionStatus, name="session_status", values_callable=lambda x: [e.value for e in x]), default=SessionStatus.running, nullable=False)
-    total_vehicles: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    status: Mapped[SessionStatus] = mapped_column(
+        _enum(SessionStatus, "session_status"), nullable=False, server_default="running"
+    )
+    total_vehicles: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     average_fps: Mapped[float | None] = mapped_column(Float)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-
-    camera: Mapped[Camera] = relationship(back_populates="sessions")
-    model: Mapped[AIModel | None] = relationship(back_populates="sessions")
-    events: Mapped[list[VehicleEvent]] = relationship(back_populates="session")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
 class VehicleEvent(Base):
@@ -125,16 +126,16 @@ class VehicleEvent(Base):
     session_id: Mapped[int | None] = mapped_column(ForeignKey("counting_sessions.id", ondelete="SET NULL"), index=True)
     model_id: Mapped[int | None] = mapped_column(ForeignKey("ai_models.id", ondelete="SET NULL"), index=True)
     tracking_id: Mapped[int | None] = mapped_column(Integer, index=True)
-    vehicle_type: Mapped[VehicleType] = mapped_column(Enum(VehicleType, name="vehicle_type", values_callable=lambda x: [e.value for e in x]), nullable=False, index=True)
-    direction: Mapped[Direction] = mapped_column(Enum(Direction, name="vehicle_direction", values_callable=lambda x: [e.value for e in x]), default=Direction.unknown, nullable=False, index=True)
+    vehicle_type: Mapped[VehicleType] = mapped_column(_enum(VehicleType, "vehicle_type"), nullable=False, index=True)
+    direction: Mapped[Direction] = mapped_column(
+        _enum(Direction, "vehicle_direction"), nullable=False, server_default="unknown", index=True
+    )
     confidence: Mapped[float] = mapped_column(Float, nullable=False)
-    detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+    detected_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), index=True
+    )
     snapshot_path: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-
-    camera: Mapped[Camera] = relationship(back_populates="events")
-    session: Mapped[CountingSession | None] = relationship(back_populates="events")
-    model: Mapped[AIModel | None] = relationship(back_populates="events")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
 class VehicleCount(Base):
@@ -142,44 +143,61 @@ class VehicleCount(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     camera_id: Mapped[int] = mapped_column(ForeignKey("cameras.id", ondelete="CASCADE"), nullable=False, index=True)
-    vehicle_type: Mapped[VehicleType] = mapped_column(Enum(VehicleType, name="vehicle_count_type", values_callable=lambda x: [e.value for e in x]), nullable=False, index=True)
-    direction: Mapped[Direction] = mapped_column(Enum(Direction, name="vehicle_count_direction", values_callable=lambda x: [e.value for e in x]), nullable=False, index=True)
-    count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    vehicle_type: Mapped[VehicleType] = mapped_column(
+        _enum(VehicleType, "vehicle_count_type"), nullable=False, index=True
+    )
+    direction: Mapped[Direction] = mapped_column(
+        _enum(Direction, "vehicle_count_direction"), nullable=False, index=True
+    )
+    count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     period_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     period_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
 class SystemSetting(Base):
     __tablename__ = "system_settings"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    key: Mapped[str] = mapped_column(String(120), unique=True, nullable=False, index=True)
+    key: Mapped[str] = mapped_column(String(120), nullable=False, unique=True, index=True)
     value: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
 
 
 class DatasetRecord(Base):
     __tablename__ = "datasets"
+    __table_args__ = (UniqueConstraint("slug", name="uq_datasets_slug"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(160), nullable=False)
-    slug: Mapped[str] = mapped_column(String(80), unique=True, nullable=False, index=True)
-    source_camera_id: Mapped[int | None] = mapped_column(ForeignKey("cameras.id", ondelete="SET NULL"), index=True)
+    slug: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    source_camera_id: Mapped[int | None] = mapped_column(
+        ForeignKey("cameras.id", ondelete="SET NULL"), index=True
+    )
     source_url: Mapped[str | None] = mapped_column(Text)
     root_path: Mapped[str] = mapped_column(Text, nullable=False)
-    status: Mapped[str] = mapped_column(String(32), default="draft", nullable=False, index=True)
-    sample_every_n_frames: Mapped[int] = mapped_column(Integer, default=10, nullable=False)
-    image_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    labeled_images: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    box_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    train_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    val_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    test_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    classes_json: Mapped[str] = mapped_column(Text, default='["motorcycle","bicycle","car","bus","truck"]', nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, server_default="draft", index=True)
+    sample_every_n_frames: Mapped[int] = mapped_column(Integer, nullable=False, server_default="10")
+    image_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    labeled_images: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    box_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    train_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    val_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    test_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    reviewed_images: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    difficult_images: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    classes_json: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        server_default='["motorcycle","bicycle","car","bus","truck"]',
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
 
 
 class TrainingRun(Base):
@@ -187,14 +205,14 @@ class TrainingRun(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     dataset_id: Mapped[int] = mapped_column(ForeignKey("datasets.id", ondelete="CASCADE"), nullable=False, index=True)
-    base_model: Mapped[str] = mapped_column(String(160), default="yolo26s.pt", nullable=False)
-    status: Mapped[str] = mapped_column(String(32), default="queued", nullable=False, index=True)
-    epochs: Mapped[int] = mapped_column(Integer, default=80, nullable=False)
-    imgsz: Mapped[int] = mapped_column(Integer, default=640, nullable=False)
-    batch_size: Mapped[int] = mapped_column(Integer, default=8, nullable=False)
-    device: Mapped[str] = mapped_column(String(40), default="auto", nullable=False)
-    current_epoch: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    progress: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    base_model: Mapped[str] = mapped_column(String(160), nullable=False, server_default="yolo26s.pt")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, server_default="queued", index=True)
+    epochs: Mapped[int] = mapped_column(Integer, nullable=False, server_default="80")
+    imgsz: Mapped[int] = mapped_column(Integer, nullable=False, server_default="640")
+    batch_size: Mapped[int] = mapped_column(Integer, nullable=False, server_default="8")
+    device: Mapped[str] = mapped_column(String(40), nullable=False, server_default="auto")
+    current_epoch: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    progress: Mapped[float] = mapped_column(Float, nullable=False, server_default="0")
     precision: Mapped[float | None] = mapped_column(Float)
     recall: Mapped[float | None] = mapped_column(Float)
     map50: Mapped[float | None] = mapped_column(Float)
@@ -203,4 +221,4 @@ class TrainingRun(Base):
     last_error: Mapped[str | None] = mapped_column(Text)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())

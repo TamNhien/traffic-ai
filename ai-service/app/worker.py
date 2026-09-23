@@ -34,8 +34,10 @@ class PipelineWorker(threading.Thread):
         self._seen_track_ids: set[int] = set()
         self._labels = TrackLabelSmoother(history=int(os.getenv("AI_CLASS_HISTORY", "30")))
         self._class_policy = VehicleClassPolicy(
-            bicycle_certainty=float(os.getenv("AI_BICYCLE_CERTAINTY", "0.76")),
-            bicycle_hits=int(os.getenv("AI_BICYCLE_MIN_HITS", "4")),
+            bicycle_certainty=float(os.getenv("AI_BICYCLE_CERTAINTY", "0.80")),
+            bicycle_hits=int(os.getenv("AI_BICYCLE_MIN_HITS", "5")),
+            strong_bicycle_certainty=float(os.getenv("AI_BICYCLE_STRONG_CERTAINTY", "0.90")),
+            strong_bicycle_hits=int(os.getenv("AI_BICYCLE_STRONG_HITS", "8")),
         )
         self._refiner_model = None
         self._continuity = TrackContinuityResolver(
@@ -53,11 +55,14 @@ class PipelineWorker(threading.Thread):
         self.jpeg_every_n = max(1, int(os.getenv("AI_STREAM_EVERY_N", "2")))
         self.jpeg_max_width = int(os.getenv("AI_STREAM_MAX_WIDTH", "960"))
         self.gate_roi_enabled = os.getenv("AI_GATE_ROI", "1").strip().lower() not in {"0", "false", "no"}
-        self.gate_roi_margin = float(os.getenv("AI_GATE_ROI_MARGIN", "0.22"))
+        self.gate_roi_margin = float(os.getenv("AI_GATE_ROI_MARGIN", "0.16"))
         self.gate_roi_min_span = float(os.getenv("AI_GATE_ROI_MIN_SPAN", "0.52"))
+        self.gate_endpoint_margin = float(os.getenv("AI_GATE_ENDPOINT_MARGIN", "0.035"))
         self.refine_at_crossing = os.getenv("AI_REFINE_AT_CROSSING", "1").strip().lower() not in {"0", "false", "no"}
         self.refine_model_name = os.getenv("AI_REFINE_MODEL_NAME", "yolo26m.pt")
         self.refine_imgsz = int(os.getenv("AI_REFINE_IMGSZ", "640"))
+        self.refine_max_per_frame = max(0, int(os.getenv("AI_REFINE_MAX_PER_FRAME", "1")))
+        self.refine_max_lag = max(0.0, float(os.getenv("AI_REFINE_MAX_LAG", "0.35")))
         self.warmup = os.getenv("AI_WARMUP", "1").strip().lower() not in {"0", "false", "no"}
         self.video_pace = os.getenv("AI_VIDEO_PACE", "1").strip().lower() not in {"0", "false", "no"}
         self.iou = float(os.getenv("AI_IOU", "0.55"))
@@ -149,11 +154,12 @@ class PipelineWorker(threading.Thread):
 
             counter = LineCrossingCounter(
                 CountingLine(self.payload.line_x1, self.payload.line_y1, self.payload.line_x2, self.payload.line_y2),
-                segment_margin=0.07,
-                dead_band_ratio=0.006,
-                rearm_distance_ratio=0.028,
-                history_gap_frames=int(os.getenv("AI_GATE_HISTORY_GAP", "30")),
-                min_perpendicular_ratio=float(os.getenv("AI_GATE_MIN_NORMAL_RATIO", "0.12")),
+                segment_margin=float(os.getenv("AI_GATE_SEGMENT_MARGIN", "0.0")),
+                dead_band_ratio=float(os.getenv("AI_GATE_DEAD_BAND_RATIO", "0.006")),
+                rearm_distance_ratio=float(os.getenv("AI_GATE_REARM_DISTANCE_RATIO", "0.028")),
+                history_gap_frames=int(os.getenv("AI_GATE_HISTORY_GAP", "45")),
+                min_perpendicular_ratio=float(os.getenv("AI_GATE_MIN_NORMAL_RATIO", "0.10")),
+                min_crossing_motion_ratio=float(os.getenv("AI_GATE_MIN_MOTION_RATIO", "0.004")),
             )
 
             self._event_dispatcher.start()
@@ -184,6 +190,7 @@ class PipelineWorker(threading.Thread):
                     height,
                     margin_ratio=self.gate_roi_margin,
                     min_span_ratio=self.gate_roi_min_span,
+                    endpoint_margin_ratio=self.gate_endpoint_margin,
                 ) if self.gate_roi_enabled else None
                 infer_frame = roi.crop(frame) if roi is not None else frame
                 offset_x = roi.x1 if roi is not None else 0
@@ -208,6 +215,8 @@ class PipelineWorker(threading.Thread):
                 result = results[0]
 
                 crossing_this_frame = False
+                pending_crossing_events: list[tuple[int, str, str, float]] = []
+                refines_used_this_frame = 0
                 boxes = result.boxes
                 if boxes is not None and boxes.id is not None:
                     xyxy = boxes.xyxy.cpu().tolist()
@@ -244,7 +253,9 @@ class PipelineWorker(threading.Thread):
                         stable_label, class_certainty, class_hits = self._labels.stable_label(track_id, current_label)
 
                         direction = counter.update(track_id, anchor, width, height, frame_index=frame_index)
-                        display_label = stable_label if class_hits >= 2 else current_label
+                        display_label = self._class_policy.display_label(
+                            current_label, stable_label, class_certainty, class_hits, confidence_f
+                        )
                         self._draw_detection(
                             cv2,
                             frame,
@@ -260,12 +271,18 @@ class PipelineWorker(threading.Thread):
                         if direction:
                             crossing_this_frame = True
                             refined = None
-                            needs_refine = self.refine_at_crossing and (
+                            refine_budget_available = refines_used_this_frame < self.refine_max_per_frame
+                            lag_allows_refine = (
+                                self.payload.source_type != "video"
+                                or self.state.playback_lag_seconds <= self.refine_max_lag
+                            )
+                            needs_refine = self.refine_at_crossing and refine_budget_available and lag_allows_refine and (
                                 display_label in AMBIGUOUS_CLASSES
                                 and (display_label in {"bicycle", "motorcycle", "bus", "truck"} or class_certainty < 0.82 or class_hits < 4)
                             )
                             if needs_refine:
                                 refined = self._refine_crossing_label(frame, rect, device, use_half, refine_ids)
+                                refines_used_this_frame += 1
 
                             event_label, policy_conf = self._class_policy.final_label(
                                 current_label,
@@ -283,13 +300,16 @@ class PipelineWorker(threading.Thread):
                             self.state.in_count = counter.in_count
                             self.state.out_count = counter.out_count
                             self.state.rescued_crossings = counter.rescued_crossings
-                            snapshot = self._save_snapshot(cv2, frame, track_id)
-                            self._event_dispatcher.submit(
-                                self._event_payload(track_id, event_label, direction, event_confidence, snapshot)
-                            )
+                            pending_crossing_events.append((track_id, event_label, direction, event_confidence))
 
                 self.state.detected_tracks = len(self._seen_track_ids)
                 self._draw_overlay(cv2, frame, counter)
+                if pending_crossing_events:
+                    snapshot = self._save_crossing_snapshot(cv2, frame, frame_index)
+                    for event_track_id, event_label, event_direction, event_confidence in pending_crossing_events:
+                        self._event_dispatcher.submit(
+                            self._event_payload(event_track_id, event_label, event_direction, event_confidence, snapshot)
+                        )
                 self.state.processed_frames += 1
                 if crossing_this_frame or self.state.processed_frames % self.jpeg_every_n == 0:
                     self._jpeg_encoder.submit(frame)
@@ -435,12 +455,13 @@ class PipelineWorker(threading.Thread):
         if self.state.pending_events:
             cv2.putText(frame, f"DB QUEUE {self.state.pending_events}", (20, 62), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (0, 165, 255), 2)
 
-    def _save_snapshot(self, cv2, frame, track_id: int) -> str | None:
+    def _save_crossing_snapshot(self, cv2, frame, frame_index: int) -> str | None:
+        """Write one snapshot per crossing frame, even if many vehicles cross together."""
         try:
             folder = self.snapshot_root / f"camera_{self.payload.camera_id}"
             folder.mkdir(parents=True, exist_ok=True)
             stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-            path = folder / f"{stamp}_track_{track_id}.jpg"
+            path = folder / f"{stamp}_frame_{frame_index}.jpg"
             cv2.imwrite(str(path), frame, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
             return str(path.relative_to(self.snapshot_root)).replace("\\", "/")
         except Exception:

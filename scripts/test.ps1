@@ -262,18 +262,18 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.5") { throw "VERSION phải là 0.5.5, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0019_activation_ui_v055.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0019_activation_ui_v055.py." }
+  if ($version -ne "0.5.8") { throw "VERSION phải là 0.5.8, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0022_strict_gate_v058.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0022_strict_gate_v058.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0019_activation_ui_v055"' -or $migrationText -notmatch 'down_revision = "0018_alembic_guard_v054"' -or $migrationText -notmatch "value='0.5.5'") {
-    throw "Migration 0019_activation_ui_v055 không đúng contract V0.5.5."
+  if ($migrationText -notmatch 'revision = "0022_strict_gate_v058"' -or $migrationText -notmatch 'down_revision = "0021_annotation_ux_v057"' -or $migrationText -notmatch "value='0.5.8'") {
+    throw "Migration 0022_strict_gate_v058 không đúng contract V0.5.8."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
 
 function Assert-AlembicRevisionSafetyContract {
-  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.5" -ForegroundColor Cyan
+  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.8" -ForegroundColor Cyan
   $versionsDir = Join-Path $root "backend\alembic\versions"
   $bad = @()
   Get-ChildItem $versionsDir -Filter "*.py" | ForEach-Object {
@@ -297,7 +297,7 @@ function Assert-AlembicRevisionSafetyContract {
   if ($v17 -notmatch 'revision = "0017_ai_test_dep_v053"') {
     throw "Migration V0.5.3 chưa dùng revision ID rút gọn an toàn."
   }
-  Write-Host "[OK] Alembic revision-length safety V0.5.5" -ForegroundColor Green
+  Write-Host "[OK] Alembic revision-length safety V0.5.8" -ForegroundColor Green
 }
 
 
@@ -379,6 +379,73 @@ function Assert-ActivationUiContract {
   Write-Host "[OK] best.pt activation + panel separation V0.5.5" -ForegroundColor Green
 }
 
+function Assert-AnnotationStudioContract {
+  Write-Host "`n[Traffic AI] Annotation Studio V0.5.7 contract" -ForegroundColor Cyan
+  $annotation = Get-Content (Join-Path $root "ai-service\app\annotation.py") -Raw -Encoding UTF8
+  $aiMain = Get-Content (Join-Path $root "ai-service\app\main.py") -Raw -Encoding UTF8
+  $routes = Get-Content (Join-Path $root "backend\app\api\routes.py") -Raw -Encoding UTF8
+  $models = Get-Content (Join-Path $root "backend\app\models\all_models.py") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  $css = Get-Content (Join-Path $root "frontend\src\styles.css") -Raw -Encoding UTF8
+  if ($annotation -notmatch 'parse_yolo_label' -or $annotation -notmatch 'save_annotation' -or $annotation -notmatch 'difficult') { throw "AI Service thiếu annotation core." }
+  if ($aiMain -notmatch '/datasets/\{slug\}/annotations' -or $aiMain -notmatch 'dataset_annotation_save') { throw "AI Service thiếu Annotation API." }
+  if ($routes -notmatch '/datasets/\{dataset_id\}/annotations' -or $routes -notmatch 'save_dataset_annotation') { throw "Backend thiếu proxy Annotation Studio." }
+  if ($models -notmatch 'reviewed_images' -or $models -notmatch 'difficult_images') { throw "Dataset model thiếu trạng thái review/ảnh khó." }
+  $hasAnnotationHotkeyHandler = $frontend.Contains('/^[1-5]$/.test(event.key)')
+  $hasAnnotationHotkeyHelp = $frontend -match '1 Xe máy' -and $frontend -match '2 Xe đạp' -and $frontend -match '3 Ô tô' -and $frontend -match '4 Xe buýt' -and $frontend -match '5 Xe tải'
+  if ($frontend -notmatch 'ANNOTATION STUDIO' -or $frontend -notmatch 'Lưu nhãn' -or $frontend -notmatch 'Kéo chuột trên ảnh' -or -not $hasAnnotationHotkeyHandler -or -not $hasAnnotationHotkeyHelp) { throw "Frontend thiếu editor gán nhãn tích hợp hoặc hotkey class 1-5." }
+  if ($css -notmatch 'annotation-workspace' -or $css -notmatch 'annotation-box') { throw "Frontend thiếu CSS Annotation Studio." }
+  Write-Host "[OK] Annotation Studio V0.5.7 contract" -ForegroundColor Green
+}
+
+
+function Assert-AnnotationUxClarityContract {
+  Write-Host "`n[Traffic AI] Annotation UX clarity V0.5.7" -ForegroundColor Cyan
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  $css = Get-Content (Join-Path $root "frontend\src\styles.css") -Raw -Encoding UTF8
+  if ($frontend -notmatch 'Box \{index\+1\} ·' -or $frontend -notmatch 'Đang chọn: ' -or $frontend -notmatch 'Class cho box mới' -or $frontend -notmatch 'Đổi class box đã chọn') {
+    throw "Annotation Studio chưa phân biệt rõ số thứ tự box và class."
+  }
+  if ($frontend -match '\{id\+1\}\. \{name\}</option>' -or $frontend -match '\{index\+1\}\. \{annotationClasses') {
+    throw "Annotation Studio vẫn hiển thị số gây nhầm giữa box index và class."
+  }
+  if ($frontend -notmatch 'setNewClassId\(box\.class_id\)' -or $frontend -notmatch 'Box 1 · Xe đạp') {
+    throw "Click box chưa đồng bộ class hoặc thiếu giải thích Box N · Class."
+  }
+  if ($css -notmatch 'annotation-selection' -or $css -notmatch 'has-selection') {
+    throw "Thiếu trạng thái trực quan cho box đang chọn."
+  }
+  Write-Host "[OK] Annotation UX clarity V0.5.7" -ForegroundColor Green
+}
+
+function Assert-StrictGateV058Contract {
+  Write-Host "`n[Traffic AI] Strict Gate + fast crossing V0.5.8" -ForegroundColor Cyan
+  $counting = Get-Content (Join-Path $root "ai-service\app\counting.py") -Raw -Encoding UTF8
+  $worker = Get-Content (Join-Path $root "ai-service\app\worker.py") -Raw -Encoding UTF8
+  $roi = Get-Content (Join-Path $root "ai-service\app\gate_roi.py") -Raw -Encoding UTF8
+  $classify = Get-Content (Join-Path $root "ai-service\app\classification.py") -Raw -Encoding UTF8
+  $tracker = Get-Content (Join-Path $root "ai-service\app\bytetrack_traffic.yaml") -Raw -Encoding UTF8
+  $envText = Get-Content (Join-Path $root ".env.example") -Raw -Encoding UTF8
+  $startText = Get-Content (Join-Path $root "scripts\start.ps1") -Raw -Encoding UTF8
+  if ($counting -notmatch 'segment_crossing_point' -or $counting -notmatch 'rejected_outside_segment' -or $counting -notmatch 'segment_margin: float = 0.0') {
+    throw "V0.5.8 thiếu finite-line strict crossing contract."
+  }
+  if ($worker -notmatch 'AI_GATE_SEGMENT_MARGIN' -or $worker -notmatch 'AI_REFINE_MAX_PER_FRAME' -or $worker -notmatch 'pending_crossing_events') {
+    throw "V0.5.8 thiếu strict gate/runtime anti-lag contract."
+  }
+  if ($roi -notmatch 'endpoint_margin_ratio' -or $classify -notmatch 'display_label' -or $classify -notmatch 'strong_bicycle_certainty') {
+    throw "V0.5.8 thiếu compact ROI hoặc policy xe máy/xe đạp."
+  }
+  if ($tracker -notmatch 'track_high_thresh: 0.10' -or $tracker -notmatch 'new_track_thresh: 0.10' -or $envText -notmatch 'AI_GATE_ENDPOINT_MARGIN=0.035') {
+    throw "V0.5.8 thiếu tracker/ROI tuning cho xe nhanh."
+  }
+  if ($startText -notmatch 'Set-EnvDefaultUpgrade "AI_GATE_ROI_MARGIN" "0.22" "0.16"' -or $startText -notmatch 'Ensure-EnvSetting "AI_GATE_SEGMENT_MARGIN" "0.0"' -or $startText -notmatch 'Ensure-EnvSetting "AI_REFINE_MAX_PER_FRAME" "1"') {
+    throw "V0.5.8 thiếu nâng cấp .env runtime từ tuning cũ sang Strict Gate."
+  }
+  Write-Host "[OK] Strict Gate + fast crossing V0.5.8" -ForegroundColor Green
+}
+
+
 function Invoke-Step([string]$Title, [scriptblock]$Action) {
   Write-Host "`n[Traffic AI] $Title" -ForegroundColor Cyan
   & $Action
@@ -403,6 +470,9 @@ Assert-SmoothPlaybackContract
 Assert-DatasetTrainingContract
 Assert-AiTestDependencyIsolationContract
 Assert-ActivationUiContract
+Assert-AnnotationStudioContract
+Assert-AnnotationUxClarityContract
+Assert-StrictGateV058Contract
 
 Write-Host "`n[Traffic AI] Realtime Gate 4.0 / accuracy + non-blocking runtime contract" -ForegroundColor Cyan
 $countingText = Get-Content (Join-Path $root "ai-service\app\counting.py") -Raw -Encoding UTF8

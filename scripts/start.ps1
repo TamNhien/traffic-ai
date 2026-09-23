@@ -58,7 +58,7 @@ if (Test-Path $envPath) {
   }
 }
 
-# V0.5.2: giữ detector/classifier và Realtime Gate 4.0.
+# V0.5.8: giữ detector/classifier, nhưng nâng tuning cho Strict Gate + Fast Crossing.
 function Set-EnvDefaultUpgrade([string]$Key, [string]$OldValue, [string]$NewValue) {
   $text = Get-Content $envPath -Raw
   $pattern = "(?m)^" + [regex]::Escape($Key) + "=" + [regex]::Escape($OldValue) + "[ \t]*\r?$"
@@ -82,19 +82,33 @@ Set-EnvDefaultUpgrade "AI_CLASS_HISTORY" "24" "30"
 Set-EnvDefaultUpgrade "AI_STITCH_MAX_GAP" "18" "30"
 Set-EnvDefaultUpgrade "AI_STITCH_DISTANCE_RATIO" "0.085" "0.14"
 Set-EnvDefaultUpgrade "AI_REFINE_MODEL_NAME" "yolo26s.pt" "yolo26m.pt"
+Set-EnvDefaultUpgrade "AI_GATE_HISTORY_GAP" "30" "45"
+Set-EnvDefaultUpgrade "AI_GATE_MIN_NORMAL_RATIO" "0.12" "0.10"
+Set-EnvDefaultUpgrade "AI_GATE_ROI_MARGIN" "0.22" "0.16"
+Set-EnvDefaultUpgrade "AI_BICYCLE_CERTAINTY" "0.76" "0.80"
+Set-EnvDefaultUpgrade "AI_BICYCLE_MIN_HITS" "4" "5"
 Ensure-EnvSetting "AI_STREAM_EVERY_N" "2"
 Ensure-EnvSetting "AI_STREAM_MAX_WIDTH" "960"
 Ensure-EnvSetting "AI_IOU" "0.55"
-Ensure-EnvSetting "AI_GATE_HISTORY_GAP" "30"
-Ensure-EnvSetting "AI_GATE_MIN_NORMAL_RATIO" "0.12"
+Ensure-EnvSetting "AI_GATE_HISTORY_GAP" "45"
+Ensure-EnvSetting "AI_GATE_MIN_NORMAL_RATIO" "0.10"
+Ensure-EnvSetting "AI_GATE_SEGMENT_MARGIN" "0.0"
+Ensure-EnvSetting "AI_GATE_DEAD_BAND_RATIO" "0.006"
+Ensure-EnvSetting "AI_GATE_REARM_DISTANCE_RATIO" "0.028"
+Ensure-EnvSetting "AI_GATE_MIN_MOTION_RATIO" "0.004"
 Ensure-EnvSetting "AI_GATE_ROI" "1"
-Ensure-EnvSetting "AI_GATE_ROI_MARGIN" "0.22"
+Ensure-EnvSetting "AI_GATE_ROI_MARGIN" "0.16"
 Ensure-EnvSetting "AI_GATE_ROI_MIN_SPAN" "0.52"
+Ensure-EnvSetting "AI_GATE_ENDPOINT_MARGIN" "0.035"
 Ensure-EnvSetting "AI_REFINE_AT_CROSSING" "1"
 Ensure-EnvSetting "AI_REFINE_MODEL_NAME" "yolo26m.pt"
 Ensure-EnvSetting "AI_REFINE_IMGSZ" "640"
-Ensure-EnvSetting "AI_BICYCLE_CERTAINTY" "0.76"
-Ensure-EnvSetting "AI_BICYCLE_MIN_HITS" "4"
+Ensure-EnvSetting "AI_REFINE_MAX_PER_FRAME" "1"
+Ensure-EnvSetting "AI_REFINE_MAX_LAG" "0.35"
+Ensure-EnvSetting "AI_BICYCLE_CERTAINTY" "0.80"
+Ensure-EnvSetting "AI_BICYCLE_MIN_HITS" "5"
+Ensure-EnvSetting "AI_BICYCLE_STRONG_CERTAINTY" "0.90"
+Ensure-EnvSetting "AI_BICYCLE_STRONG_HITS" "8"
 Ensure-EnvSetting "AI_WARMUP" "1"
 
 # V0.2.8: bootstrap HTTPS/hosts tự động.
@@ -174,7 +188,7 @@ if (-not $dashboardOk -or -not $apiOk) {
 }
 
 Write-Host ""
-Write-Host "[OK] Traffic AI V0.5.5 đã khởi động." -ForegroundColor Green
+Write-Host "[OK] Traffic AI V0.5.8 đã khởi động." -ForegroundColor Green
 Write-Host "Dashboard : https://traffic-ai.test:8443"
 Write-Host "API Docs  : https://traffic-ai.test:8444/docs"
 Write-Host "PostgreSQL: 127.0.0.1:5445 / traffic_ai_db"

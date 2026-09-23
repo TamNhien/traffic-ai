@@ -29,16 +29,45 @@ def signed_distance(point: Point, a: Point, b: Point) -> float:
     return signed_side(point, a, b) / length
 
 
-def _orientation(a: Point, b: Point, c: Point) -> float:
-    return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+def _cross(v1: Point, v2: Point) -> float:
+    return v1[0] * v2[1] - v1[1] * v2[0]
+
+
+def segment_crossing_point(
+    p0: Point,
+    p1: Point,
+    a: Point,
+    b: Point,
+    segment_margin: float = 0.0,
+    eps: float = 1e-7,
+) -> Point | None:
+    """Return the finite-gate intersection for a trajectory segment.
+
+    `segment_margin` is expressed as a fraction of the visible counting-line
+    length. V0.5.8 uses zero margin by default, so a vehicle is never counted
+    merely because its trajectory crosses an imaginary extension beyond either
+    endpoint of the line.
+    """
+
+    r = (p1[0] - p0[0], p1[1] - p0[1])
+    s = (b[0] - a[0], b[1] - a[1])
+    denominator = _cross(r, s)
+    if abs(denominator) <= eps:
+        return None
+
+    q_minus_p = (a[0] - p0[0], a[1] - p0[1])
+    t = _cross(q_minus_p, s) / denominator
+    u = _cross(q_minus_p, r) / denominator
+    margin = max(0.0, float(segment_margin))
+    if t < -eps or t > 1.0 + eps:
+        return None
+    if u < -margin - eps or u > 1.0 + margin + eps:
+        return None
+    return (p0[0] + t * r[0], p0[1] + t * r[1])
 
 
 def segments_intersect(a: Point, b: Point, c: Point, d: Point, eps: float = 1e-6) -> bool:
-    o1 = _orientation(a, b, c)
-    o2 = _orientation(a, b, d)
-    o3 = _orientation(c, d, a)
-    o4 = _orientation(c, d, b)
-    return (o1 * o2 <= eps) and (o3 * o4 <= eps)
+    return segment_crossing_point(a, b, c, d, segment_margin=0.0, eps=eps) is not None
 
 
 @dataclass(slots=True)
@@ -51,32 +80,31 @@ class _GateSample:
 
 @dataclass(slots=True)
 class _TrackGateState:
-    history: deque[_GateSample] = field(default_factory=lambda: deque(maxlen=32))
+    history: deque[_GateSample] = field(default_factory=lambda: deque(maxlen=48))
     armed: bool = True
     counted_directions: set[str] = field(default_factory=set)
     last_count_frame: int = -10_000
 
 
 class LineCrossingCounter:
-    """Trajectory-based bidirectional virtual gate.
+    """Strict finite-line, trajectory-based bidirectional virtual gate.
 
-    Smart Gate 4.0 does not require the crossing to happen in two adjacent
-    frames. It keeps a bounded trajectory history and can confirm a finite-line
-    crossing across short detector/tracker gaps. A crossing is accepted only if
-    the trajectory really intersects the counting segment and contains enough
-    motion perpendicular to the gate, which suppresses vehicles travelling
-    parallel to the line or jittering on it.
+    The counter keeps a bounded trajectory history so fast vehicles can still be
+    counted when detector/tracker observations are missing for several frames.
+    A crossing is accepted only when the trajectory intersects the *visible*
+    counting segment, not an infinite line, and when enough motion is normal to
+    the gate. This suppresses roadside/sidewalk traffic and line-parallel jitter.
     """
 
     def __init__(
         self,
         line: CountingLine,
-        segment_margin: float = 0.08,
-        dead_band_ratio: float = 0.008,
-        rearm_distance_ratio: float = 0.030,
-        history_gap_frames: int = 30,
-        min_perpendicular_ratio: float = 0.12,
-        min_crossing_motion_ratio: float = 0.006,
+        segment_margin: float = 0.0,
+        dead_band_ratio: float = 0.006,
+        rearm_distance_ratio: float = 0.028,
+        history_gap_frames: int = 45,
+        min_perpendicular_ratio: float = 0.10,
+        min_crossing_motion_ratio: float = 0.004,
     ) -> None:
         self.line = line
         self.segment_margin = max(0.0, float(segment_margin))
@@ -89,6 +117,7 @@ class LineCrossingCounter:
         self.in_count = 0
         self.out_count = 0
         self.rescued_crossings = 0
+        self.rejected_outside_segment = 0
 
     def update(
         self,
@@ -104,31 +133,25 @@ class LineCrossingCounter:
 
         a, b = self.line.denormalize(frame_width, frame_height)
         distance = signed_distance(anchor, a, b)
-        dead_band = max(3.0, frame_height * self.dead_band_ratio)
-        rearm_distance = max(dead_band * 2.0, frame_height * self.rearm_distance_ratio)
+        scale = max(1.0, min(frame_width, frame_height))
+        dead_band = max(2.0, scale * self.dead_band_ratio)
+        rearm_distance = max(dead_band * 2.0, scale * self.rearm_distance_ratio)
         side = 0 if abs(distance) <= dead_band else (1 if distance > 0 else -1)
 
         state = self._tracks.setdefault(int(track_id), _TrackGateState())
         sample = _GateSample(int(frame_index), anchor, distance, side)
 
-        # After a valid crossing, the track must move away from the line before a
-        # reverse traversal is accepted. This avoids double-counts from box jitter.
         if not state.armed:
             state.history.append(sample)
             if abs(distance) >= rearm_distance:
                 state.armed = True
-                # Keep only recent samples after re-arming so an old point from the
-                # previous traversal cannot be paired with the next crossing.
-                state.history = deque(list(state.history)[-4:], maxlen=32)
+                state.history = deque(list(state.history)[-5:], maxlen=48)
             return None
 
         state.history.append(sample)
         if side == 0:
             return None
 
-        # Search backwards for the nearest stable sample on the opposite side.
-        # This rescues crossings across several missed detections / ID stitching
-        # frames instead of only comparing the immediately previous frame.
         previous: _GateSample | None = None
         for candidate in reversed(list(state.history)[:-1]):
             gap = sample.frame_index - candidate.frame_index
@@ -143,18 +166,22 @@ class LineCrossingCounter:
         if previous is None:
             return None
 
-        dx = b[0] - a[0]
-        dy = b[1] - a[1]
-        a_ext = (a[0] - dx * self.segment_margin, a[1] - dy * self.segment_margin)
-        b_ext = (b[0] + dx * self.segment_margin, b[1] + dy * self.segment_margin)
-        if not segments_intersect(previous.point, anchor, a_ext, b_ext):
+        crossing = segment_crossing_point(
+            previous.point,
+            anchor,
+            a,
+            b,
+            segment_margin=self.segment_margin,
+        )
+        if crossing is None:
+            self.rejected_outside_segment += 1
             return None
 
         move_x = anchor[0] - previous.point[0]
         move_y = anchor[1] - previous.point[1]
         move_len = max(hypot(move_x, move_y), 1e-6)
         perpendicular = abs(distance - previous.distance)
-        min_motion = max(3.0, frame_height * self.min_crossing_motion_ratio)
+        min_motion = max(2.0, scale * self.min_crossing_motion_ratio)
         if perpendicular < min_motion:
             return None
         if perpendicular / move_len < self.min_perpendicular_ratio:
@@ -170,7 +197,7 @@ class LineCrossingCounter:
         gap = sample.frame_index - previous.frame_index
         if gap > 1:
             self.rescued_crossings += 1
-        state.history = deque([sample], maxlen=32)
+        state.history = deque([sample], maxlen=48)
 
         if direction == "in":
             self.in_count += 1

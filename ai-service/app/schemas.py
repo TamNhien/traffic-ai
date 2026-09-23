@@ -13,7 +13,7 @@ class PipelineStart(BaseModel):
     model_path: str | None = None
     source_type: str
     source_url: str
-    confidence_threshold: float = Field(default=0.18, ge=0.05, le=0.95)
+    confidence_threshold: float = Field(default=0.12, ge=0.05, le=0.95)
     line_x1: float = Field(default=0.1, ge=0, le=1)
     line_y1: float = Field(default=0.5, ge=0, le=1)
     line_x2: float = Field(default=0.9, ge=0, le=1)
@@ -48,3 +48,16 @@ class TrainingStartRequest(BaseModel):
     imgsz: int = Field(default=640, ge=320, le=1920)
     batch: int = Field(default=8, ge=1, le=256)
     device: str = "auto"
+
+class AnnotationBox(BaseModel):
+    class_id: int = Field(ge=0, le=4)
+    x: float = Field(ge=0, le=1)
+    y: float = Field(ge=0, le=1)
+    w: float = Field(gt=0, le=1)
+    h: float = Field(gt=0, le=1)
+
+
+class AnnotationSaveRequest(BaseModel):
+    boxes: list[AnnotationBox] = Field(default_factory=list)
+    reviewed: bool = True
+    difficult: bool = False
