@@ -13,7 +13,7 @@ from app.runtime import registry
 from app.schemas import PipelineStart, SourceValidationRequest
 from app.sources import inspect_source, list_video_sources, read_source_preview
 
-APP_VERSION = '0.3.3'
+APP_VERSION = '0.4.0'
 app = FastAPI(title='Traffic AI Service', version=APP_VERSION)
 SNAPSHOT_DIR = Path(os.getenv('SNAPSHOT_DIR', '/tmp/traffic-ai-snapshots'))
 SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
@@ -42,19 +42,23 @@ def health() -> dict:
         'status': 'ready',
         'service': 'ai-service',
         'version': APP_VERSION,
-        'pipeline': 'yolo26-bytetrack-smart-gate-v3',
-        'model': os.getenv('AI_MODEL_NAME', 'yolo26n.pt'),
+        'pipeline': 'yolo26s-bytetrack-realtime-gate-v4',
+        'model': os.getenv('AI_MODEL_NAME', 'yolo26s.pt'),
         'device': os.getenv('AI_DEVICE', 'auto'),
         'performance': {
-            'imgsz': int(os.getenv('AI_IMGSZ', '832')),
-            'process_max_width': int(os.getenv('AI_PROCESS_MAX_WIDTH', '1152')),
+            'imgsz': int(os.getenv('AI_IMGSZ', '640')),
+            'process_max_width': int(os.getenv('AI_PROCESS_MAX_WIDTH', '1440')),
             'stream_every_n': int(os.getenv('AI_STREAM_EVERY_N', '2')),
             'refine_at_crossing': os.getenv('AI_REFINE_AT_CROSSING', '1'),
-            'refine_model': os.getenv('AI_REFINE_MODEL_NAME', 'yolo26s.pt'),
-            'track_stitch_max_gap': int(os.getenv('AI_STITCH_MAX_GAP', '18')),
+            'refine_model': os.getenv('AI_REFINE_MODEL_NAME', 'yolo26m.pt'),
+            'track_stitch_max_gap': int(os.getenv('AI_STITCH_MAX_GAP', '30')),
+            'gate_roi': os.getenv('AI_GATE_ROI', '1'),
+            'gate_roi_margin': float(os.getenv('AI_GATE_ROI_MARGIN', '0.22')),
+            'async_event_writer': True,
+            'async_stream_encoder': True,
         },
         'gpu': gpu,
-        'active_pipelines': len([p for p in registry.list() if p['status'] in {'starting', 'running'}]),
+        'active_pipelines': len([p for p in registry.list() if p['status'] in {'starting', 'warming', 'running'}]),
         'runtime': {
             'python': platform.python_version(),
             'fastapi': _pkg_version('fastapi'),

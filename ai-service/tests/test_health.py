@@ -8,13 +8,13 @@ def test_health() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "ready"
-    assert payload["pipeline"] == "yolo26-bytetrack-smart-gate-v3"
-    assert payload["version"] == "0.3.3"
+    assert payload["pipeline"] == "yolo26s-bytetrack-realtime-gate-v4"
+    assert payload["version"] == "0.4.0"
     assert "runtime" in payload
 
 
-def test_default_model_is_yolo26n(monkeypatch) -> None:
+def test_default_model_is_yolo26s(monkeypatch) -> None:
     monkeypatch.delenv("AI_MODEL_NAME", raising=False)
     response = TestClient(app).get("/health")
     assert response.status_code == 200
-    assert response.json()["model"] == "yolo26n.pt"
+    assert response.json()["model"] == "yolo26s.pt"

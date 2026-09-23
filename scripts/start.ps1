@@ -50,14 +50,15 @@ if (-not (Test-Path ".\.env")) {
 $envPath = Join-Path $ProjectRoot ".env"
 if (Test-Path $envPath) {
   $envText = Get-Content $envPath -Raw
-  if ($envText -match "(?m)^AI_MODEL_NAME=yolo11n\.pt[ \t]*\r?$") {
-    $envText = [regex]::Replace($envText, "(?m)^AI_MODEL_NAME=yolo11n\.pt[ \t]*\r?$", "AI_MODEL_NAME=yolo26n.pt")
+  if ($envText -match "(?m)^AI_MODEL_NAME=(yolo11n|yolo26n)\.pt[ \t]*\r?$") {
+    $oldModel = ([regex]::Match($envText, "(?m)^AI_MODEL_NAME=([^\r\n]+)")).Groups[1].Value
+    $envText = [regex]::Replace($envText, "(?m)^AI_MODEL_NAME=(yolo11n|yolo26n)\.pt[ \t]*\r?$", "AI_MODEL_NAME=yolo26s.pt")
     [System.IO.File]::WriteAllText($envPath, $envText, [System.Text.UTF8Encoding]::new($false))
-    Write-Host "[Traffic AI] Đã nâng baseline model trong .env: yolo11n.pt -> yolo26n.pt" -ForegroundColor Yellow
+    Write-Host "[Traffic AI] Đã nâng baseline model trong .env: $oldModel -> yolo26s.pt" -ForegroundColor Yellow
   }
 }
 
-# V0.3.3: giữ tuning V0.3.x và harden Gateway/Docker DNS.
+# V0.4.0: nâng detector/classifier và Realtime Gate 4.0.
 function Set-EnvDefaultUpgrade([string]$Key, [string]$OldValue, [string]$NewValue) {
   $text = Get-Content $envPath -Raw
   $pattern = "(?m)^" + [regex]::Escape($Key) + "=" + [regex]::Escape($OldValue) + "[ \t]*\r?$"
@@ -74,16 +75,27 @@ function Ensure-EnvSetting([string]$Key, [string]$Value) {
     Write-Host "[Traffic AI] Đã thêm $Key=$Value vào .env" -ForegroundColor Yellow
   }
 }
-Set-EnvDefaultUpgrade "AI_IMGSZ" "960" "832"
-Set-EnvDefaultUpgrade "AI_PROCESS_MAX_WIDTH" "1280" "1152"
-Set-EnvDefaultUpgrade "AI_JPEG_QUALITY" "76" "72"
-Set-EnvDefaultUpgrade "AI_CLASS_HISTORY" "18" "24"
+Set-EnvDefaultUpgrade "AI_IMGSZ" "832" "640"
+Set-EnvDefaultUpgrade "AI_PROCESS_MAX_WIDTH" "1152" "1440"
+Set-EnvDefaultUpgrade "AI_JPEG_QUALITY" "72" "70"
+Set-EnvDefaultUpgrade "AI_CLASS_HISTORY" "24" "30"
+Set-EnvDefaultUpgrade "AI_STITCH_MAX_GAP" "18" "30"
+Set-EnvDefaultUpgrade "AI_STITCH_DISTANCE_RATIO" "0.085" "0.14"
+Set-EnvDefaultUpgrade "AI_REFINE_MODEL_NAME" "yolo26s.pt" "yolo26m.pt"
 Ensure-EnvSetting "AI_STREAM_EVERY_N" "2"
 Ensure-EnvSetting "AI_STREAM_MAX_WIDTH" "960"
-Ensure-EnvSetting "AI_STITCH_MAX_GAP" "18"
-Ensure-EnvSetting "AI_STITCH_DISTANCE_RATIO" "0.085"
+Ensure-EnvSetting "AI_IOU" "0.55"
+Ensure-EnvSetting "AI_GATE_HISTORY_GAP" "30"
+Ensure-EnvSetting "AI_GATE_MIN_NORMAL_RATIO" "0.12"
+Ensure-EnvSetting "AI_GATE_ROI" "1"
+Ensure-EnvSetting "AI_GATE_ROI_MARGIN" "0.22"
+Ensure-EnvSetting "AI_GATE_ROI_MIN_SPAN" "0.52"
 Ensure-EnvSetting "AI_REFINE_AT_CROSSING" "1"
-Ensure-EnvSetting "AI_REFINE_MODEL_NAME" "yolo26s.pt"
+Ensure-EnvSetting "AI_REFINE_MODEL_NAME" "yolo26m.pt"
+Ensure-EnvSetting "AI_REFINE_IMGSZ" "640"
+Ensure-EnvSetting "AI_BICYCLE_CERTAINTY" "0.76"
+Ensure-EnvSetting "AI_BICYCLE_MIN_HITS" "4"
+Ensure-EnvSetting "AI_WARMUP" "1"
 
 # V0.2.8: bootstrap HTTPS/hosts tự động.
 & (Join-Path $PSScriptRoot "ensure-local-https.ps1") -HostName "traffic-ai.test"
@@ -128,7 +140,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # Gateway có thể đã sống từ phiên bản trước trong khi frontend/backend vừa bị recreate.
-# Force-recreate để nạp nginx.conf mới; Nginx V0.3.3 đồng thời dùng Docker DNS động.
+# Force-recreate để nạp nginx.conf mới; Gateway tiếp tục dùng Docker DNS động.
 Write-Host "[Traffic AI] Đồng bộ Gateway với IP container hiện tại..." -ForegroundColor Cyan
 docker compose -f docker-compose.yml up -d --no-deps --force-recreate gateway
 if ($LASTEXITCODE -ne 0) {
@@ -145,7 +157,7 @@ if (-not $dashboardOk -or -not $apiOk) {
 }
 
 Write-Host ""
-Write-Host "[OK] Traffic AI V0.3.3 đã khởi động." -ForegroundColor Green
+Write-Host "[OK] Traffic AI V0.4.0 đã khởi động." -ForegroundColor Green
 Write-Host "Dashboard : https://traffic-ai.test:8443"
 Write-Host "API Docs  : https://traffic-ai.test:8444/docs"
 Write-Host "PostgreSQL: 127.0.0.1:5445 / traffic_ai_db"

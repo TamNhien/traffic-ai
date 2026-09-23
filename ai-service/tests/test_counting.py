@@ -58,3 +58,18 @@ def test_same_track_can_cross_in_then_out() -> None:
     assert counter.in_count == 1
     assert counter.out_count == 1
     assert counter.total_crossings == 2
+
+
+def test_history_rescues_crossing_across_missed_frames() -> None:
+    counter = LineCrossingCounter(CountingLine(0.1, 0.5, 0.9, 0.5), history_gap_frames=12)
+    assert counter.update(80, (50, 20), 100, 100, 1) is None
+    # No observations for several frames; the track reappears on the other side.
+    assert counter.update(80, (52, 82), 100, 100, 7) == "in"
+    assert counter.rescued_crossings == 1
+
+
+def test_parallel_motion_along_gate_is_not_counted() -> None:
+    counter = LineCrossingCounter(CountingLine(0.1, 0.5, 0.9, 0.5))
+    for frame, x in enumerate((20, 30, 40, 50, 60, 70), start=1):
+        assert counter.update(90, (x, 42), 100, 100, frame) is None
+    assert counter.total_crossings == 0

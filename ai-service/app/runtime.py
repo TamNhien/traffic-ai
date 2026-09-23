@@ -14,6 +14,8 @@ class PipelineState:
     status: str = "starting"
     fps: float = 0.0
     inference_ms: float = 0.0
+    source_fps: float = 0.0
+    realtime_factor: float = 0.0
     processed_frames: int = 0
     total_count: int = 0
     counts_by_type: dict[str, int] = field(default_factory=lambda: {"motorcycle": 0, "bicycle": 0, "car": 0, "bus": 0, "truck": 0, "other": 0})
@@ -24,7 +26,14 @@ class PipelineState:
     pending_events: int = 0
     delivery_failures: int = 0
     stitch_recoveries: int = 0
+    rescued_crossings: int = 0
+    stream_frames_encoded: int = 0
+    stream_frames_dropped: int = 0
+    frame_policy: str = "all-frames"
+    gate_roi_enabled: bool = False
+    gate_roi: dict | None = None
     model_name: str | None = None
+    refine_model_name: str | None = None
     imgsz: int | None = None
     half_precision: bool = False
     frame_width: int | None = None

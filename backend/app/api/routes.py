@@ -230,7 +230,7 @@ def start_camera(camera_id: int, db: Session = Depends(get_db)) -> dict:
             probe = httpx.get(f"{settings.ai_service_url}/pipelines/{camera_id}", timeout=2.0)
             if probe.is_success:
                 ai_state = probe.json()
-                ai_is_running = ai_state.get("status") in {"starting", "running"}
+                ai_is_running = ai_state.get("status") in {"starting", "warming", "running"}
         except Exception:
             ai_is_running = False
         if ai_is_running:

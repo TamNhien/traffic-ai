@@ -252,12 +252,12 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.3.3") { throw "VERSION phải là 0.3.3, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0011_gateway_dns_runtime.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0011_gateway_dns_runtime.py." }
+  if ($version -ne "0.4.0") { throw "VERSION phải là 0.4.0, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0012_realtime_gate_v4.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0012_realtime_gate_v4.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0011_gateway_dns_runtime"' -or $migrationText -notmatch "value='0.3.3'") {
-    throw "Migration 0011_gateway_dns_runtime không đúng contract V0.3.3."
+  if ($migrationText -notmatch 'revision = "0012_realtime_gate_v4"' -or $migrationText -notmatch "value='0.4.0'") {
+    throw "Migration 0012_realtime_gate_v4 không đúng contract V0.4.0."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
@@ -281,32 +281,47 @@ Assert-SourceManagementContract
 Assert-GatewayRuntimeContract
 Assert-VersionConsistencyContract
 
-Write-Host "`n[Traffic AI] Smart Gate 3.0 / session reset + track continuity contract" -ForegroundColor Cyan
+Write-Host "`n[Traffic AI] Realtime Gate 4.0 / accuracy + non-blocking runtime contract" -ForegroundColor Cyan
 $countingText = Get-Content (Join-Path $root "ai-service\app\counting.py") -Raw -Encoding UTF8
 $classText = Get-Content (Join-Path $root "ai-service\app\classification.py") -Raw -Encoding UTF8
+$trackingText = Get-Content (Join-Path $root "ai-service\app\tracking.py") -Raw -Encoding UTF8
+$workerText = Get-Content (Join-Path $root "ai-service\app\worker.py") -Raw -Encoding UTF8
+$asyncText = Get-Content (Join-Path $root "ai-service\app\async_tasks.py") -Raw -Encoding UTF8
+$roiText = Get-Content (Join-Path $root "ai-service\app\gate_roi.py") -Raw -Encoding UTF8
 $frontendText = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
 $trackerText = Get-Content (Join-Path $root "ai-service\app\bytetrack_traffic.yaml") -Raw -Encoding UTF8
 $smartRoutesText = Get-Content (Join-Path $root "backend\app\api\routes.py") -Raw -Encoding UTF8
-if ($countingText -notmatch 'dead_band_ratio' -or $countingText -notmatch 'counted_directions' -or $countingText -notmatch 'total_crossings') {
-  throw "Smart Gate 2.0 thiếu dead-band hoặc đếm hai chiều."
+if ($countingText -notmatch 'history_gap_frames' -or $countingText -notmatch 'rescued_crossings' -or $countingText -notmatch 'min_perpendicular_ratio') {
+  throw "Realtime Gate 4.0 thiếu trajectory-history rescue hoặc kiểm tra chuyển động vuông góc."
 }
-if ($classText -notmatch 'TrackLabelSmoother' -or $frontendText -notmatch 'CountingLineEditor' -or $frontendText -notmatch 'Dừng AI để chỉnh vạch') {
-  throw "Thiếu ổn định nhãn theo Track ID hoặc trình chỉnh vạch trực tiếp/khóa khi AI chạy."
+if ($trackingText -notmatch 'motion_leading_anchor' -or $trackingText -notmatch 'velocity_for') {
+  throw "Thiếu motion-leading anchor hoặc velocity-based track continuity."
 }
-if ($trackerText -notmatch 'track_buffer: 100' -or $smartRoutesText -notmatch 'preview.jpg') {
-  throw "Thiếu ByteTrack traffic profile V3 hoặc endpoint preview để đặt vạch."
+if ($classText -notmatch 'VehicleClassPolicy' -or $classText -notmatch 'bicycle_certainty') {
+  throw "Thiếu policy phân loại xe đạp/xe máy bảo thủ."
 }
-$trackingText = Get-Content (Join-Path $root "ai-service\app\tracking.py") -Raw -Encoding UTF8
-if ($trackingText -notmatch 'TrackContinuityResolver' -or $frontendText -notmatch 'sessionCounts' -or $frontendText -notmatch 'Bộ đếm phiên mới đã reset về 0') {
-  throw "Thiếu track stitching hoặc bộ đếm frontend theo từng phiên."
+if ($workerText -notmatch 'gate_roi_for_line' -or $workerText -notmatch 'EventDispatcher' -or $workerText -notmatch 'LatestFrameEncoder') {
+  throw "AI worker thiếu Gate ROI hoặc pipeline I/O bất đồng bộ."
 }
-Write-Host "[OK] Smart Gate 3.0 / session reset + track continuity contract" -ForegroundColor Green
+if ($asyncText -notmatch 'queue.Queue' -or $roiText -notmatch 'GateROI') {
+  throw "Thiếu bounded async queue hoặc Gate ROI implementation."
+}
+if ($trackerText -notmatch 'track_buffer: 120' -or $smartRoutesText -notmatch 'preview.jpg') {
+  throw "Thiếu ByteTrack V4 profile hoặc endpoint preview để đặt vạch."
+}
+if ($frontendText -notmatch 'Realtime Gate 4.0' -or $frontendText -notmatch 'realtime_factor') {
+  throw "Frontend chưa hiển thị Realtime Gate 4.0 / hệ số realtime."
+}
+$envExampleText = Get-Content (Join-Path $root ".env.example") -Raw -Encoding UTF8
+if ($envExampleText -notmatch 'AI_MODEL_NAME=yolo26s\.pt' -or $envExampleText -notmatch 'AI_REFINE_MODEL_NAME=yolo26m\.pt' -or $envExampleText -notmatch 'AI_GATE_ROI=1') {
+  throw "Cấu hình mặc định V0.4.0 chưa bật YOLO26s + YOLO26m refiner + Gate ROI."
+}
+Write-Host "[OK] Realtime Gate 4.0 / accuracy + non-blocking runtime contract" -ForegroundColor Green
 
 Write-Host "`n[Traffic AI] AI counting/persistence contract" -ForegroundColor Cyan
-$workerText = Get-Content (Join-Path $root "ai-service\app\worker.py") -Raw -Encoding UTF8
 $routesText = Get-Content (Join-Path $root "backend\app\api\routes.py") -Raw -Encoding UTF8
-if ($workerText -notmatch 'y2\)' -or $workerText -notmatch '_pending_events' -or $workerText -notmatch '_notify_finished') {
-  throw "AI worker thiếu bottom-center counting/retry persistence contract."
+if ($workerText -notmatch '_notify_finished' -or $workerText -notmatch '_event_dispatcher.submit' -or $workerText -notmatch 'motion_leading_anchor') {
+  throw "AI worker thiếu async persistence, leading-edge counting hoặc session finish contract."
 }
 if ($routesText -notmatch 'Reconcile stale DB state' -or $routesText -notmatch 'VehicleCount') {
   throw "Backend thiếu stale-session reconciliation hoặc hourly vehicle_counts persistence."

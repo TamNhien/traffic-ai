@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './styles.css'
 
-const APP_VERSION = '0.3.3'
+const APP_VERSION = '0.4.0'
 const vehicleLabels = {
   motorcycle: 'Xe máy', bicycle: 'Xe đạp', car: 'Ô tô', bus: 'Xe buýt', truck: 'Xe tải', other: 'Khác'
 }
@@ -11,7 +11,7 @@ const clamp01 = value => Math.min(1, Math.max(0, Number(value)))
 const defaultCameraForm = () => ({
   name: 'Camera demo', code: 'CAM-001', source_type: 'video',
   source_url: '/data/videos/demo.mp4', location: 'Khu vực demo',
-  confidence_threshold: 0.20, line_x1: 0.32, line_y1: 0.59, line_x2: 0.84, line_y2: 0.59
+  confidence_threshold: 0.18, line_x1: 0.32, line_y1: 0.59, line_x2: 0.84, line_y2: 0.59
 })
 
 function StatCard({ title, value, note }) {
@@ -95,7 +95,7 @@ function App() {
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
   const [form, setForm] = useState(defaultCameraForm())
-  const [lineForm, setLineForm] = useState({confidence_threshold:0.20,line_x1:0.32,line_y1:0.59,line_x2:0.84,line_y2:0.59})
+  const [lineForm, setLineForm] = useState({confidence_threshold:0.18,line_x1:0.32,line_y1:0.59,line_x2:0.84,line_y2:0.59})
 
   const load = async () => {
     try {
@@ -126,7 +126,7 @@ function App() {
   }, [])
 
   const selected = cameras.find(c => c.id === Number(selectedId))
-  const activePipeline = pipelines.find(p => p.camera_id === Number(selectedId) && ['starting', 'running'].includes(p.status))
+  const activePipeline = pipelines.find(p => p.camera_id === Number(selectedId) && ['starting', 'warming', 'running'].includes(p.status))
   const latestPipeline = pipelines.find(p => p.camera_id === Number(selectedId))
   const sessionPipeline = activePipeline || latestPipeline
   const sessionCounts = sessionPipeline?.counts_by_type || {}
@@ -142,12 +142,12 @@ function App() {
     setEditingId(selected.id)
     setForm({
       name: selected.name, code: selected.code, source_type: selected.source_type, source_url: selected.source_url,
-      location: selected.location || '', confidence_threshold: selected.confidence_threshold ?? 0.20,
+      location: selected.location || '', confidence_threshold: selected.confidence_threshold ?? 0.18,
       line_x1: selected.line_x1 ?? 0.32, line_y1: selected.line_y1 ?? 0.59,
       line_x2: selected.line_x2 ?? 0.84, line_y2: selected.line_y2 ?? 0.59
     })
     setLineForm({
-      confidence_threshold: selected.confidence_threshold ?? 0.20,
+      confidence_threshold: selected.confidence_threshold ?? 0.18,
       line_x1: selected.line_x1 ?? 0.32, line_y1: selected.line_y1 ?? 0.59,
       line_x2: selected.line_x2 ?? 0.84, line_y2: selected.line_y2 ?? 0.59
     })
@@ -246,9 +246,9 @@ function App() {
 
   return <div className="app-shell">
     <aside className="sidebar">
-      <div className="brand"><img className="brand-logo" src={`/logo.svg?v=${APP_VERSION}`} alt="Traffic AI" /><div><strong>Traffic AI</strong><span>YOLO26 + ByteTrack</span></div></div>
+      <div className="brand"><img className="brand-logo" src={`/logo.svg?v=${APP_VERSION}`} alt="Traffic AI" /><div><strong>Traffic AI</strong><span>YOLO26s + ByteTrack</span></div></div>
       <nav><a className="active" href="#overview">Tổng quan</a><a href="#live">Giám sát</a><a href="#cameras">Camera</a><a href="#events">Sự kiện</a></nav>
-      <div className="sidebar-footer">V{APP_VERSION} · Smart Gate 3.0</div>
+      <div className="sidebar-footer">V{APP_VERSION} · Realtime Gate 4.0</div>
     </aside>
     <main>
       <header className="topbar"><div><p className="eyebrow">ĐỒ ÁN TRÍ TUỆ NHÂN TẠO</p><h1>Phát hiện, theo dõi và đếm phương tiện</h1></div><div className={`health ${health?.status === 'ok' ? 'online' : ''}`}><span className="dot" />{health?.status === 'ok' ? 'Hệ thống hoạt động' : 'Đang kết nối'}</div></header>
@@ -264,7 +264,7 @@ function App() {
         <article className="panel camera-panel">
           <div className="panel-head"><div><span className="panel-kicker">LIVE AI</span><h2>Camera Preview</h2></div><button className={activePipeline ? 'danger' : ''} disabled={!selected || busy || (!activePipeline && selectedVideoMissing && !sourceAutoRepairAvailable)} onClick={togglePipeline}>{activePipeline ? 'Dừng AI' : 'Chạy AI'}</button></div>
           <div className="camera-stage">{activePipeline ? <img src={`/ai/streams/${selected.id}.mjpg?session=${activePipeline.session_id}`} alt="Live AI stream" /> : <img src={previewUrl} alt="Preview camera" onLoad={e=>{e.currentTarget.style.visibility='visible'}} onError={e=>{e.currentTarget.style.visibility='hidden'}} />}</div>
-          <div className="camera-select"><label>Camera</label><select value={selectedId || ''} onChange={e => setSelectedId(Number(e.target.value))}><option value="">-- Chọn camera --</option>{cameras.map(c => <option key={c.id} value={c.id}>{c.code} · {c.name}</option>)}</select><span>{activePipeline ? `FPS ${activePipeline.fps} · ${activePipeline.inference_ms ?? 0} ms · Tổng ${activePipeline.total_count} · IN ${activePipeline.in_count ?? 0} · OUT ${activePipeline.out_count ?? 0}` : selected?.source_url || 'Chưa có camera'}</span></div>
+          <div className="camera-select"><label>Camera</label><select value={selectedId || ''} onChange={e => setSelectedId(Number(e.target.value))}><option value="">-- Chọn camera --</option>{cameras.map(c => <option key={c.id} value={c.id}>{c.code} · {c.name}</option>)}</select><span>{activePipeline ? `FPS ${activePipeline.fps}/${activePipeline.source_fps || '-'} · RT x${activePipeline.realtime_factor ?? 0} · ${activePipeline.inference_ms ?? 0} ms · Tổng ${activePipeline.total_count} · IN ${activePipeline.in_count ?? 0} · OUT ${activePipeline.out_count ?? 0} · cứu ${activePipeline.rescued_crossings ?? 0}` : selected?.source_url || 'Chưa có camera'}</span></div>
           {selected && !activePipeline && <div className={`source-status ${sourceStatus?.valid ? 'ok' : 'bad'}`}><strong>{sourceStatus?.valid ? '✓ Nguồn sẵn sàng' : '⚠ Nguồn chưa sẵn sàng'}</strong><span>{sourceStatus?.message || 'Đang kiểm tra nguồn...'}</span>{sourceStatus?.suggested_source_url && <><small>Gợi ý: {sourceStatus.suggested_source_url}</small><button type="button" className="inline-action" onClick={applySuggestedSource}>Dùng nguồn gợi ý</button></>}</div>}
           {latestPipeline && !activePipeline && <div className="pipeline-result">Lần chạy gần nhất: <strong>{latestPipeline.status}</strong> · {latestPipeline.processed_frames} frame · {latestPipeline.total_count} lượt cắt vạch · đã ghi {latestPipeline.delivered_events ?? 0} sự kiện{latestPipeline.last_error ? ` · ${latestPipeline.last_error}` : ''}</div>}
         </article>
@@ -279,7 +279,7 @@ function App() {
           <div className="nudge-grid"><button disabled={!!activePipeline} onClick={()=>moveLine(0,-0.02)}>↑ Lên</button><button disabled={!!activePipeline} onClick={()=>moveLine(0,0.02)}>↓ Xuống</button><button disabled={!!activePipeline} onClick={()=>moveLine(-0.02,0)}>← Trái</button><button disabled={!!activePipeline} onClick={()=>moveLine(0.02,0)}>→ Phải</button><button disabled={!!activePipeline} onClick={()=>resizeLine(1.12)}>Dài hơn</button><button disabled={!!activePipeline} onClick={()=>resizeLine(0.88)}>Ngắn hơn</button></div>
           <div className="line-grid">{lineField('line_x1','X1')}{lineField('line_y1','Y1')}{lineField('line_x2','X2')}{lineField('line_y2','Y2')}{lineField('confidence_threshold','Confidence')}</div>
           <button disabled={!selected || busy || !!activePipeline} onClick={saveCountingLine}>Lưu vị trí vạch</button>
-          <p className="hint">Confidence mặc định 0,20 để giảm bỏ sót xe nhỏ/xa. Không nên hạ quá thấp nếu cảnh có nhiều xe đỗ hai bên đường.</p>
+          <p className="hint">Confidence mặc định 0,18 để giảm bỏ sót xe nhỏ/xa. Không nên hạ quá thấp nếu cảnh có nhiều xe đỗ hai bên đường.</p>
         </article>
 
         <article className="panel"><div className="panel-head"><div><span className="panel-kicker">CAMERA SOURCE</span><h2>{editingId ? `Sửa Camera #${editingId}` : 'Tạo camera mới'}</h2></div><button className="secondary" type="button" disabled={busy || !!activePipeline} onClick={beginNewCamera}>Camera mới</button></div><form className="camera-form" onSubmit={saveCamera}>
