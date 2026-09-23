@@ -262,18 +262,18 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.4") { throw "VERSION phải là 0.5.4, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0018_alembic_guard_v054.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0018_alembic_guard_v054.py." }
+  if ($version -ne "0.5.5") { throw "VERSION phải là 0.5.5, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0019_activation_ui_v055.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0019_activation_ui_v055.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0018_alembic_guard_v054"' -or $migrationText -notmatch 'down_revision = "0017_ai_test_dep_v053"' -or $migrationText -notmatch "value='0.5.4'") {
-    throw "Migration 0018_alembic_guard_v054 không đúng contract V0.5.4."
+  if ($migrationText -notmatch 'revision = "0019_activation_ui_v055"' -or $migrationText -notmatch 'down_revision = "0018_alembic_guard_v054"' -or $migrationText -notmatch "value='0.5.5'") {
+    throw "Migration 0019_activation_ui_v055 không đúng contract V0.5.5."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
 
 function Assert-AlembicRevisionSafetyContract {
-  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.4" -ForegroundColor Cyan
+  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.5" -ForegroundColor Cyan
   $versionsDir = Join-Path $root "backend\alembic\versions"
   $bad = @()
   Get-ChildItem $versionsDir -Filter "*.py" | ForEach-Object {
@@ -297,7 +297,7 @@ function Assert-AlembicRevisionSafetyContract {
   if ($v17 -notmatch 'revision = "0017_ai_test_dep_v053"') {
     throw "Migration V0.5.3 chưa dùng revision ID rút gọn an toàn."
   }
-  Write-Host "[OK] Alembic revision-length safety V0.5.4" -ForegroundColor Green
+  Write-Host "[OK] Alembic revision-length safety V0.5.5" -ForegroundColor Green
 }
 
 
@@ -361,6 +361,24 @@ function Assert-AiTestDependencyIsolationContract {
   Write-Host "[OK] AI test dependency isolation V0.5.3" -ForegroundColor Green
 }
 
+
+function Assert-ActivationUiContract {
+  Write-Host "`n[Traffic AI] best.pt activation + panel separation V0.5.5" -ForegroundColor Cyan
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  $css = Get-Content (Join-Path $root "frontend\src\styles.css") -Raw -Encoding UTF8
+  $routes = Get-Content (Join-Path $root "backend\app\api\routes.py") -Raw -Encoding UTF8
+  if ($frontend -notmatch 'readApiBody' -or $frontend -notmatch 'is_active_model' -or $frontend -notmatch 'ĐANG DÙNG best.pt') {
+    throw "Frontend thiếu parser API an toàn hoặc trạng thái model đang kích hoạt."
+  }
+  if ($routes -notmatch 'Idempotent activation' -or $routes -notmatch 'AIModel.model_path == run.best_model_path' -or $routes -notmatch 'already_active') {
+    throw "Backend thiếu kích hoạt best.pt idempotent."
+  }
+  if ($css -notmatch 'margin:20px 0 24px' -or $css -notmatch 'active-model-badge') {
+    throw "UI chưa tách khoảng cách các khung hoặc thiếu badge model active."
+  }
+  Write-Host "[OK] best.pt activation + panel separation V0.5.5" -ForegroundColor Green
+}
+
 function Invoke-Step([string]$Title, [scriptblock]$Action) {
   Write-Host "`n[Traffic AI] $Title" -ForegroundColor Cyan
   & $Action
@@ -384,6 +402,7 @@ Assert-AlembicRevisionSafetyContract
 Assert-SmoothPlaybackContract
 Assert-DatasetTrainingContract
 Assert-AiTestDependencyIsolationContract
+Assert-ActivationUiContract
 
 Write-Host "`n[Traffic AI] Realtime Gate 4.0 / accuracy + non-blocking runtime contract" -ForegroundColor Cyan
 $countingText = Get-Content (Join-Path $root "ai-service\app\counting.py") -Raw -Encoding UTF8

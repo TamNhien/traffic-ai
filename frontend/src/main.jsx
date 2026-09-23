@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './styles.css'
 
-const APP_VERSION = '0.5.4'
+const APP_VERSION = '0.5.5'
 const vehicleLabels = {
   motorcycle: 'Xe máy', bicycle: 'Xe đạp', car: 'Ô tô', bus: 'Xe buýt', truck: 'Xe tải', other: 'Khác'
 }
@@ -115,6 +115,18 @@ function App() {
   const [selectedDatasetId, setSelectedDatasetId] = useState(null)
   const [trainingForm, setTrainingForm] = useState({epochs:80, imgsz:640, batch:8, base_model:'yolo26s.pt'})
 
+  const readApiBody = async (response) => {
+    const text = await response.text()
+    if (!text) return {}
+    const type = response.headers.get('content-type') || ''
+    if (type.includes('application/json')) {
+      try { return JSON.parse(text) } catch {}
+    }
+    try { return JSON.parse(text) } catch {
+      return { detail: text, raw: text }
+    }
+  }
+
   const load = async () => {
     try {
       const [summaryRes, healthRes, systemStatusRes, camerasRes, eventsRes, pipelinesRes, sessionsRes, videosRes, datasetsRes, trainingRes] = await Promise.all([
@@ -209,7 +221,7 @@ function App() {
       const endpoint = editingId ? `/api/cameras/${editingId}` : '/api/cameras'
       const method = editingId ? 'PATCH' : 'POST'
       const response = await fetch(endpoint, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) })
-      const body = await response.json()
+      const body = await readApiBody(response)
       if (!response.ok) throw new Error(body.detail || (editingId ? 'Không cập nhật được camera' : 'Không tạo được camera'))
       setSelectedId(body.id); setEditingId(body.id)
       setNotice(editingId ? `Đã cập nhật ${body.code}.` : `Đã tạo ${body.code}.`)
@@ -230,7 +242,7 @@ function App() {
     try {
       const action = activePipeline ? 'stop' : 'start'
       const response = await fetch(`/api/cameras/${selected.id}/${action}`, { method: 'POST' })
-      const body = await response.json()
+      const body = await readApiBody(response)
       if (!response.ok) throw new Error(body.detail || 'Không thể thay đổi pipeline')
       if (action === 'start') {
         const fresh = body.pipeline || {camera_id:selected.id, session_id:body.session_id, status:'starting', total_count:0, in_count:0, out_count:0, counts_by_type:{}}
@@ -270,7 +282,7 @@ function App() {
     try {
       const body = Object.fromEntries(Object.entries(lineForm).map(([k,v]) => [k, Number(v)]))
       const response = await fetch(`/api/cameras/${selected.id}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) })
-      const result = await response.json()
+      const result = await readApiBody(response)
       if (!response.ok) throw new Error(result.detail || 'Không cập nhật được counting line')
       setNotice('Đã lưu vạch đếm. Vạch chỉ đếm khi tâm đáy phương tiện đi từ một phía sang phía kia.')
       await load()
@@ -290,7 +302,7 @@ const createDataset = async () => {
   setBusy(true); setError(''); setNotice('')
   try {
     const response = await fetch('/api/datasets', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name:datasetForm.name, camera_id:selected.id, every_n_frames:Number(datasetForm.every_n_frames), max_images:Number(datasetForm.max_images)})})
-    const body = await response.json(); if (!response.ok) throw new Error(body.detail || 'Không tạo được dataset')
+    const body = await readApiBody(response); if (!response.ok) throw new Error(body.detail || `Không tạo được dataset (HTTP ${response.status})`)
     setSelectedDatasetId(body.id); setNotice(`Đã trích ${body.image_count} frame vào dataset ${body.name}.`); await load()
   } catch (err) { setError(err.message) } finally { setBusy(false) }
 }
@@ -301,7 +313,7 @@ const datasetAction = async action => {
   try {
     const payload = action === 'autolabel' ? {confidence:0.25} : {train_ratio:0.70,val_ratio:0.20,seed:2026}
     const response = await fetch(`/api/datasets/${selectedDataset.id}/${action}`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)})
-    const body = await response.json(); if (!response.ok) throw new Error(body.detail || `Không thực hiện được ${action}`)
+    const body = await readApiBody(response); if (!response.ok) throw new Error(body.detail || `Không thực hiện được ${action} (HTTP ${response.status})`)
     if (action === 'autolabel') setNotice(`Auto-label xong: ${body.labeled_images}/${body.image_count} ảnh có phương tiện, ${body.box_count} bounding box. Đây là nhãn gợi ý, cần rà soát trước khi train.`)
     else setNotice(`Dataset ready: train ${body.train_count}, val ${body.val_count}, test ${body.test_count}.`)
     await load()
@@ -313,7 +325,7 @@ const startTraining = async () => {
   setBusy(true); setError(''); setNotice('')
   try {
     const response = await fetch('/api/training/runs', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({dataset_id:selectedDataset.id, base_model:trainingForm.base_model, epochs:Number(trainingForm.epochs), imgsz:Number(trainingForm.imgsz), batch:Number(trainingForm.batch), device:'auto'})})
-    const body = await response.json(); if (!response.ok) throw new Error(body.detail || 'Không khởi động được training')
+    const body = await readApiBody(response); if (!response.ok) throw new Error(body.detail || `Không khởi động được training (HTTP ${response.status})`)
     setNotice(`Đã bắt đầu Training Run #${body.id} trên ${trainingForm.base_model}.`); await load()
   } catch (err) { setError(err.message) } finally { setBusy(false) }
 }
@@ -322,8 +334,8 @@ const activateTraining = async run => {
   setBusy(true); setError(''); setNotice('')
   try {
     const response = await fetch(`/api/training/runs/${run.id}/activate`, {method:'POST'})
-    const body = await response.json(); if (!response.ok) throw new Error(body.detail || 'Không kích hoạt được model')
-    setNotice(`Đã kích hoạt ${body.name}: ${body.model_path}`); await load()
+    const body = await readApiBody(response); if (!response.ok) throw new Error(body.detail || `Không kích hoạt được model (HTTP ${response.status})`)
+    setNotice(body.already_active ? `${body.name} đã là model đang dùng.` : `Đã kích hoạt ${body.name}: ${body.model_path}. Phiên AI mới sẽ dùng model này.`); await load()
   } catch (err) { setError(err.message) } finally { setBusy(false) }
 }
 
@@ -374,7 +386,7 @@ const activateTraining = async run => {
       </section>
 
       <section className="training-layout" id="training">
-        <article className="panel training-panel"><div className="panel-head"><div><span className="panel-kicker">DATASET STUDIO</span><h2>Dataset giao thông Việt Nam</h2></div><span className="lock-state">V0.5.4</span></div>
+        <article className="panel training-panel"><div className="panel-head"><div><span className="panel-kicker">DATASET STUDIO</span><h2>Dataset giao thông Việt Nam</h2></div><span className="lock-state">V0.5.5</span></div>
           <p className="hint">Trích frame từ video thật của camera, dùng YOLO26 tạo nhãn gợi ý, sau đó chia train/val/test. <strong>Auto-label không phải ground truth</strong>; muốn tăng độ chính xác thật sự cần rà soát/sửa nhãn sai trước khi huấn luyện.</p>
           <div className="dataset-form"><input value={datasetForm.name} onChange={e=>setDatasetForm({...datasetForm,name:e.target.value})} placeholder="Tên dataset" /><label>Mỗi N frame<input type="number" min="1" value={datasetForm.every_n_frames} onChange={e=>setDatasetForm({...datasetForm,every_n_frames:e.target.value})}/></label><label>Tối đa ảnh<input type="number" min="10" value={datasetForm.max_images} onChange={e=>setDatasetForm({...datasetForm,max_images:e.target.value})}/></label><button disabled={!selected || busy || selected?.source_type !== 'video'} onClick={createDataset}>1. Trích frame</button></div>
           <div className="dataset-select"><label>Dataset</label><select value={selectedDatasetId || ''} onChange={e=>setSelectedDatasetId(Number(e.target.value))}><option value="">-- Chọn dataset --</option>{datasets.map(d=><option key={d.id} value={d.id}>#{d.id} · {d.name} · {d.status}</option>)}</select></div>
@@ -385,8 +397,8 @@ const activateTraining = async run => {
         <article className="panel training-panel"><div className="panel-head"><div><span className="panel-kicker">FINE-TUNE</span><h2>Huấn luyện YOLO26 tùy biến</h2></div></div>
           <div className="train-form"><label>Base model<select value={trainingForm.base_model} onChange={e=>setTrainingForm({...trainingForm,base_model:e.target.value})}><option value="yolo26s.pt">YOLO26s</option><option value="yolo26m.pt">YOLO26m</option></select></label><label>Epochs<input type="number" min="1" value={trainingForm.epochs} onChange={e=>setTrainingForm({...trainingForm,epochs:e.target.value})}/></label><label>Image size<input type="number" min="320" step="32" value={trainingForm.imgsz} onChange={e=>setTrainingForm({...trainingForm,imgsz:e.target.value})}/></label><label>Batch<input type="number" min="1" value={trainingForm.batch} onChange={e=>setTrainingForm({...trainingForm,batch:e.target.value})}/></label></div>
           <button disabled={!selectedDataset || selectedDataset?.status !== 'ready' || busy || trainingRuns.some(r=>r.status==='running')} onClick={startTraining}>4. Bắt đầu fine-tune RTX 3060</button>
-          <div className="event-list training-runs">{trainingRuns.length ? trainingRuns.map(run=><div className="event-row training-row" key={run.id}><span>Run #{run.id} · Dataset #{run.dataset_id} · {run.base_model}</span><strong>{String(run.status).toUpperCase()} · {Number(run.progress || 0).toFixed(1)}%</strong><small>Epoch {run.current_epoch}/{run.epochs} · P {run.precision?.toFixed?.(3) ?? '-'} · R {run.recall?.toFixed?.(3) ?? '-'} · mAP50 {run.map50?.toFixed?.(3) ?? '-'} · mAP50-95 {run.map50_95?.toFixed?.(3) ?? '-'}</small>{run.status==='completed' && <button className="inline-action" onClick={()=>activateTraining(run)}>5. Kích hoạt best.pt</button>}{run.last_error && <small className="bad-text">{run.last_error}</small>}</div>) : <div className="empty">Chưa có training run.</div>}</div>
-          <p className="hint">Sau khi kích hoạt <code>best.pt</code>, các phiên AI mới sẽ dùng model tùy biến. Không có model nào bảo đảm 100% trong mọi cảnh; V0.5.4 tiếp tục quy trình đo Precision/Recall/mAP để biết chính xác model cải thiện đến đâu.</p>
+          <div className="event-list training-runs">{trainingRuns.length ? trainingRuns.map(run=><div className="event-row training-row" key={run.id}><span>Run #{run.id} · Dataset #{run.dataset_id} · {run.base_model}</span><strong>{String(run.status).toUpperCase()} · {Number(run.progress || 0).toFixed(1)}%</strong><small>Epoch {run.current_epoch}/{run.epochs} · P {run.precision?.toFixed?.(3) ?? '-'} · R {run.recall?.toFixed?.(3) ?? '-'} · mAP50 {run.map50?.toFixed?.(3) ?? '-'} · mAP50-95 {run.map50_95?.toFixed?.(3) ?? '-'}</small>{run.status==='completed' && (run.is_active_model ? <span className="active-model-badge">✓ ĐANG DÙNG best.pt</span> : <button className="inline-action" disabled={busy} onClick={()=>activateTraining(run)}>5. Kích hoạt best.pt</button>)}{run.last_error && <small className="bad-text">{run.last_error}</small>}</div>) : <div className="empty">Chưa có training run.</div>}</div>
+          <p className="hint">Sau khi kích hoạt <code>best.pt</code>, các phiên AI mới sẽ dùng model tùy biến. Không có model nào bảo đảm 100% trong mọi cảnh; V0.5.5 tiếp tục quy trình đo Precision/Recall/mAP để biết chính xác model cải thiện đến đâu.</p>
         </article>
       </section>
 

@@ -494,7 +494,7 @@ def create_dataset(payload: DatasetCreate, db: Session = Depends(get_db)) -> dic
     if camera is None:
         raise HTTPException(status_code=404, detail="Camera not found")
     if camera.source_type.value != "video":
-        raise HTTPException(status_code=422, detail="V0.5.4 trích dataset tự động từ video local trước; RTSP sẽ bổ sung ở bản sau.")
+        raise HTTPException(status_code=422, detail="V0.5.5 trích dataset tự động từ video local trước; RTSP sẽ bổ sung ở bản sau.")
     base_slug = _dataset_slug(payload.name)
     slug = base_slug
     suffix = 1
@@ -570,7 +570,14 @@ def list_training_runs(db: Session = Depends(get_db)) -> list[dict]:
             except Exception:
                 pass
     db.commit()
-    return [_training_payload(row) for row in rows]
+    active_model = db.scalar(select(AIModel).where(AIModel.is_active.is_(True)).order_by(AIModel.id.desc()))
+    payloads = []
+    for row in rows:
+        payload = _training_payload(row)
+        payload["is_active_model"] = bool(active_model and row.best_model_path and active_model.model_path == row.best_model_path)
+        payload["active_model_id"] = active_model.id if payload["is_active_model"] else None
+        payloads.append(payload)
+    return payloads
 
 
 @router.post("/training/runs", status_code=201)
@@ -593,18 +600,64 @@ def create_training_run(payload: TrainingCreate, db: Session = Depends(get_db)) 
 @router.post("/training/runs/{run_id}/activate")
 def activate_training_model(run_id: int, db: Session = Depends(get_db)) -> dict:
     run = db.get(TrainingRun, run_id)
-    if run is None: raise HTTPException(status_code=404, detail="Training run not found")
-    # Đồng bộ trạng thái mới nhất trước khi kích hoạt.
-    list_training_runs(db)
-    db.refresh(run)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Training run not found")
+
+    # Đồng bộ trạng thái mới nhất trước khi kích hoạt. Nếu AI Service đã restart
+    # nhưng DB đã lưu completed + best_model_path thì vẫn cho phép kích hoạt.
+    if run.status in {"queued", "running"}:
+        list_training_runs(db)
+        db.refresh(run)
     if run.status != "completed" or not run.best_model_path:
         raise HTTPException(status_code=409, detail="Training run chưa hoàn tất hoặc chưa có best.pt")
-    db.query(AIModel).update({AIModel.is_active: False})
+
     dataset = db.get(DatasetRecord, run.dataset_id)
-    model = AIModel(
-        name=f"Traffic AI Custom #{run.id}", version="0.5.4-finetuned", architecture="YOLO26",
-        model_path=run.best_model_path, training_dataset=dataset.name if dataset else None,
-        precision=run.precision, recall=run.recall, map50=run.map50, map50_95=run.map50_95, is_active=True,
-    )
-    db.add(model); db.commit(); db.refresh(model)
-    return {"status":"active", "model_id":model.id, "model_path":model.model_path, "name":model.name}
+    model_name = f"Traffic AI Custom #{run.id}"
+
+    # Idempotent activation: nếu lần bấm trước đã INSERT thành công nhưng client
+    # nhận lỗi/proxy timeout, lần bấm lại chỉ kích hoạt bản ghi hiện có thay vì
+    # đụng UniqueConstraint(name, version) và trả HTTP 500 text/plain.
+    model = db.scalar(select(AIModel).where(AIModel.model_path == run.best_model_path).order_by(AIModel.id.desc()))
+    already_active = bool(model and model.is_active)
+    try:
+        db.query(AIModel).update({AIModel.is_active: False}, synchronize_session=False)
+        if model is None:
+            model = AIModel(
+                name=model_name, version=f"run-{run.id}", architecture="YOLO26",
+                model_path=run.best_model_path, training_dataset=dataset.name if dataset else None,
+                precision=run.precision, recall=run.recall, map50=run.map50, map50_95=run.map50_95, is_active=True,
+            )
+            db.add(model)
+        else:
+            model.name = model_name
+            model.training_dataset = dataset.name if dataset else model.training_dataset
+            model.precision = run.precision
+            model.recall = run.recall
+            model.map50 = run.map50
+            model.map50_95 = run.map50_95
+            model.is_active = True
+        db.commit()
+        db.refresh(model)
+    except IntegrityError:
+        db.rollback()
+        # Hỗ trợ dữ liệu V0.5.4 đã từng tạo model cùng tên/version trong một
+        # lần kích hoạt dở dang. Tìm lại model theo tên, cập nhật path/metrics và
+        # kích hoạt thay vì trả Internal Server Error.
+        model = db.scalar(select(AIModel).where(AIModel.name == model_name).order_by(AIModel.id.desc()))
+        if model is None:
+            raise HTTPException(status_code=409, detail="Không thể kích hoạt best.pt do xung đột model trong PostgreSQL")
+        db.query(AIModel).update({AIModel.is_active: False}, synchronize_session=False)
+        model.model_path = run.best_model_path
+        model.training_dataset = dataset.name if dataset else model.training_dataset
+        model.precision = run.precision
+        model.recall = run.recall
+        model.map50 = run.map50
+        model.map50_95 = run.map50_95
+        model.is_active = True
+        db.commit()
+        db.refresh(model)
+
+    return {
+        "status": "active", "model_id": model.id, "model_path": model.model_path,
+        "name": model.name, "already_active": already_active, "run_id": run.id,
+    }

@@ -1,4 +1,4 @@
-# Traffic AI V0.5.4 — Alembic Revision Guard
+# Traffic AI V0.5.5 — best.pt Activation Reliability & UI Spacing
 
 **Đồ án môn Trí tuệ nhân tạo:** Nghiên cứu và xây dựng hệ thống phát hiện, phân loại, theo dõi và đếm phương tiện giao thông qua camera.
 
@@ -8,11 +8,11 @@
 > D:\LienThongDH\DoAn\traffic-ai
 > ```
 
-## 1. Mục tiêu V0.5.4
+## 1. Mục tiêu V0.5.5
 
-> **Hotfix V0.5.4:** sửa lỗi Backend không khởi động sau khi toàn bộ test đã PASS do Alembic cố ghi revision ID `0017_ai_test_dependency_isolation_v053` dài 38 ký tự vào cột `alembic_version.version_num` mặc định chỉ `VARCHAR(32)`. V0.5.4 rút gọn revision V0.5.3 thành `0017_ai_test_dep_v053`, thêm bước self-heal trước migration để nới cột lên `VARCHAR(128)`, và thêm contract kiểm tra tất cả revision ID không vượt quá 32 ký tự.
+> **Hotfix V0.5.5:** sửa lỗi Backend không khởi động sau khi toàn bộ test đã PASS do Alembic cố ghi revision ID `0017_ai_test_dependency_isolation_v053` dài 38 ký tự vào cột `alembic_version.version_num` mặc định chỉ `VARCHAR(32)`. V0.5.5 rút gọn revision V0.5.3 thành `0017_ai_test_dep_v053`, thêm bước self-heal trước migration để nới cột lên `VARCHAR(128)`, và thêm contract kiểm tra tất cả revision ID không vượt quá 32 ký tự.
 
-> V0.5.3 vẫn giữ nguyên fix lazy import OpenCV/PyYAML cho unit test AI Service; V0.5.4 chỉ harden chuỗi migration/startup, không xóa dữ liệu camera, đếm xe, dataset hay training run.
+> V0.5.3 vẫn giữ nguyên fix lazy import OpenCV/PyYAML cho unit test AI Service; V0.5.5 chỉ harden chuỗi migration/startup, không xóa dữ liệu camera, đếm xe, dataset hay training run.
 
 V0.5.0 chuyển dự án từ giai đoạn chỉ tối ưu **pretrained COCO + runtime** sang giai đoạn **huấn luyện model riêng cho cảnh giao thông Việt Nam**. Đây là bước cần thiết để giảm các nhầm lẫn như:
 
@@ -113,7 +113,7 @@ Docker mount vào AI Service:
 
 Các thư mục runtime được `.gitignore` để không đẩy hàng GB ảnh/weights lên GitHub.
 
-## 5. Database V0.5.4
+## 5. Database V0.5.5
 
 Chuỗi migration hiện tại:
 
@@ -129,7 +129,7 @@ Chuỗi migration hiện tại:
 0018_alembic_guard_v054
 ```
 
-Migration `0014` tạo các bảng Dataset/Fine-tune; `0015` dọn UI/test harness; `0016` đồng bộ contract Smooth Playback; `0017` đánh dấu hotfix tách dependency unit-test/runtime; `0018` nới `alembic_version.version_num` lên `VARCHAR(128)` trên PostgreSQL và đánh dấu V0.5.4. Các migration hotfix không xóa dữ liệu nghiệp vụ.
+Migration `0014` tạo các bảng Dataset/Fine-tune; `0015` dọn UI/test harness; `0016` đồng bộ contract Smooth Playback; `0017` đánh dấu hotfix tách dependency unit-test/runtime; `0018` nới `alembic_version.version_num` lên `VARCHAR(128)` trên PostgreSQL và đánh dấu V0.5.5. Các migration hotfix không xóa dữ liệu nghiệp vụ.
 
 `schema_version`:
 
@@ -433,7 +433,7 @@ Test local
 → PASS
 → Commit
 → Push main
-→ Tag v0.5.4
+→ Tag v0.5.5
 → GitHub Actions
 → ZIP / TAR.GZ / SHA256
 → GitHub Release
@@ -572,10 +572,19 @@ Tách native video playback khỏi AI Overlay/MJPEG; thêm progress, realtime fa
 - Revision thực tế của migration V0.5.3 được rút gọn thành `0017_ai_test_dep_v053` để tương thích giới hạn 32 ký tự của Alembic mặc định.
 - Cập nhật `schema_version = 0.5.3`.
 
-### V0.5.4 — Alembic Revision Guard
+### V0.5.5 — Alembic Revision Guard
 - Sửa lỗi `StringDataRightTruncation: value too long for type character varying(32)` khi Backend chạy `alembic upgrade head`.
 - Rút gọn revision ID V0.5.3 từ 38 ký tự xuống `0017_ai_test_dep_v053`.
 - Thêm `0018_alembic_guard_v054`, cập nhật `schema_version = 0.5.4`.
 - Backend tự nới `alembic_version.version_num` lên `VARCHAR(128)` trước khi chạy Alembic và tự map revision ID V0.5.3 cũ nếu môi trường nào đã từng lưu được ID dài.
 - `test.ps1` kiểm tra toàn bộ revision ID không vượt 32 ký tự để ngăn lỗi startup tương tự quay lại.
 
+
+
+### V0.5.5 — Kích hoạt best.pt ổn định + tách khung giao diện
+
+- Sửa nút **Kích hoạt best.pt**: activation idempotent, bấm lại không tạo model trùng và không còn lỗi `Internal Server Error` do unique constraint.
+- Frontend đọc lỗi API an toàn: nếu proxy/backend trả text thay vì JSON sẽ hiện đúng nội dung lỗi, không còn `Unexpected token ... is not valid JSON`.
+- Training run đang được dùng hiển thị badge **✓ ĐANG DÙNG best.pt**.
+- Tách khoảng cách giữa khối Dataset/Fine-tune và Lịch sử PostgreSQL/Phiên chạy để các panel không dính sát nhau.
+- Thêm migration `0019_activation_ui_v055`, `schema_version = 0.5.5`.
