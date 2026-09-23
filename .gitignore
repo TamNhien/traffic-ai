@@ -20,3 +20,9 @@ videos/*
 !videos/.gitkeep
 snapshots/*
 !snapshots/.gitkeep
+
+# Dataset/training runtime artifacts
+datasets/*
+!datasets/.gitkeep
+training-runs/*
+!training-runs/.gitkeep

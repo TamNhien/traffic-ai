@@ -158,3 +158,49 @@ class SystemSetting(Base):
     value: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+class DatasetRecord(Base):
+    __tablename__ = "datasets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    slug: Mapped[str] = mapped_column(String(80), unique=True, nullable=False, index=True)
+    source_camera_id: Mapped[int | None] = mapped_column(ForeignKey("cameras.id", ondelete="SET NULL"), index=True)
+    source_url: Mapped[str | None] = mapped_column(Text)
+    root_path: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="draft", nullable=False, index=True)
+    sample_every_n_frames: Mapped[int] = mapped_column(Integer, default=10, nullable=False)
+    image_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    labeled_images: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    box_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    train_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    val_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    test_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    classes_json: Mapped[str] = mapped_column(Text, default='["motorcycle","bicycle","car","bus","truck"]', nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+class TrainingRun(Base):
+    __tablename__ = "training_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    dataset_id: Mapped[int] = mapped_column(ForeignKey("datasets.id", ondelete="CASCADE"), nullable=False, index=True)
+    base_model: Mapped[str] = mapped_column(String(160), default="yolo26s.pt", nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="queued", nullable=False, index=True)
+    epochs: Mapped[int] = mapped_column(Integer, default=80, nullable=False)
+    imgsz: Mapped[int] = mapped_column(Integer, default=640, nullable=False)
+    batch_size: Mapped[int] = mapped_column(Integer, default=8, nullable=False)
+    device: Mapped[str] = mapped_column(String(40), default="auto", nullable=False)
+    current_epoch: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    progress: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    precision: Mapped[float | None] = mapped_column(Float)
+    recall: Mapped[float | None] = mapped_column(Float)
+    map50: Mapped[float | None] = mapped_column(Float)
+    map50_95: Mapped[float | None] = mapped_column(Float)
+    best_model_path: Mapped[str | None] = mapped_column(Text)
+    last_error: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

@@ -58,7 +58,7 @@ if (Test-Path $envPath) {
   }
 }
 
-# V0.4.0: nâng detector/classifier và Realtime Gate 4.0.
+# V0.5.2: giữ detector/classifier và Realtime Gate 4.0.
 function Set-EnvDefaultUpgrade([string]$Key, [string]$OldValue, [string]$NewValue) {
   $text = Get-Content $envPath -Raw
   $pattern = "(?m)^" + [regex]::Escape($Key) + "=" + [regex]::Escape($OldValue) + "[ \t]*\r?$"
@@ -98,6 +98,23 @@ Ensure-EnvSetting "AI_BICYCLE_MIN_HITS" "4"
 Ensure-EnvSetting "AI_WARMUP" "1"
 
 # V0.2.8: bootstrap HTTPS/hosts tự động.
+
+Ensure-EnvSetting "AI_VIDEO_PACE" "1"
+Ensure-EnvSetting "AI_NATIVE_VIDEO_PREVIEW" "1"
+Ensure-EnvSetting "AI_MJPEG_WAIT_TIMEOUT" "2.0"
+
+# V0.5.2 Dataset & Fine-tune Studio
+Ensure-EnvSetting "AI_DATASET_ROOT" "/data/datasets"
+Ensure-EnvSetting "AI_TRAINING_ROOT" "/data/training-runs"
+Ensure-EnvSetting "AI_TRAIN_BASE_MODEL" "yolo26s.pt"
+Ensure-EnvSetting "AI_TRAIN_EPOCHS" "80"
+Ensure-EnvSetting "AI_TRAIN_IMGSZ" "640"
+Ensure-EnvSetting "AI_TRAIN_BATCH" "8"
+Ensure-EnvSetting "AI_TRAIN_WORKERS" "4"
+Ensure-EnvSetting "AI_TRAIN_PATIENCE" "20"
+Ensure-EnvSetting "AI_TRAIN_CACHE" "false"
+Ensure-EnvSetting "AI_DATASET_SEED" "2026"
+
 & (Join-Path $PSScriptRoot "ensure-local-https.ps1") -HostName "traffic-ai.test"
 
 $volume = docker volume ls --filter "name=^traffic_ai_postgres_data$" --format "{{.Name}}"
@@ -157,7 +174,7 @@ if (-not $dashboardOk -or -not $apiOk) {
 }
 
 Write-Host ""
-Write-Host "[OK] Traffic AI V0.4.0 đã khởi động." -ForegroundColor Green
+Write-Host "[OK] Traffic AI V0.5.4 đã khởi động." -ForegroundColor Green
 Write-Host "Dashboard : https://traffic-ai.test:8443"
 Write-Host "API Docs  : https://traffic-ai.test:8444/docs"
 Write-Host "PostgreSQL: 127.0.0.1:5445 / traffic_ai_db"

@@ -18,3 +18,33 @@ class PipelineStart(BaseModel):
     line_y1: float = Field(default=0.5, ge=0, le=1)
     line_x2: float = Field(default=0.9, ge=0, le=1)
     line_y2: float = Field(default=0.5, ge=0, le=1)
+
+
+class DatasetExtractRequest(BaseModel):
+    slug: str = Field(min_length=2, max_length=80)
+    source_url: str = Field(min_length=1)
+    every_n_frames: int = Field(default=10, ge=1, le=10000)
+    max_images: int = Field(default=1200, ge=10, le=50000)
+
+
+class DatasetAutoLabelRequest(BaseModel):
+    slug: str = Field(min_length=2, max_length=80)
+    model_path: str = Field(default="yolo26s.pt", min_length=1)
+    confidence: float = Field(default=0.25, ge=0.05, le=0.95)
+
+
+class DatasetPrepareRequest(BaseModel):
+    slug: str = Field(min_length=2, max_length=80)
+    train_ratio: float = Field(default=0.70, ge=0.50, lt=1.0)
+    val_ratio: float = Field(default=0.20, gt=0.0, lt=0.50)
+    seed: int = 2026
+
+
+class TrainingStartRequest(BaseModel):
+    run_id: int = Field(ge=1)
+    dataset_slug: str = Field(min_length=2, max_length=80)
+    base_model: str = Field(default="yolo26s.pt", min_length=1)
+    epochs: int = Field(default=80, ge=1, le=1000)
+    imgsz: int = Field(default=640, ge=320, le=1920)
+    batch: int = Field(default=8, ge=1, le=256)
+    device: str = "auto"

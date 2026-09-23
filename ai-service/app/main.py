@@ -6,14 +6,15 @@ import platform
 import time
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.runtime import registry
-from app.schemas import PipelineStart, SourceValidationRequest
-from app.sources import inspect_source, list_video_sources, read_source_preview
+from app.schemas import DatasetAutoLabelRequest, DatasetExtractRequest, DatasetPrepareRequest, PipelineStart, SourceValidationRequest, TrainingStartRequest
+from app.sources import inspect_source, list_video_sources, read_source_preview, resolve_video_path
+from app.training import auto_label, dataset_stats, extract_frames, prepare_dataset, training_registry
 
-APP_VERSION = '0.4.0'
+APP_VERSION = '0.5.4'
 app = FastAPI(title='Traffic AI Service', version=APP_VERSION)
 SNAPSHOT_DIR = Path(os.getenv('SNAPSHOT_DIR', '/tmp/traffic-ai-snapshots'))
 SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
@@ -42,7 +43,7 @@ def health() -> dict:
         'status': 'ready',
         'service': 'ai-service',
         'version': APP_VERSION,
-        'pipeline': 'yolo26s-bytetrack-realtime-gate-v4',
+        'pipeline': 'yolo26s-bytetrack-smooth-gate-v4.1',
         'model': os.getenv('AI_MODEL_NAME', 'yolo26s.pt'),
         'device': os.getenv('AI_DEVICE', 'auto'),
         'performance': {
@@ -56,6 +57,9 @@ def health() -> dict:
             'gate_roi_margin': float(os.getenv('AI_GATE_ROI_MARGIN', '0.22')),
             'async_event_writer': True,
             'async_stream_encoder': True,
+            'native_video_playback': os.getenv('AI_NATIVE_VIDEO_PREVIEW', '1'),
+            'video_pacing': os.getenv('AI_VIDEO_PACE', '1'),
+            'mjpeg_new_frames_only': True,
         },
         'gpu': gpu,
         'active_pipelines': len([p for p in registry.list() if p['status'] in {'starting', 'warming', 'running'}]),
@@ -88,6 +92,92 @@ def source_preview(payload: SourceValidationRequest) -> Response:
     except Exception as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return Response(content=jpeg, media_type='image/jpeg', headers={'Cache-Control': 'no-store'})
+
+
+
+
+@app.get('/media/video')
+def local_video_media(source_url: str = Query(..., min_length=1)) -> FileResponse:
+    """Serve a local MP4/video directly to the browser with HTTP Range support.
+
+    The dashboard uses this path for smooth native playback. AI inference remains
+    independent, so variable inference/JPEG latency no longer makes the clip
+    appear to freeze or jump.
+    """
+    try:
+        path = resolve_video_path(source_url)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail='Video not found')
+    return FileResponse(
+        path,
+        media_type='video/mp4' if path.suffix.lower() in {'.mp4', '.m4v'} else None,
+        headers={
+            'Cache-Control': 'no-store',
+            'Accept-Ranges': 'bytes',
+            'X-Content-Type-Options': 'nosniff',
+        },
+    )
+
+
+@app.post('/datasets/extract')
+def dataset_extract(payload: DatasetExtractRequest) -> dict:
+    try:
+        source = resolve_video_path(payload.source_url)
+        if not source.exists():
+            raise ValueError(f"Không tìm thấy video: {payload.source_url}")
+        return extract_frames(source, payload.slug, payload.every_n_frames, payload.max_images)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post('/datasets/autolabel')
+def dataset_autolabel(payload: DatasetAutoLabelRequest) -> dict:
+    try:
+        return auto_label(payload.slug, payload.model_path, payload.confidence)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post('/datasets/prepare')
+def dataset_prepare(payload: DatasetPrepareRequest) -> dict:
+    try:
+        return prepare_dataset(payload.slug, payload.train_ratio, payload.val_ratio, payload.seed)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get('/datasets/{slug}/stats')
+def dataset_statistics(slug: str) -> dict:
+    try:
+        return dataset_stats(slug)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post('/training/start', status_code=201)
+def training_start(payload: TrainingStartRequest) -> dict:
+    try:
+        return training_registry.start(
+            run_id=payload.run_id, dataset_slug=payload.dataset_slug, base_model=payload.base_model,
+            epochs=payload.epochs, imgsz=payload.imgsz, batch=payload.batch, device=payload.device,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.get('/training')
+def training_runs() -> list[dict]:
+    return training_registry.list()
+
+
+@app.get('/training/{run_id}')
+def training_status(run_id: int) -> dict:
+    try:
+        return training_registry.get(run_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail='Training run not found') from exc
 
 
 @app.get('/pipelines')
@@ -123,13 +213,23 @@ def stop_pipeline(camera_id: int) -> dict:
 
 
 def mjpeg_frames(camera_id: int):
+    # Yield only newly encoded frames. The old loop retransmitted the same JPEG
+    # every 30 ms while inference was busy, wasting bandwidth/CPU and making the
+    # browser's MJPEG timing more erratic.
+    last_sequence = -1
+    timeout = float(os.getenv('AI_MJPEG_WAIT_TIMEOUT', '2.0'))
     while True:
-        jpeg = registry.latest_jpeg(camera_id)
+        sequence, jpeg = registry.wait_for_jpeg(camera_id, last_sequence, timeout=timeout)
         if jpeg is None:
-            time.sleep(0.1)
+            try:
+                state = registry.get(camera_id)
+            except KeyError:
+                break
+            if state.get('status') in {'completed', 'stopped', 'error'}:
+                break
             continue
+        last_sequence = sequence
         yield b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + jpeg + b'\r\n'
-        time.sleep(0.03)
 
 
 @app.get('/streams/{camera_id}.mjpg')

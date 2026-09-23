@@ -28,8 +28,9 @@ class PipelineWorker(threading.Thread):
         self.state = state
         self.on_finished = on_finished
         self._stop_event = threading.Event()
-        self._jpeg_lock = threading.Lock()
+        self._jpeg_condition = threading.Condition()
         self._latest_jpeg: bytes | None = None
+        self._latest_jpeg_sequence = 0
         self._seen_track_ids: set[int] = set()
         self._labels = TrackLabelSmoother(history=int(os.getenv("AI_CLASS_HISTORY", "30")))
         self._class_policy = VehicleClassPolicy(
@@ -58,6 +59,7 @@ class PipelineWorker(threading.Thread):
         self.refine_model_name = os.getenv("AI_REFINE_MODEL_NAME", "yolo26m.pt")
         self.refine_imgsz = int(os.getenv("AI_REFINE_IMGSZ", "640"))
         self.warmup = os.getenv("AI_WARMUP", "1").strip().lower() not in {"0", "false", "no"}
+        self.video_pace = os.getenv("AI_VIDEO_PACE", "1").strip().lower() not in {"0", "false", "no"}
         self.iou = float(os.getenv("AI_IOU", "0.55"))
         self.tracker_config = str(Path(__file__).with_name("bytetrack_traffic.yaml"))
         self._event_dispatcher = EventDispatcher(self.backend_url, self.shared_token, self.state)
@@ -65,12 +67,22 @@ class PipelineWorker(threading.Thread):
 
     @property
     def latest_jpeg(self) -> bytes | None:
-        with self._jpeg_lock:
+        with self._jpeg_condition:
             return self._latest_jpeg
 
     def _set_latest_jpeg(self, payload: bytes) -> None:
-        with self._jpeg_lock:
+        with self._jpeg_condition:
             self._latest_jpeg = payload
+            self._latest_jpeg_sequence += 1
+            self._jpeg_condition.notify_all()
+
+    def wait_for_jpeg(self, after_sequence: int, timeout: float = 2.0) -> tuple[int, bytes | None]:
+        with self._jpeg_condition:
+            if self._latest_jpeg_sequence <= after_sequence and not self._stop_event.is_set():
+                self._jpeg_condition.wait(timeout=max(0.05, timeout))
+            if self._latest_jpeg_sequence <= after_sequence:
+                return after_sequence, None
+            return self._latest_jpeg_sequence, self._latest_jpeg
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -101,7 +113,11 @@ class PipelineWorker(threading.Thread):
                 raise RuntimeError(f"Cannot open source: {self.payload.source_url}")
 
             source_fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+            source_frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0) if self.payload.source_type == "video" else 0
             self.state.source_fps = round(source_fps, 2) if source_fps > 0 else 0.0
+            self.state.source_frame_count = source_frame_count
+            if source_fps > 0 and source_frame_count > 0:
+                self.state.source_duration_seconds = round(source_frame_count / source_fps, 3)
             self.state.frame_policy = "all-frames" if self.payload.source_type == "video" else "live-latest"
             self.state.status = "warming"
 
@@ -279,9 +295,24 @@ class PipelineWorker(threading.Thread):
                     self._jpeg_encoder.submit(frame)
 
                 elapsed = max(time.perf_counter() - (loop_started or time.perf_counter()), 0.001)
+
+                # Local MP4 playback is displayed natively by the browser in V0.4.1.
+                # When AI is faster than the source, pace it to the source clock so
+                # counters/annotations do not race far ahead of the smooth video.
+                # When AI is slower we never drop source frames; lag is reported.
+                if self.payload.source_type == "video" and self.video_pace and self.state.source_fps > 0:
+                    target_elapsed = self.state.processed_frames / self.state.source_fps
+                    ahead = target_elapsed - elapsed
+                    if ahead > 0:
+                        time.sleep(min(ahead, 0.05))
+                        elapsed = max(time.perf_counter() - (loop_started or time.perf_counter()), 0.001)
+                    self.state.playback_lag_seconds = round(max(0.0, elapsed - target_elapsed), 3)
+
                 self.state.fps = round(self.state.processed_frames / elapsed, 2)
                 if self.state.source_fps > 0:
                     self.state.realtime_factor = round(self.state.fps / self.state.source_fps, 3)
+                if self.state.source_frame_count > 0:
+                    self.state.processing_progress = round(min(100.0, self.state.processed_frames * 100.0 / self.state.source_frame_count), 1)
 
             if self.state.status == "running":
                 self.state.status = "stopped"

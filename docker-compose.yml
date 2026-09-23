@@ -53,6 +53,8 @@ services:
       - ./models:/data/models
       - ./videos:/data/videos:ro
       - ./snapshots:/data/snapshots
+      - ./datasets:/data/datasets
+      - ./training-runs:/data/training-runs
     depends_on:
       backend:
         condition: service_healthy

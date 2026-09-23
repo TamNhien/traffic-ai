@@ -20,7 +20,7 @@ def test_root_metadata() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["name"] == "Traffic AI"
-    assert payload["version"] == "0.4.0"
+    assert payload["version"] == "0.5.4"
     assert payload["docs"] == "/docs"
     assert payload["health"] == "/api/health"
 
@@ -56,3 +56,9 @@ def test_camera_update_can_change_source_and_code() -> None:
     assert payload.code == "CAM-DEMO"
     assert payload.source_type.value == "video"
     assert payload.source_url == "/data/videos/demo.mp4"
+
+
+
+def test_dataset_slug_is_stable() -> None:
+    from app.api.routes import _dataset_slug
+    assert _dataset_slug("Traffic Dataset 01") == "traffic-dataset-01"

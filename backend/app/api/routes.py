@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta, timezone
 
 import httpx2 as httpx
+import json
+import re
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
 from pydantic import BaseModel
 from sqlalchemy import func, select, text
@@ -9,11 +11,64 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db.session import get_db
-from app.models.all_models import AIModel, Camera, CameraStatus, CountingSession, Direction, SessionStatus, VehicleCount, VehicleEvent, VehicleType
+from app.models.all_models import AIModel, Camera, CameraStatus, CountingSession, DatasetRecord, Direction, SessionStatus, TrainingRun, VehicleCount, VehicleEvent, VehicleType
 from app.schemas.camera import CameraCreate, CameraRead, CameraUpdate
 from app.schemas.event import VehicleEventCreate, VehicleEventRead
 
 router = APIRouter(prefix="/api")
+
+
+class DatasetCreate(BaseModel):
+    name: str
+    camera_id: int
+    every_n_frames: int = 10
+    max_images: int = 1200
+
+
+class DatasetAction(BaseModel):
+    confidence: float = 0.25
+    train_ratio: float = 0.70
+    val_ratio: float = 0.20
+    seed: int = 2026
+
+
+class TrainingCreate(BaseModel):
+    dataset_id: int
+    base_model: str = "yolo26s.pt"
+    epochs: int = 80
+    imgsz: int = 640
+    batch: int = 8
+    device: str = "auto"
+
+
+def _dataset_slug(name: str) -> str:
+    value = re.sub(r"[^a-z0-9_-]+", "-", name.strip().lower())
+    value = re.sub(r"-+", "-", value).strip("-_")
+    if not value:
+        raise HTTPException(status_code=422, detail="Tên dataset không hợp lệ")
+    return value[:64]
+
+
+def _dataset_payload(row: DatasetRecord) -> dict:
+    return {
+        "id": row.id, "name": row.name, "slug": row.slug, "source_camera_id": row.source_camera_id,
+        "source_url": row.source_url, "root_path": row.root_path, "status": row.status,
+        "sample_every_n_frames": row.sample_every_n_frames, "image_count": row.image_count,
+        "labeled_images": row.labeled_images, "box_count": row.box_count,
+        "train_count": row.train_count, "val_count": row.val_count, "test_count": row.test_count,
+        "classes": json.loads(row.classes_json or "[]"), "created_at": row.created_at, "updated_at": row.updated_at,
+    }
+
+
+def _training_payload(row: TrainingRun) -> dict:
+    return {
+        "id": row.id, "dataset_id": row.dataset_id, "base_model": row.base_model, "status": row.status,
+        "epochs": row.epochs, "imgsz": row.imgsz, "batch": row.batch_size, "device": row.device,
+        "current_epoch": row.current_epoch, "progress": row.progress, "precision": row.precision,
+        "recall": row.recall, "map50": row.map50, "map50_95": row.map50_95,
+        "best_model_path": row.best_model_path, "last_error": row.last_error,
+        "started_at": row.started_at, "ended_at": row.ended_at, "created_at": row.created_at,
+    }
 
 
 class SessionFinish(BaseModel):
@@ -425,3 +480,131 @@ def vehicle_types() -> list[str]:
 @router.get("/meta/directions")
 def directions() -> list[str]:
     return [item.value for item in Direction]
+
+
+@router.get("/datasets")
+def list_datasets(db: Session = Depends(get_db)) -> list[dict]:
+    rows = db.scalars(select(DatasetRecord).order_by(DatasetRecord.id.desc())).all()
+    return [_dataset_payload(row) for row in rows]
+
+
+@router.post("/datasets", status_code=201)
+def create_dataset(payload: DatasetCreate, db: Session = Depends(get_db)) -> dict:
+    camera = db.get(Camera, payload.camera_id)
+    if camera is None:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    if camera.source_type.value != "video":
+        raise HTTPException(status_code=422, detail="V0.5.4 trích dataset tự động từ video local trước; RTSP sẽ bổ sung ở bản sau.")
+    base_slug = _dataset_slug(payload.name)
+    slug = base_slug
+    suffix = 1
+    while db.scalar(select(DatasetRecord.id).where(DatasetRecord.slug == slug)) is not None:
+        suffix += 1
+        slug = f"{base_slug}-{suffix}"
+    row = DatasetRecord(
+        name=payload.name.strip(), slug=slug, source_camera_id=camera.id, source_url=camera.source_url,
+        root_path=f"/data/datasets/{slug}", status="extracting", sample_every_n_frames=payload.every_n_frames,
+    )
+    db.add(row); db.commit(); db.refresh(row)
+    try:
+        response = httpx.post(f"{settings.ai_service_url}/datasets/extract", json={
+            "slug": slug, "source_url": camera.source_url, "every_n_frames": payload.every_n_frames,
+            "max_images": payload.max_images,
+        }, timeout=120.0)
+        response.raise_for_status(); info = response.json()
+        row.image_count = int(info.get("image_count", 0)); row.status = "extracted"
+        db.commit(); db.refresh(row)
+    except Exception as exc:
+        row.status = "error"; db.commit()
+        raise HTTPException(status_code=502, detail=f"Không trích được dataset: {exc}") from exc
+    return _dataset_payload(row)
+
+
+@router.post("/datasets/{dataset_id}/autolabel")
+def autolabel_dataset(dataset_id: int, payload: DatasetAction, db: Session = Depends(get_db)) -> dict:
+    row = db.get(DatasetRecord, dataset_id)
+    if row is None: raise HTTPException(status_code=404, detail="Dataset not found")
+    model = db.scalar(select(AIModel).where(AIModel.is_active.is_(True)).order_by(AIModel.id.desc()))
+    model_path = model.model_path if model else "yolo26s.pt"
+    response = httpx.post(f"{settings.ai_service_url}/datasets/autolabel", json={"slug": row.slug, "model_path": model_path, "confidence": payload.confidence}, timeout=3600.0)
+    if not response.is_success: raise HTTPException(status_code=502, detail=response.text)
+    info = response.json(); row.labeled_images = int(info.get("labeled_images", 0)); row.box_count = int(info.get("box_count", 0)); row.status = "pseudo_labeled"
+    db.commit(); db.refresh(row)
+    return {**_dataset_payload(row), "warning": "Auto-label chỉ là nhãn gợi ý. Hãy rà soát nhãn trước khi train để tránh học sai."}
+
+
+@router.get("/datasets/{dataset_id}/stats")
+def dataset_stats_route(dataset_id: int, db: Session = Depends(get_db)) -> dict:
+    row = db.get(DatasetRecord, dataset_id)
+    if row is None: raise HTTPException(status_code=404, detail="Dataset not found")
+    response = httpx.get(f"{settings.ai_service_url}/datasets/{row.slug}/stats", timeout=30.0)
+    if not response.is_success: raise HTTPException(status_code=502, detail=response.text)
+    return response.json()
+
+
+@router.post("/datasets/{dataset_id}/prepare")
+def prepare_dataset_route(dataset_id: int, payload: DatasetAction, db: Session = Depends(get_db)) -> dict:
+    row = db.get(DatasetRecord, dataset_id)
+    if row is None: raise HTTPException(status_code=404, detail="Dataset not found")
+    response = httpx.post(f"{settings.ai_service_url}/datasets/prepare", json={
+        "slug": row.slug, "train_ratio": payload.train_ratio, "val_ratio": payload.val_ratio, "seed": payload.seed,
+    }, timeout=180.0)
+    if not response.is_success: raise HTTPException(status_code=502, detail=response.text)
+    info = response.json(); splits = info.get("splits", {})
+    row.train_count = int(splits.get("train", 0)); row.val_count = int(splits.get("val", 0)); row.test_count = int(splits.get("test", 0)); row.status = "ready"
+    db.commit(); db.refresh(row)
+    return {**_dataset_payload(row), "dataset_yaml": info.get("dataset_yaml")}
+
+
+@router.get("/training/runs")
+def list_training_runs(db: Session = Depends(get_db)) -> list[dict]:
+    rows = db.scalars(select(TrainingRun).order_by(TrainingRun.id.desc()).limit(50)).all()
+    for row in rows:
+        if row.status in {"queued", "running"}:
+            try:
+                response = httpx.get(f"{settings.ai_service_url}/training/{row.id}", timeout=2.0)
+                if response.is_success:
+                    state = response.json(); row.status = state.get("status", row.status); row.current_epoch = int(state.get("current_epoch", row.current_epoch)); row.progress = float(state.get("progress", row.progress)); row.precision = state.get("precision"); row.recall = state.get("recall"); row.map50 = state.get("map50"); row.map50_95 = state.get("map50_95"); row.best_model_path = state.get("best_model_path"); row.last_error = state.get("last_error")
+                    if row.status == "running" and row.started_at is None: row.started_at = datetime.now(timezone.utc)
+                    if row.status in {"completed", "failed"} and row.ended_at is None: row.ended_at = datetime.now(timezone.utc)
+            except Exception:
+                pass
+    db.commit()
+    return [_training_payload(row) for row in rows]
+
+
+@router.post("/training/runs", status_code=201)
+def create_training_run(payload: TrainingCreate, db: Session = Depends(get_db)) -> dict:
+    dataset = db.get(DatasetRecord, payload.dataset_id)
+    if dataset is None: raise HTTPException(status_code=404, detail="Dataset not found")
+    if dataset.status != "ready": raise HTTPException(status_code=409, detail="Dataset phải ở trạng thái ready trước khi train.")
+    row = TrainingRun(dataset_id=dataset.id, base_model=payload.base_model, epochs=payload.epochs, imgsz=payload.imgsz, batch_size=payload.batch, device=payload.device, status="queued")
+    db.add(row); db.commit(); db.refresh(row)
+    response = httpx.post(f"{settings.ai_service_url}/training/start", json={
+        "run_id": row.id, "dataset_slug": dataset.slug, "base_model": row.base_model, "epochs": row.epochs,
+        "imgsz": row.imgsz, "batch": row.batch_size, "device": row.device,
+    }, timeout=15.0)
+    if not response.is_success:
+        row.status="failed"; row.last_error=response.text; db.commit(); raise HTTPException(status_code=502, detail=response.text)
+    row.status="running"; row.started_at=datetime.now(timezone.utc); db.commit(); db.refresh(row)
+    return _training_payload(row)
+
+
+@router.post("/training/runs/{run_id}/activate")
+def activate_training_model(run_id: int, db: Session = Depends(get_db)) -> dict:
+    run = db.get(TrainingRun, run_id)
+    if run is None: raise HTTPException(status_code=404, detail="Training run not found")
+    # Đồng bộ trạng thái mới nhất trước khi kích hoạt.
+    list_training_runs(db)
+    db.refresh(run)
+    if run.status != "completed" or not run.best_model_path:
+        raise HTTPException(status_code=409, detail="Training run chưa hoàn tất hoặc chưa có best.pt")
+    db.query(AIModel).update({AIModel.is_active: False})
+    dataset = db.get(DatasetRecord, run.dataset_id)
+    model = AIModel(
+        name=f"Traffic AI Custom #{run.id}", version="0.5.4-finetuned", architecture="YOLO26",
+        model_path=run.best_model_path, training_dataset=dataset.name if dataset else None,
+        precision=run.precision, recall=run.recall, map50=run.map50, map50_95=run.map50_95, is_active=True,
+    )
+    db.add(model); db.commit(); db.refresh(model)
+    return {"status":"active", "model_id":model.id, "model_path":model.model_path, "name":model.name}

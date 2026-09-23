@@ -1,6 +1,6 @@
-# Traffic AI V0.4.0 — Realtime Gate Engine 4.0
+# Traffic AI V0.5.4 — Alembic Revision Guard
 
-**Đồ án môn Trí tuệ nhân tạo:** Nghiên cứu và xây dựng hệ thống phát hiện, nhận diện, theo dõi và đếm phương tiện giao thông qua camera.
+**Đồ án môn Trí tuệ nhân tạo:** Nghiên cứu và xây dựng hệ thống phát hiện, phân loại, theo dõi và đếm phương tiện giao thông qua camera.
 
 > Thư mục làm việc mặc định:
 >
@@ -8,246 +8,345 @@
 > D:\LienThongDH\DoAn\traffic-ai
 > ```
 
-## 1. Mục tiêu của V0.4.0
+## 1. Mục tiêu V0.5.4
 
-V0.4.0 tập trung vào hai vấn đề thực tế của các bản V0.3.x:
+> **Hotfix V0.5.4:** sửa lỗi Backend không khởi động sau khi toàn bộ test đã PASS do Alembic cố ghi revision ID `0017_ai_test_dependency_isolation_v053` dài 38 ký tự vào cột `alembic_version.version_num` mặc định chỉ `VARCHAR(32)`. V0.5.4 rút gọn revision V0.5.3 thành `0017_ai_test_dep_v053`, thêm bước self-heal trước migration để nới cột lên `VARCHAR(128)`, và thêm contract kiểm tra tất cả revision ID không vượt quá 32 ký tự.
 
-- xe chạy nhanh hoặc mất Track ID ngắn hạn đi qua vạch nhưng không được đếm;
-- video/clip có lúc khựng do encode MJPEG, ghi PostgreSQL hoặc load model tinh chỉnh ngay trong vòng lặp inference;
-- YOLO pretrained còn nhầm `motorcycle ↔ bicycle`, `car ↔ truck ↔ bus` ở góc camera từ trên cao.
+> V0.5.3 vẫn giữ nguyên fix lazy import OpenCV/PyYAML cho unit test AI Service; V0.5.4 chỉ harden chuỗi migration/startup, không xóa dữ liệu camera, đếm xe, dataset hay training run.
 
-Pipeline mới:
+V0.5.0 chuyển dự án từ giai đoạn chỉ tối ưu **pretrained COCO + runtime** sang giai đoạn **huấn luyện model riêng cho cảnh giao thông Việt Nam**. Đây là bước cần thiết để giảm các nhầm lẫn như:
+
+- xe máy ↔ xe đạp;
+- ô tô ↔ xe tải nhẹ;
+- xe tải ↔ xe buýt;
+- xe nhỏ ở xa;
+- xe bị che khuất hoặc đi qua vùng nắng/bóng cây;
+- cùng một loại xe nhưng hình dáng khác dữ liệu COCO.
+
+Không có hệ thống camera + AI thực tế nào có thể cam kết **100% chính xác trong mọi tình huống**. V0.5.0 bổ sung quy trình đo lường để biết model đạt bao nhiêu thay vì suy đoán.
+
+Pipeline phát hiện/đếm V0.4.1 vẫn được giữ nguyên:
 
 ```text
-Video / RTSP / Camera
-        ↓
-Gate-focused ROI
-        ↓
-YOLO26s detector
-        ↓
-ByteTrack traffic profile
-        ↓
-Track Continuity Resolver
-        ↓
-Motion-leading anchor
-        ↓
-Trajectory Gate 4.0
-        ↓
-IN / OUT crossing
-        ↓
-YOLO26m crossing refiner (khi cần)
-        ↓
-VehicleClassPolicy
-        ↓
-Async PostgreSQL event writer
-        ↓
+MP4 / RTSP
+    ↓
+YOLO26s
+    ↓
+ByteTrack + Track Continuity
+    ↓
+Realtime Gate Engine 4.0
+    ↓
+IN / OUT
+    ↓
 PostgreSQL 18
 ```
 
-### Không cam kết “100%”
-
-Không hệ thống camera/AI thực tế nào có thể bảo đảm chính xác 100% trong mọi điều kiện: che khuất, bóng tối, mưa, ngược sáng, xe chồng lấn, camera rung và góc nhìn đều có thể gây lỗi. V0.4.0 giảm lỗi runtime và tạo nền tảng để đo sai số. Muốn tiến gần mức 98–99% trên **chính camera triển khai**, lộ trình V0.5.x phải dùng dataset giao thông Việt Nam được gán nhãn và fine-tune riêng; nếu yêu cầu gần tuyệt đối trong vận hành thật nên kết hợp thêm cảm biến vật lý.
-
-## 2. Điểm mới V0.4.0
-
-### 2.1. Detector chính chuyển YOLO26n → YOLO26s
-
-- Model realtime mặc định: `yolo26s.pt`.
-- `YOLO26n` vẫn giữ trong bảng `ai_models` để đối chứng.
-- Model tinh chỉnh tại vạch: `yolo26m.pt`.
-- Confidence mặc định camera mới: `0.18`.
-- Chỉ các camera còn đúng default cũ `0.20` mới được migration tự hạ xuống `0.18`; giá trị người dùng đã tự chỉnh không bị ghi đè.
-
-### 2.2. Gate-focused ROI
-
-AI không còn dành toàn bộ độ phân giải model cho toàn khung hình. Một vùng quan tâm lớn bao quanh vạch đếm được cắt ra trước khi inference. Điều này:
-
-- tăng kích thước tương đối của xe khi đi gần vạch;
-- giảm nhiễu từ xe đỗ/vỉa hè ngoài vùng đếm;
-- dùng tài nguyên GPU tập trung cho vùng thực sự quyết định kết quả đếm.
-
-Cấu hình:
-
-```env
-AI_GATE_ROI=1
-AI_GATE_ROI_MARGIN=0.22
-AI_GATE_ROI_MIN_SPAN=0.52
-```
-
-### 2.3. Motion-leading anchor
-
-Bản cũ dùng bottom-center cho mọi hướng xe. V0.4.0 chọn mép dẫn đầu theo vector chuyển động:
+V0.5.0 bổ sung pipeline huấn luyện:
 
 ```text
-xe ↓  → bottom-center
-xe ↑  → top-center
-xe →  → right-center
-xe ←  → left-center
+Video thật từ camera
+      ↓
+Trích frame
+      ↓
+Auto-label bằng YOLO26
+      ↓
+Rà soát/sửa nhãn YOLO
+      ↓
+Train / Val / Test
+      ↓
+Fine-tune YOLO26s hoặc YOLO26m
+      ↓
+Precision / Recall / mAP50 / mAP50-95
+      ↓
+best.pt
+      ↓
+Kích hoạt model tùy biến
+      ↓
+Các phiên đếm mới dùng best.pt
 ```
 
-Do đó xe hai chiều cắt cùng một vạch được phát hiện nhất quán hơn.
+## 2. Công nghệ chính
 
-### 2.4. Trajectory Gate 4.0
+- PostgreSQL **18.6**.
+- Python **3.14.7**.
+- FastAPI **0.141.1**.
+- SQLAlchemy **2.0.54**.
+- Alembic **1.20.0**.
+- PyTorch **2.14.0**.
+- TorchVision **0.29.0**.
+- OpenCV Headless **5.0.0.93**.
+- Ultralytics **8.4.158**.
+- YOLO26s: detector/runtime mặc định.
+- YOLO26m: refiner và lựa chọn fine-tune chính xác hơn.
+- ByteTrack: tracking.
+- React **19.3.0** + Vite **8.3.0**.
+- Node.js **26.9.0** + npm **12.1.0**.
+- Nginx **1.31.6**.
+- Docker Compose + NVIDIA GPU override.
 
-Counter giữ lịch sử trajectory tối đa nhiều frame thay vì chỉ dựa vào hai quan sát gần nhau. Nếu detector/tracker mất xe ngắn hạn:
-
-```text
-frame 100: xe ở phía A
-frame 101..106: mất detection
-frame 107: xe xuất hiện phía B
-```
-
-V0.4.0 kiểm tra toàn đoạn quỹ đạo A → B có cắt **đoạn vạch hữu hạn** hay không. Nếu có và chuyển động đủ vuông góc với vạch, xe vẫn được đếm.
-
-Chỉ phương tiện thực sự đi từ một phía sang phía còn lại mới tăng bộ đếm.
-
-### 2.5. Không để persistence làm đứng clip
-
-Ghi `vehicle_events` sang Backend/PostgreSQL chạy trên `EventDispatcher` riêng. Vòng lặp YOLO không chờ HTTP retry.
-
-```text
-Inference thread ──> queue ──> EventDispatcher ──> Backend ──> PostgreSQL
-```
-
-### 2.6. Encode MJPEG bất đồng bộ
-
-OpenCV resize/JPEG encode chuyển sang `LatestFrameEncoder` riêng. Nếu browser chậm, hệ thống bỏ **frame hiển thị cũ** nhưng không bỏ frame inference của video local.
-
-Video local dùng:
-
-```text
-frame_policy = all-frames
-```
-
-Nghĩa là mọi frame vẫn đi qua detector/tracker/counter; chỉ luồng xem trước có thể bỏ frame để giao diện không kéo chậm AI.
-
-### 2.7. Preload model tinh chỉnh
-
-`yolo26m.pt` được load/warm-up trước khi video bắt đầu. Không còn tình trạng xe đầu tiên cắt vạch mới bắt đầu load model lớn làm clip đứng vài giây.
-
-### 2.8. Xe đạp được phân loại bảo thủ
-
-Với camera giao thông, false-positive `bicycle` rất dễ xảy ra. V0.4.0 chỉ chấp nhận **Xe đạp** khi có đồng thời:
-
-- nhiều frame liên tiếp ủng hộ `bicycle`;
-- độ chắc chắn temporal đủ cao;
-- model refine tại crossing cũng nhận `bicycle` đủ confidence.
-
-Nếu hai bánh còn mơ hồ, hệ thống mặc định về **Xe máy** thay vì ghi nhầm Xe đạp.
-
-> Đây là rule giảm false bicycle, không phải nhận biết trực tiếp động tác “đạp chân”. Để xác định xe đạp/xe máy thật sự ở mọi góc camera cần fine-tune dataset riêng trong V0.5.x.
-
-### 2.9. Bus / truck / car
-
-Khi track có nhãn chưa ổn định, YOLO26m kiểm tra lại crop của chiếc xe tại thời điểm crossing. Kết quả được kết hợp với temporal history trước khi ghi PostgreSQL.
-
-## 3. Cấu hình AI mặc định
-
-```env
-AI_MODEL_NAME=yolo26s.pt
-AI_IMGSZ=640
-AI_PROCESS_MAX_WIDTH=1440
-AI_IOU=0.55
-AI_CLASS_HISTORY=30
-
-AI_STITCH_MAX_GAP=30
-AI_STITCH_DISTANCE_RATIO=0.14
-AI_GATE_HISTORY_GAP=30
-AI_GATE_MIN_NORMAL_RATIO=0.12
-
-AI_GATE_ROI=1
-AI_GATE_ROI_MARGIN=0.22
-AI_GATE_ROI_MIN_SPAN=0.52
-
-AI_REFINE_AT_CROSSING=1
-AI_REFINE_MODEL_NAME=yolo26m.pt
-AI_REFINE_IMGSZ=640
-AI_BICYCLE_CERTAINTY=0.76
-AI_BICYCLE_MIN_HITS=4
-AI_WARMUP=1
-
-AI_STREAM_EVERY_N=2
-AI_STREAM_MAX_WIDTH=960
-AI_JPEG_QUALITY=70
-```
-
-ByteTrack:
-
-```yaml
-track_high_thresh: 0.16
-track_low_thresh: 0.03
-new_track_thresh: 0.18
-track_buffer: 120
-match_thresh: 0.90
-fuse_score: true
-```
-
-## 4. Cổng dịch vụ
+## 3. Cổng và địa chỉ
 
 | Thành phần | Địa chỉ |
 |---|---|
 | Dashboard | `https://traffic-ai.test:8443` |
-| API / Swagger | `https://traffic-ai.test:8444/docs` |
+| Swagger/API | `https://traffic-ai.test:8444/docs` |
 | PostgreSQL host | `127.0.0.1:5445` |
+| PostgreSQL Docker | `postgres:5432` |
 | Database | `traffic_ai_db` |
 
-## 5. Database
+## 4. Thư mục dữ liệu mới
 
-Migration mới:
-
-```text
-0012_realtime_gate_v4
-```
-
-Sau migration:
+V0.5.0 thêm:
 
 ```text
-schema_version = 0.4.0
-YOLO26s COCO = active
-YOLO26n COCO = giữ lại để so sánh
+datasets/
+training-runs/
 ```
 
-Không xóa lịch sử camera, session, event hay `traffic_ai_postgres_data`.
-
-## 6. Cập nhật từ V0.3.x
-
-Chép full source V0.4.0 đè vào:
+Docker mount vào AI Service:
 
 ```text
-D:\LienThongDH\DoAn\traffic-ai
+./datasets      → /data/datasets
+./training-runs → /data/training-runs
+./models        → /data/models
 ```
 
-Giữ lại dữ liệu local:
+Các thư mục runtime được `.gitignore` để không đẩy hàng GB ảnh/weights lên GitHub.
+
+## 5. Database V0.5.4
+
+Chuỗi migration hiện tại:
 
 ```text
-.env
-gateway\certs\
-videos\
-models\
-snapshots\
+0014_dataset_training_v50
+        ↓
+0015_ui_test_hardening_v051
+        ↓
+0016_contract_alignment_v052
+        ↓
+0017_ai_test_dep_v053
+        ↓
+0018_alembic_guard_v054
 ```
 
-Không chạy:
+Migration `0014` tạo các bảng Dataset/Fine-tune; `0015` dọn UI/test harness; `0016` đồng bộ contract Smooth Playback; `0017` đánh dấu hotfix tách dependency unit-test/runtime; `0018` nới `alembic_version.version_num` lên `VARCHAR(128)` trên PostgreSQL và đánh dấu V0.5.4. Các migration hotfix không xóa dữ liệu nghiệp vụ.
 
-```powershell
-docker compose down -v
-```
-
-`start.ps1` sẽ tự nâng các default cũ nếu chúng vẫn còn nguyên giá trị mặc định, ví dụ:
+`schema_version`:
 
 ```text
-yolo26n.pt  → yolo26s.pt
-832         → 640 (AI_IMGSZ)
-1152        → 1440 (PROCESS_MAX_WIDTH)
-24          → 30  (CLASS_HISTORY)
-18          → 30  (STITCH_MAX_GAP)
-0.085       → 0.14 (STITCH_DISTANCE_RATIO)
-yolo26s.pt  → yolo26m.pt (refiner)
+0.5.4
 ```
 
-Custom model như `best.pt` không bị đổi.
+Hai bảng mới:
 
-## 7. Kiểm thử và chạy
+### `datasets`
+
+Theo dõi:
+
+- tên dataset;
+- slug;
+- camera/video nguồn;
+- đường dẫn dataset;
+- số frame;
+- số ảnh có nhãn;
+- số bounding box;
+- số ảnh train/val/test;
+- trạng thái dataset.
+
+### `training_runs`
+
+Theo dõi:
+
+- dataset;
+- base model;
+- epochs;
+- image size;
+- batch size;
+- device;
+- epoch hiện tại;
+- tiến độ;
+- Precision;
+- Recall;
+- mAP50;
+- mAP50-95;
+- đường dẫn `best.pt`;
+- lỗi training nếu có.
+
+## 6. Dataset Studio trên Dashboard
+
+Mở:
+
+```text
+https://traffic-ai.test:8443
+```
+
+Menu mới:
+
+```text
+Dữ liệu & huấn luyện
+```
+
+### Bước 1 — Trích frame
+
+Chọn camera/video đang có, nhập:
+
+```text
+Tên dataset
+Mỗi N frame
+Tối đa số ảnh
+```
+
+Ví dụ video 25 FPS:
+
+```text
+Mỗi 10 frame
+```
+
+sẽ lấy khoảng 2,5 ảnh/giây video.
+
+Bấm:
+
+```text
+1. Trích frame
+```
+
+Frame được lưu:
+
+```text
+datasets/<slug>/raw/images/
+```
+
+### Bước 2 — Auto-label
+
+Bấm:
+
+```text
+2. Auto-label YOLO26
+```
+
+YOLO26 đang active sẽ tạo nhãn gợi ý cho 5 lớp:
+
+```text
+0 motorcycle
+1 bicycle
+2 car
+3 bus
+4 truck
+```
+
+Nhãn lưu tại:
+
+```text
+datasets/<slug>/raw/labels/
+```
+
+**Quan trọng:** Auto-label chỉ là pseudo-label. Nếu model đang nhầm xe máy thành xe đạp thì pseudo-label cũng có thể nhầm theo. Muốn fine-tune thực sự tốt phải rà soát nhãn.
+
+Có thể mở bộ ảnh/nhãn bằng CVAT, Label Studio, Roboflow hoặc công cụ YOLO annotation khác. Khi sửa nhãn:
+
+- chỉ gán `bicycle` khi phương tiện thực sự là xe đạp/pedal-cycle;
+- xe máy/scooter/mô tô phải là `motorcycle`;
+- xe tải và xe buýt phải rà soát kỹ ở góc camera hiện tại.
+
+### Bước 3 — Chia train/val/test
+
+Mặc định:
+
+```text
+Train = 70%
+Val   = 20%
+Test  = 10%
+Seed  = 2026
+```
+
+Bấm:
+
+```text
+3. Chia train/val/test
+```
+
+Sinh:
+
+```text
+datasets/<slug>/images/train
+datasets/<slug>/images/val
+datasets/<slug>/images/test
+
+datasets/<slug>/labels/train
+datasets/<slug>/labels/val
+datasets/<slug>/labels/test
+
+datasets/<slug>/dataset.yaml
+```
+
+## 7. Fine-tune YOLO26 bằng RTX 3060
+
+Trong Dashboard chọn:
+
+```text
+Base model: YOLO26s hoặc YOLO26m
+Epochs
+Image size
+Batch
+```
+
+Cấu hình khởi đầu phù hợp RTX 3060:
+
+```text
+Base model = yolo26s.pt
+Epochs     = 80
+Image size = 640
+Batch      = 8
+Device     = auto
+```
+
+Bấm:
+
+```text
+4. Bắt đầu fine-tune RTX 3060
+```
+
+Training chạy nền trong AI Service. Dashboard theo dõi:
+
+```text
+Epoch
+Progress
+Precision
+Recall
+mAP50
+mAP50-95
+```
+
+Kết quả runtime:
+
+```text
+training-runs/run-<id>/
+```
+
+Weights tốt nhất được tự copy thành:
+
+```text
+models/traffic-ai-v050-run-<id>-best.pt
+```
+
+## 8. Kích hoạt model tùy biến
+
+Khi training hoàn tất, bấm:
+
+```text
+5. Kích hoạt best.pt
+```
+
+Backend sẽ:
+
+1. tắt `is_active` của model cũ;
+2. tạo bản ghi `AIModel` mới;
+3. lưu Precision/Recall/mAP;
+4. đặt `best.pt` mới thành model active.
+
+Các phiên `Chạy AI` **sau đó** sẽ dùng model mới. Phiên đang chạy không bị đổi model giữa chừng.
+
+## 9. Chạy và kiểm thử
 
 ```powershell
 cd D:\LienThongDH\DoAn\traffic-ai
@@ -260,7 +359,7 @@ Nếu PASS:
 .\scripts\start.ps1
 ```
 
-Kiểm tra trạng thái:
+Kiểm tra container:
 
 ```powershell
 .\scripts\status.ps1
@@ -272,37 +371,55 @@ Kiểm tra database:
 .\scripts\verify-database.ps1
 ```
 
-## 8. Cách đọc hiệu năng trên Dashboard
-
-Khi chạy AI, Dashboard hiện dạng:
+Revision mong muốn:
 
 ```text
-FPS 22.8/25 · RT x0.91 · 31 ms · Tổng 12 · IN 8 · OUT 4 · cứu 3
+0014_dataset_training_v50
 ```
 
-Ý nghĩa:
+## 10. Cấu hình training trong `.env`
 
-- `22.8/25`: FPS xử lý / FPS nguồn;
-- `RT x0.91`: tốc độ xử lý bằng 91% realtime;
-- `31 ms`: thời gian inference gần nhất;
-- `cứu 3`: 3 crossing được Trajectory Gate cứu qua khoảng mất detection/track ngắn.
+V0.5.0 tự bổ sung khi thiếu:
 
-Với video local, dù `RT < 1`, engine vẫn xử lý **mọi frame**. Clip có thể phát trên browser chậm hơn realtime nhưng không được phép bỏ frame inference.
+```env
+AI_DATASET_ROOT=/data/datasets
+AI_TRAINING_ROOT=/data/training-runs
+AI_TRAIN_BASE_MODEL=yolo26s.pt
+AI_TRAIN_EPOCHS=80
+AI_TRAIN_IMGSZ=640
+AI_TRAIN_BATCH=8
+AI_TRAIN_WORKERS=4
+AI_TRAIN_PATIENCE=20
+AI_TRAIN_CACHE=false
+AI_DATASET_SEED=2026
+```
 
-## 9. Vạch đếm
-
-Vạch phải **vuông góc với hướng xe chạy** và nằm trên phần đường xe thực sự đi qua.
+Nếu gặp CUDA out-of-memory, giảm:
 
 ```text
-Hướng xe ↑/↓  → vạch gần ngang ──────────
-Hướng xe ←/→  → vạch gần dọc  │
+Batch 8 → 4 → 2
 ```
 
-Khi AI đang chạy, frontend và backend đều khóa thay đổi vạch. Dừng AI trước khi chỉnh.
+Không cần hạ model ngay.
 
-## 10. Publish GitHub + Release
+## 11. Lưu ý về độ chính xác
 
-Lệnh duy nhất:
+Mục tiêu của fine-tune là **đo và cải thiện có bằng chứng**, không phải tuyên bố 100%.
+
+Ít nhất cần:
+
+- video nhiều thời điểm trong ngày;
+- nắng/râm/ban đêm nếu hệ thống sẽ chạy các điều kiện đó;
+- xe gần và xa;
+- che khuất;
+- đủ mẫu xe máy, xe đạp, ô tô, xe buýt, xe tải;
+- nhãn đúng và nhất quán.
+
+Một dataset chỉ lấy từ một clip ngắn dễ bị overfit và có thể nhìn rất tốt trên clip đó nhưng kém ở video khác.
+
+## 12. GitHub + Release
+
+Chỉ dùng một lệnh:
 
 ```powershell
 cd D:\LienThongDH\DoAn\traffic-ai
@@ -316,63 +433,49 @@ Test local
 → PASS
 → Commit
 → Push main
-→ Tag v0.4.0
+→ Tag v0.5.4
 → GitHub Actions
 → ZIP / TAR.GZ / SHA256
 → GitHub Release
 ```
 
-Repository mặc định:
+Repository:
 
 ```text
 https://github.com/TamNhien/traffic-ai
 ```
 
-## 11. Lộ trình tiếp theo
+## 13. Lộ trình tiếp theo
 
-### V0.5.0 — Dataset giao thông Việt Nam + Fine-tune
-
-Đây là bước bắt buộc nếu mục tiêu là tăng độ chính xác phân loại, đặc biệt:
-
-- xe máy ↔ xe đạp;
-- ô tô ↔ xe tải nhẹ;
-- xe tải ↔ xe buýt;
-- xe ở xa / nhỏ;
-- xe bị che khuất.
-
-Dự kiến:
-
-```text
-Thu thập frame từ camera thật
-→ gán nhãn
-→ chia train/val/test
-→ fine-tune YOLO26s/m
-→ Precision / Recall / mAP
-→ benchmark counting error
-→ model best.pt
-→ lưu metadata training vào PostgreSQL
-```
-
-### V0.5.1 — Ground-truth benchmark
+### V0.5.5 — Ground-truth Benchmark
 
 - nhập số xe đúng theo từng loại và IN/OUT;
-- chạy clip tự động;
-- sinh báo cáo sai số đếm;
+- benchmark cùng một clip với pretrained và `best.pt`;
 - confusion matrix;
-- counting accuracy, precision, recall;
-- so sánh `YOLO26 pretrained` và `best.pt`.
+- Precision/Recall/F1;
+- counting MAE/MAPE/accuracy;
+- báo cáo so sánh tự động.
 
-### V0.6.0 — Multi-camera / RTSP production
+### V0.5.6 — Annotation Studio tích hợp
 
-- worker riêng theo camera;
-- watchdog/reconnect RTSP;
+- vẽ/sửa bounding box trực tiếp trên Dashboard;
+- hotkey đổi class;
+- review pseudo-label;
+- đánh dấu ảnh khó;
+- kiểm tra class imbalance.
+
+### V0.6.0 — Multi-camera / RTSP Production
+
+- worker độc lập mỗi camera;
+- reconnect RTSP;
+- watchdog;
 - queue backpressure;
 - GPU scheduler;
 - dashboard nhiều camera.
 
-## 12. Lịch sử phát triển
+## 14. Lịch sử phát triển
 
-Các phiên bản được sắp xếp tăng dần:
+Các phiên bản được sắp xếp **tăng dần**.
 
 ### V0.1.0 — Nền tảng ban đầu
 PostgreSQL 18, FastAPI, React/Vite, Nginx HTTPS, Docker Compose.
@@ -402,7 +505,7 @@ Tự tạo certificate/hosts/trusted root.
 Tách Backend health và AI health; gia cố migration/startup.
 
 ### V0.2.4 — UTF-8
-Sửa tiếng Việt hiển thị literal `\uXXXX`.
+Sửa tiếng Việt hiển thị literal `\\uXXXX`.
 
 ### V0.2.5 — CI/source hygiene
 Sửa false-positive UTF-8 ở `dist`; Release fallback.
@@ -423,21 +526,56 @@ Tự dọn script legacy khi copy source đè.
 Vạch tương tác, bidirectional counting, track smoothing.
 
 ### V0.3.1 — Smart Gate 3.0
-Reset bộ đếm theo session, track continuity, async stream giảm tải ban đầu.
+Reset bộ đếm theo session, track continuity.
 
 ### V0.3.2 — Runtime hardening
-PowerShell syntax contract, dependency warning cleanup.
+PowerShell syntax contract và dependency cleanup.
 
 ### V0.3.3 — Gateway DNS runtime
 Sửa 502 sau khi container được recreate bằng Docker DNS động.
 
 ### V0.4.0 — Realtime Gate Engine 4.0
-- YOLO26s detector + YOLO26m crossing refiner.
-- Gate-focused ROI.
-- Motion-leading anchor.
-- Trajectory-history crossing rescue.
-- Async PostgreSQL event writer.
-- Async MJPEG encoder.
-- Preload/warm-up refiner trước playback.
-- Bicycle policy bảo thủ để giảm xe máy bị đếm thành xe đạp.
-- Metrics `source FPS / processing FPS / realtime factor / rescued crossings`.
+YOLO26s, YOLO26m refiner, Gate ROI, trajectory crossing rescue, async persistence/stream.
+
+### V0.4.1 — Smooth Playback
+Tách native video playback khỏi AI Overlay/MJPEG; thêm progress, realtime factor và lag.
+
+### V0.5.0 — Dataset & Fine-tune Studio
+- Trích frame từ video thật.
+- Auto-label YOLO26.
+- Quản lý dataset trong PostgreSQL.
+- Chia train/val/test.
+- Fine-tune YOLO26s/YOLO26m bằng RTX 3060.
+- Theo dõi Precision/Recall/mAP.
+- Xuất và kích hoạt `best.pt`.
+
+### V0.5.1 — UI Counting Line Cleanup & Test Harness Hotfix
+- Bỏ hoàn toàn dòng “Nguyên tắc” khỏi khu vực Counting Line.
+- Bỏ thanh hướng dẫn kéo vạch phủ trên hình preview.
+- Sửa `scripts/test.ps1` bị lỗi parser `Unexpected token '}'` bằng cách khôi phục hàm `Assert-TechnologyVersionsContract`.
+- Thêm contract chống hồi quy để hai dòng UI đã bỏ không xuất hiện lại.
+- Thêm migration `0015_ui_test_hardening_v051`, cập nhật `schema_version = 0.5.1`.
+
+
+
+### V0.5.2 — Smooth Telemetry Contract Alignment
+- Sửa false-positive trong `scripts/test.ps1`: contract cũ bắt buộc literal `Smooth Gate 4.1` dù frontend dùng nhãn `Phát mượt` / `AI Overlay`.
+- Contract mới kiểm tra capability thực: `realtime_factor`, `playback_lag_seconds`, `RT x`, `lag`, `Phát mượt`, `AI Overlay`.
+- Thêm regression check để tránh quay lại test phụ thuộc text trình bày.
+- Thêm migration `0016_contract_alignment_v052`, cập nhật `schema_version = 0.5.2`.
+
+### V0.5.3 — AI Test Dependency Isolation
+- Sửa pytest collection của AI Service bị `ModuleNotFoundError: No module named 'cv2'`.
+- Chuyển `cv2` và `yaml` trong `app.training` sang lazy import tại đúng chức năng cần dùng.
+- Giữ `requirements-test.txt` nhẹ; không bắt unit-test container tải OpenCV/Torch/Ultralytics.
+- Thêm contract chống hồi quy để cấm import OpenCV/PyYAML ở module scope của `app.training`.
+- Revision thực tế của migration V0.5.3 được rút gọn thành `0017_ai_test_dep_v053` để tương thích giới hạn 32 ký tự của Alembic mặc định.
+- Cập nhật `schema_version = 0.5.3`.
+
+### V0.5.4 — Alembic Revision Guard
+- Sửa lỗi `StringDataRightTruncation: value too long for type character varying(32)` khi Backend chạy `alembic upgrade head`.
+- Rút gọn revision ID V0.5.3 từ 38 ký tự xuống `0017_ai_test_dep_v053`.
+- Thêm `0018_alembic_guard_v054`, cập nhật `schema_version = 0.5.4`.
+- Backend tự nới `alembic_version.version_num` lên `VARCHAR(128)` trước khi chạy Alembic và tự map revision ID V0.5.3 cũ nếu môi trường nào đã từng lưu được ID dài.
+- `test.ps1` kiểm tra toàn bộ revision ID không vượt 32 ký tự để ngăn lỗi startup tương tự quay lại.
+

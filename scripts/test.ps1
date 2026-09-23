@@ -216,6 +216,16 @@ function Assert-TechnologyVersionsContract {
   Write-Host "[OK] Technology versions contract" -ForegroundColor Green
 }
 
+
+function Assert-CountingLineUiCleanupContract {
+  Write-Host "`n[Traffic AI] Counting line UI cleanup contract" -ForegroundColor Cyan
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  if ($frontend -match 'Nguyên tắc:' -or $frontend -match 'Kéo đường vàng để di chuyển' -or $frontend -match 'kéo 2 đầu tròn') {
+    throw "Counting line vẫn còn dòng nguyên tắc/hướng dẫn overlay đã yêu cầu loại bỏ."
+  }
+  Write-Host "[OK] Counting line UI cleanup contract" -ForegroundColor Green
+}
+
 function Assert-SourceManagementContract {
   Write-Host "`n[Traffic AI] Camera/video source management contract" -ForegroundColor Cyan
   $routes = Get-Content (Join-Path $root "backend\app\api\routes.py") -Raw -Encoding UTF8
@@ -252,14 +262,103 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.4.0") { throw "VERSION phải là 0.4.0, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0012_realtime_gate_v4.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0012_realtime_gate_v4.py." }
+  if ($version -ne "0.5.4") { throw "VERSION phải là 0.5.4, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0018_alembic_guard_v054.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0018_alembic_guard_v054.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0012_realtime_gate_v4"' -or $migrationText -notmatch "value='0.4.0'") {
-    throw "Migration 0012_realtime_gate_v4 không đúng contract V0.4.0."
+  if ($migrationText -notmatch 'revision = "0018_alembic_guard_v054"' -or $migrationText -notmatch 'down_revision = "0017_ai_test_dep_v053"' -or $migrationText -notmatch "value='0.5.4'") {
+    throw "Migration 0018_alembic_guard_v054 không đúng contract V0.5.4."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
+}
+
+function Assert-AlembicRevisionSafetyContract {
+  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.4" -ForegroundColor Cyan
+  $versionsDir = Join-Path $root "backend\alembic\versions"
+  $bad = @()
+  Get-ChildItem $versionsDir -Filter "*.py" | ForEach-Object {
+    $text = Get-Content $_.FullName -Raw -Encoding UTF8
+    $match = [regex]::Match($text, '(?m)^revision(?:\s*:\s*str)?\s*=\s*"([^"]+)"')
+    if ($match.Success) {
+      $revisionId = $match.Groups[1].Value
+      if ($revisionId.Length -gt 32) {
+        $bad += "$($_.Name): $revisionId ($($revisionId.Length) ký tự)"
+      }
+    }
+  }
+  if ($bad.Count -gt 0) {
+    throw ("Alembic revision ID vượt 32 ký tự:`n" + ($bad -join "`n"))
+  }
+  $entrypoint = Get-Content (Join-Path $root "backend\entrypoint.sh") -Raw -Encoding UTF8
+  if ($entrypoint -notmatch 'ALTER COLUMN version_num TYPE VARCHAR\(128\)' -or $entrypoint -notmatch '0017_ai_test_dep_v053') {
+    throw "Backend entrypoint thiếu self-heal cho alembic_version hoặc mapping revision V0.5.3."
+  }
+  $v17 = Get-Content (Join-Path $versionsDir "0017_ai_test_dependency_isolation_v053.py") -Raw -Encoding UTF8
+  if ($v17 -notmatch 'revision = "0017_ai_test_dep_v053"') {
+    throw "Migration V0.5.3 chưa dùng revision ID rút gọn an toàn."
+  }
+  Write-Host "[OK] Alembic revision-length safety V0.5.4" -ForegroundColor Green
+}
+
+
+function Assert-SmoothPlaybackContract {
+  Write-Host "`n[Traffic AI] Smooth Playback 4.1 contract" -ForegroundColor Cyan
+  $aiMain = Get-Content (Join-Path $root "ai-service\app\main.py") -Raw -Encoding UTF8
+  $worker = Get-Content (Join-Path $root "ai-service\app\worker.py") -Raw -Encoding UTF8
+  $runtime = Get-Content (Join-Path $root "ai-service\app\runtime.py") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  $css = Get-Content (Join-Path $root "frontend\src\styles.css") -Raw -Encoding UTF8
+  if ($aiMain -notmatch "/media/video" -or $aiMain -notmatch "FileResponse") {
+    throw "AI Service thiếu endpoint phát video native cho browser."
+  }
+  if ($frontend -notmatch "Phát mượt" -or $frontend -notmatch "<video" -or $frontend -notmatch "AI Overlay" -or $frontend -notmatch "processing_progress") {
+    throw "Frontend chưa có Smooth Playback/native video + chế độ AI Overlay."
+  }
+  if ($worker -notmatch "AI_VIDEO_PACE" -or $worker -notmatch "playback_lag_seconds" -or $worker -notmatch "_latest_jpeg_sequence") {
+    throw "AI worker thiếu source pacing/lag metric/new-JPEG sequence."
+  }
+  if ($runtime -notmatch "source_frame_count" -or $runtime -notmatch "processing_progress" -or $runtime -notmatch "wait_for_jpeg") {
+    throw "PipelineState/registry thiếu progress hoặc new-frame wait."
+  }
+  if ($css -notmatch "counting-overlay" -or $css -notmatch "smooth-badge") {
+    throw "Frontend thiếu overlay vạch trên native video."
+  }
+  Write-Host "[OK] Smooth Playback 4.1 contract" -ForegroundColor Green
+}
+
+
+
+function Assert-DatasetTrainingContract {
+  Write-Host "`n[Traffic AI] Dataset & Fine-tune Studio V0.5.0 contract" -ForegroundColor Cyan
+  $models = Get-Content (Join-Path $root "backend\app\models\all_models.py") -Raw -Encoding UTF8
+  $routes = Get-Content (Join-Path $root "backend\app\api\routes.py") -Raw -Encoding UTF8
+  $training = Get-Content (Join-Path $root "ai-service\app\training.py") -Raw -Encoding UTF8
+  $aiMain = Get-Content (Join-Path $root "ai-service\app\main.py") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  $compose = Get-Content (Join-Path $root "docker-compose.yml") -Raw -Encoding UTF8
+  if ($models -notmatch 'class DatasetRecord' -or $models -notmatch 'class TrainingRun') { throw "Backend thiếu bảng datasets/training_runs." }
+  if ($routes -notmatch '/datasets' -or $routes -notmatch '/training/runs' -or $routes -notmatch '/activate') { throw "Backend thiếu API dataset/training/model activation." }
+  if ($training -notmatch 'extract_frames' -or $training -notmatch 'auto_label' -or $training -notmatch 'prepare_dataset' -or $training -notmatch 'TrainingRegistry') { throw "AI Service thiếu pipeline dataset/fine-tune." }
+  if ($aiMain -notmatch '/datasets/extract' -or $aiMain -notmatch '/training/start') { throw "AI Service thiếu endpoint training." }
+  if ($frontend -notmatch 'Dataset giao thông Việt Nam' -or $frontend -notmatch 'Bắt đầu fine-tune RTX 3060' -or $frontend -notmatch 'Kích hoạt best.pt') { throw "Frontend thiếu Dataset & Fine-tune Studio." }
+  if ($compose -notmatch './datasets:/data/datasets' -or $compose -notmatch './training-runs:/data/training-runs') { throw "Docker Compose thiếu volume dataset/training." }
+  Write-Host "[OK] Dataset & Fine-tune Studio V0.5.0 contract" -ForegroundColor Green
+}
+
+function Assert-AiTestDependencyIsolationContract {
+  Write-Host "`n[Traffic AI] AI test dependency isolation V0.5.3" -ForegroundColor Cyan
+  $trainingText = Get-Content (Join-Path $root "ai-service\app\training.py") -Raw -Encoding UTF8
+  $testReq = Get-Content (Join-Path $root "ai-service\requirements-test.txt") -Raw -Encoding UTF8
+  if ($trainingText -match '(?m)^import cv2\s*$' -or $trainingText -match '(?m)^import yaml\s*$') {
+    throw "app.training còn import OpenCV/PyYAML ở module scope; unit-test container tối giản sẽ lỗi khi collection."
+  }
+  if ($trainingText -notmatch '(?m)^\s+import cv2\s*$' -or $trainingText -notmatch '(?m)^\s+import yaml\s*$') {
+    throw "app.training thiếu lazy import OpenCV/PyYAML tại chức năng cần dùng."
+  }
+  if ($testReq -match 'opencv-python-headless' -or $testReq -match '(?m)^PyYAML==') {
+    throw "requirements-test.txt không nên kéo dependency CV/training nặng chỉ để collection unit test."
+  }
+  Write-Host "[OK] AI test dependency isolation V0.5.3" -ForegroundColor Green
 }
 
 function Invoke-Step([string]$Title, [scriptblock]$Action) {
@@ -277,9 +376,14 @@ Assert-FrontendUtf8Contract
 Assert-FrontendBrandingContract
 Assert-ReleaseFallbackContract
 Assert-TechnologyVersionsContract
+Assert-CountingLineUiCleanupContract
 Assert-SourceManagementContract
 Assert-GatewayRuntimeContract
 Assert-VersionConsistencyContract
+Assert-AlembicRevisionSafetyContract
+Assert-SmoothPlaybackContract
+Assert-DatasetTrainingContract
+Assert-AiTestDependencyIsolationContract
 
 Write-Host "`n[Traffic AI] Realtime Gate 4.0 / accuracy + non-blocking runtime contract" -ForegroundColor Cyan
 $countingText = Get-Content (Join-Path $root "ai-service\app\counting.py") -Raw -Encoding UTF8
@@ -309,14 +413,23 @@ if ($asyncText -notmatch 'queue.Queue' -or $roiText -notmatch 'GateROI') {
 if ($trackerText -notmatch 'track_buffer: 120' -or $smartRoutesText -notmatch 'preview.jpg') {
   throw "Thiếu ByteTrack V4 profile hoặc endpoint preview để đặt vạch."
 }
-if ($frontendText -notmatch 'Realtime Gate 4.0' -or $frontendText -notmatch 'realtime_factor') {
-  throw "Frontend chưa hiển thị Realtime Gate 4.0 / hệ số realtime."
+if ($frontendText -notmatch 'realtime_factor' -or $frontendText -notmatch 'playback_lag_seconds' -or $frontendText -notmatch 'Phát mượt' -or $frontendText -notmatch 'AI Overlay') {
+  throw "Frontend thiếu telemetry realtime hoặc chuyển đổi Phát mượt / AI Overlay của Smooth Playback."
 }
 $envExampleText = Get-Content (Join-Path $root ".env.example") -Raw -Encoding UTF8
 if ($envExampleText -notmatch 'AI_MODEL_NAME=yolo26s\.pt' -or $envExampleText -notmatch 'AI_REFINE_MODEL_NAME=yolo26m\.pt' -or $envExampleText -notmatch 'AI_GATE_ROI=1') {
   throw "Cấu hình mặc định V0.4.0 chưa bật YOLO26s + YOLO26m refiner + Gate ROI."
 }
 Write-Host "[OK] Realtime Gate 4.0 / accuracy + non-blocking runtime contract" -ForegroundColor Green
+
+Write-Host "`n[Traffic AI] Smooth telemetry contract alignment V0.5.3" -ForegroundColor Cyan
+if ($frontendText -match 'Smooth Gate 4\.1') {
+  Write-Host "[INFO] Frontend có nhãn Smooth Gate 4.1; contract không còn phụ thuộc text hiển thị." -ForegroundColor DarkGray
+}
+if ($frontendText -notmatch 'RT x' -or $frontendText -notmatch 'lag .*s') {
+  throw "Frontend thiếu nhãn RT x / lag cho telemetry runtime."
+}
+Write-Host "[OK] Smooth telemetry contract alignment V0.5.3" -ForegroundColor Green
 
 Write-Host "`n[Traffic AI] AI counting/persistence contract" -ForegroundColor Cyan
 $routesText = Get-Content (Join-Path $root "backend\app\api\routes.py") -Raw -Encoding UTF8

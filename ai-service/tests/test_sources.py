@@ -30,3 +30,17 @@ def test_video_source_listing(tmp_path: Path, monkeypatch) -> None:
     assert payload[0]["source_url"] == "/data/videos/demo.mp4"
     assert payload[0]["size_bytes"] == 1
     assert "modified_at" in payload[0]
+
+
+def test_resolve_video_path_stays_inside_video_root(monkeypatch, tmp_path):
+    import app.sources as sources
+    monkeypatch.setattr(sources, "VIDEO_ROOT", tmp_path.resolve())
+    good = tmp_path / "demo.mp4"
+    good.write_bytes(b"demo")
+    assert sources.resolve_video_path("/data/videos/demo.mp4") == good.resolve()
+    try:
+        sources.resolve_video_path("/etc/passwd.mp4")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("path traversal/outside VIDEO_ROOT must be rejected")

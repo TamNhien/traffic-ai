@@ -25,7 +25,7 @@ def list_video_sources() -> list[dict[str, Any]]:
     return items
 
 
-def _safe_video_path(source_url: str) -> Path:
+def resolve_video_path(source_url: str) -> Path:
     value = (source_url or '').strip()
     if not value:
         raise ValueError('Chưa cấu hình đường dẫn video.')
@@ -58,7 +58,7 @@ def inspect_source(source_type: str, source_url: str, *, probe: bool = False) ->
 
     if source_type == 'video':
         try:
-            path = _safe_video_path(source_url)
+            path = resolve_video_path(source_url)
         except ValueError as exc:
             videos = list_video_sources()
             return {'valid': False, 'source_type': 'video', 'source_url': source_url, 'message': str(exc), 'videos': videos, 'available_videos': videos}
@@ -131,7 +131,7 @@ def read_source_preview(source_type: str, source_url: str, *, max_width: int = 1
     source_type = (source_type or '').strip().lower()
     source_url = (source_url or '').strip()
     if source_type == 'video':
-        path = _safe_video_path(source_url)
+        path = resolve_video_path(source_url)
         if not path.exists() or not path.is_file():
             raise ValueError(f'Không tìm thấy video: {source_url}')
         source: str | int = str(path)

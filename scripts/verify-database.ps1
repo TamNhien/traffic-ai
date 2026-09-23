@@ -20,3 +20,6 @@ docker exec traffic-ai-postgres psql -U traffic_admin -d traffic_ai_db -c "SELEC
 
 Write-Host "`n[Traffic AI] Camera sources" -ForegroundColor Cyan
 docker exec traffic-ai-postgres psql -U traffic_admin -d traffic_ai_db -c "SELECT id, code, name, source_type, source_url, status FROM cameras ORDER BY id;"
+
+Write-Host "`n[Traffic AI] Dataset/training tables" -ForegroundColor Cyan
+docker exec traffic-ai-postgres psql -U traffic_admin -d traffic_ai_db -c "SELECT id,name,slug,status,image_count,labeled_images,train_count,val_count,test_count FROM datasets ORDER BY id DESC LIMIT 10; SELECT id,dataset_id,base_model,status,current_epoch,progress,map50,map50_95,best_model_path FROM training_runs ORDER BY id DESC LIMIT 10;"

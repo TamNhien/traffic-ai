@@ -2,11 +2,24 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './styles.css'
 
-const APP_VERSION = '0.4.0'
+const APP_VERSION = '0.5.4'
 const vehicleLabels = {
   motorcycle: 'Xe máy', bicycle: 'Xe đạp', car: 'Ô tô', bus: 'Xe buýt', truck: 'Xe tải', other: 'Khác'
 }
 const clamp01 = value => Math.min(1, Math.max(0, Number(value)))
+
+function CountingLineOverlay({ line }) {
+  if (!line) return null
+  const x1 = clamp01(line.line_x1) * 100
+  const y1 = clamp01(line.line_y1) * 100
+  const x2 = clamp01(line.line_x2) * 100
+  const y2 = clamp01(line.line_y2) * 100
+  return <svg className="counting-overlay" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+    <line x1={x1} y1={y1} x2={x2} y2={y2} className="counting-overlay-line" />
+    <circle cx={x1} cy={y1} r="1.2" className="counting-overlay-point" />
+    <circle cx={x2} cy={y2} r="1.2" className="counting-overlay-point" />
+  </svg>
+}
 
 const defaultCameraForm = () => ({
   name: 'Camera demo', code: 'CAM-001', source_type: 'video',
@@ -75,11 +88,11 @@ function CountingLineEditor({ previewUrl, line, onChange, disabled }) {
       <text className="gate-label in" fontSize="0.035" x={clamp01(mx + nx*0.055)} y={clamp01(my + ny*0.055)}>IN</text>
       <text className="gate-label out" fontSize="0.035" x={clamp01(mx - nx*0.055)} y={clamp01(my - ny*0.055)}>OUT</text>
     </svg>
-    <div className="line-editor-help">{disabled ? '🔒 AI đang chạy — dừng AI để chỉnh vạch.' : 'Kéo đường vàng để di chuyển; kéo 2 đầu tròn để xoay hoặc thay đổi chiều dài.'}</div>
   </div>
 }
 
 function App() {
+  const [previewMode, setPreviewMode] = useState('smooth')
   const [summary, setSummary] = useState(null)
   const [health, setHealth] = useState(null)
   const [systemStatus, setSystemStatus] = useState(null)
@@ -96,12 +109,18 @@ function App() {
   const [busy, setBusy] = useState(false)
   const [form, setForm] = useState(defaultCameraForm())
   const [lineForm, setLineForm] = useState({confidence_threshold:0.18,line_x1:0.32,line_y1:0.59,line_x2:0.84,line_y2:0.59})
+  const [datasets, setDatasets] = useState([])
+  const [trainingRuns, setTrainingRuns] = useState([])
+  const [datasetForm, setDatasetForm] = useState({name:'Dataset giao thông Việt Nam', every_n_frames:10, max_images:1200})
+  const [selectedDatasetId, setSelectedDatasetId] = useState(null)
+  const [trainingForm, setTrainingForm] = useState({epochs:80, imgsz:640, batch:8, base_model:'yolo26s.pt'})
 
   const load = async () => {
     try {
-      const [summaryRes, healthRes, systemStatusRes, camerasRes, eventsRes, pipelinesRes, sessionsRes, videosRes] = await Promise.all([
+      const [summaryRes, healthRes, systemStatusRes, camerasRes, eventsRes, pipelinesRes, sessionsRes, videosRes, datasetsRes, trainingRes] = await Promise.all([
         fetch('/api/dashboard/summary'), fetch('/api/health'), fetch('/api/system/status'), fetch('/api/cameras'),
-        fetch('/api/events?limit=20'), fetch('/api/pipelines'), fetch('/api/sessions?limit=10'), fetch('/api/sources/videos')
+        fetch('/api/events?limit=20'), fetch('/api/pipelines'), fetch('/api/sessions?limit=10'), fetch('/api/sources/videos'),
+        fetch('/api/datasets'), fetch('/api/training/runs')
       ])
       if (![summaryRes, healthRes, camerasRes, eventsRes, sessionsRes].every(r => r.ok)) throw new Error('API chưa sẵn sàng')
       setSummary(await summaryRes.json())
@@ -113,7 +132,11 @@ function App() {
       setPipelines(pipelinesRes.ok ? await pipelinesRes.json() : [])
       setSessions(await sessionsRes.json())
       setVideoSources(videosRes.ok ? await videosRes.json() : [])
+      const datasetData = datasetsRes.ok ? await datasetsRes.json() : []
+      setDatasets(datasetData)
+      setTrainingRuns(trainingRes.ok ? await trainingRes.json() : [])
       if (cameraData.length) setSelectedId(prev => prev || cameraData[0].id)
+      if (datasetData.length) setSelectedDatasetId(prev => prev || datasetData[0].id)
     } catch (err) {
       setError(err.message || 'Không thể tải dữ liệu')
     }
@@ -121,11 +144,27 @@ function App() {
 
   useEffect(() => {
     load()
-    const id = setInterval(load, 1500)
+    const id = setInterval(load, 1800)
     return () => clearInterval(id)
   }, [])
 
+  // Runtime counters are lightweight and need to feel live. Poll only the AI
+  // registry more frequently instead of refreshing every dashboard API at 10 Hz.
+  useEffect(() => {
+    let cancelled = false
+    const refreshPipelines = async () => {
+      try {
+        const response = await fetch('/api/pipelines', { cache: 'no-store' })
+        if (response.ok && !cancelled) setPipelines(await response.json())
+      } catch {}
+    }
+    const id = setInterval(refreshPipelines, 400)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [])
+
   const selected = cameras.find(c => c.id === Number(selectedId))
+  const selectedDataset = datasets.find(d => d.id === Number(selectedDatasetId))
+  const latestTraining = trainingRuns.find(r => r.dataset_id === Number(selectedDatasetId))
   const activePipeline = pipelines.find(p => p.camera_id === Number(selectedId) && ['starting', 'warming', 'running'].includes(p.status))
   const latestPipeline = pipelines.find(p => p.camera_id === Number(selectedId))
   const sessionPipeline = activePipeline || latestPipeline
@@ -136,6 +175,8 @@ function App() {
   const selectedVideoMissing = selected?.source_type === 'video' && sourceStatus?.valid === false
   const sourceAutoRepairAvailable = selectedVideoMissing && !!sourceStatus?.suggested_source_url
   const previewUrl = selected ? `/api/cameras/${selected.id}/preview.jpg?rev=${encodeURIComponent(selected.updated_at || '')}` : ''
+  const nativeVideoUrl = selected?.source_type === 'video' ? `/ai/media/video?source_url=${encodeURIComponent(selected.source_url)}&v=${activePipeline?.session_id || 0}` : ''
+  const smoothNativePlayback = !!activePipeline && selected?.source_type === 'video' && previewMode === 'smooth'
 
   useEffect(() => {
     if (!selected) return
@@ -244,11 +285,53 @@ function App() {
 
   const lineField = (name, label) => <label className="line-field"><span>{label}</span><input disabled={!!activePipeline} type="number" min="0" max="1" step="0.01" value={Number(lineForm[name]).toFixed(2)} onChange={e=>setLineForm({...lineForm,[name]:Number(e.target.value)})}/></label>
 
+const createDataset = async () => {
+  if (!selected) return
+  setBusy(true); setError(''); setNotice('')
+  try {
+    const response = await fetch('/api/datasets', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name:datasetForm.name, camera_id:selected.id, every_n_frames:Number(datasetForm.every_n_frames), max_images:Number(datasetForm.max_images)})})
+    const body = await response.json(); if (!response.ok) throw new Error(body.detail || 'Không tạo được dataset')
+    setSelectedDatasetId(body.id); setNotice(`Đã trích ${body.image_count} frame vào dataset ${body.name}.`); await load()
+  } catch (err) { setError(err.message) } finally { setBusy(false) }
+}
+
+const datasetAction = async action => {
+  if (!selectedDataset) return
+  setBusy(true); setError(''); setNotice('')
+  try {
+    const payload = action === 'autolabel' ? {confidence:0.25} : {train_ratio:0.70,val_ratio:0.20,seed:2026}
+    const response = await fetch(`/api/datasets/${selectedDataset.id}/${action}`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)})
+    const body = await response.json(); if (!response.ok) throw new Error(body.detail || `Không thực hiện được ${action}`)
+    if (action === 'autolabel') setNotice(`Auto-label xong: ${body.labeled_images}/${body.image_count} ảnh có phương tiện, ${body.box_count} bounding box. Đây là nhãn gợi ý, cần rà soát trước khi train.`)
+    else setNotice(`Dataset ready: train ${body.train_count}, val ${body.val_count}, test ${body.test_count}.`)
+    await load()
+  } catch (err) { setError(err.message) } finally { setBusy(false) }
+}
+
+const startTraining = async () => {
+  if (!selectedDataset) return
+  setBusy(true); setError(''); setNotice('')
+  try {
+    const response = await fetch('/api/training/runs', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({dataset_id:selectedDataset.id, base_model:trainingForm.base_model, epochs:Number(trainingForm.epochs), imgsz:Number(trainingForm.imgsz), batch:Number(trainingForm.batch), device:'auto'})})
+    const body = await response.json(); if (!response.ok) throw new Error(body.detail || 'Không khởi động được training')
+    setNotice(`Đã bắt đầu Training Run #${body.id} trên ${trainingForm.base_model}.`); await load()
+  } catch (err) { setError(err.message) } finally { setBusy(false) }
+}
+
+const activateTraining = async run => {
+  setBusy(true); setError(''); setNotice('')
+  try {
+    const response = await fetch(`/api/training/runs/${run.id}/activate`, {method:'POST'})
+    const body = await response.json(); if (!response.ok) throw new Error(body.detail || 'Không kích hoạt được model')
+    setNotice(`Đã kích hoạt ${body.name}: ${body.model_path}`); await load()
+  } catch (err) { setError(err.message) } finally { setBusy(false) }
+}
+
   return <div className="app-shell">
     <aside className="sidebar">
       <div className="brand"><img className="brand-logo" src={`/logo.svg?v=${APP_VERSION}`} alt="Traffic AI" /><div><strong>Traffic AI</strong><span>YOLO26s + ByteTrack</span></div></div>
-      <nav><a className="active" href="#overview">Tổng quan</a><a href="#live">Giám sát</a><a href="#cameras">Camera</a><a href="#events">Sự kiện</a></nav>
-      <div className="sidebar-footer">V{APP_VERSION} · Realtime Gate 4.0</div>
+      <nav><a className="active" href="#overview">Tổng quan</a><a href="#live">Giám sát</a><a href="#cameras">Camera</a><a href="#training">Dữ liệu & huấn luyện</a><a href="#events">Sự kiện</a></nav>
+      <div className="sidebar-footer">V{APP_VERSION} · Dataset & Fine-tune Studio</div>
     </aside>
     <main>
       <header className="topbar"><div><p className="eyebrow">ĐỒ ÁN TRÍ TUỆ NHÂN TẠO</p><h1>Phát hiện, theo dõi và đếm phương tiện</h1></div><div className={`health ${health?.status === 'ok' ? 'online' : ''}`}><span className="dot" />{health?.status === 'ok' ? 'Hệ thống hoạt động' : 'Đang kết nối'}</div></header>
@@ -262,18 +345,17 @@ function App() {
 
       <section className="content-grid" id="live">
         <article className="panel camera-panel">
-          <div className="panel-head"><div><span className="panel-kicker">LIVE AI</span><h2>Camera Preview</h2></div><button className={activePipeline ? 'danger' : ''} disabled={!selected || busy || (!activePipeline && selectedVideoMissing && !sourceAutoRepairAvailable)} onClick={togglePipeline}>{activePipeline ? 'Dừng AI' : 'Chạy AI'}</button></div>
-          <div className="camera-stage">{activePipeline ? <img src={`/ai/streams/${selected.id}.mjpg?session=${activePipeline.session_id}`} alt="Live AI stream" /> : <img src={previewUrl} alt="Preview camera" onLoad={e=>{e.currentTarget.style.visibility='visible'}} onError={e=>{e.currentTarget.style.visibility='hidden'}} />}</div>
-          <div className="camera-select"><label>Camera</label><select value={selectedId || ''} onChange={e => setSelectedId(Number(e.target.value))}><option value="">-- Chọn camera --</option>{cameras.map(c => <option key={c.id} value={c.id}>{c.code} · {c.name}</option>)}</select><span>{activePipeline ? `FPS ${activePipeline.fps}/${activePipeline.source_fps || '-'} · RT x${activePipeline.realtime_factor ?? 0} · ${activePipeline.inference_ms ?? 0} ms · Tổng ${activePipeline.total_count} · IN ${activePipeline.in_count ?? 0} · OUT ${activePipeline.out_count ?? 0} · cứu ${activePipeline.rescued_crossings ?? 0}` : selected?.source_url || 'Chưa có camera'}</span></div>
+          <div className="panel-head"><div><span className="panel-kicker">LIVE AI</span><h2>Camera Preview</h2></div><div className="panel-actions">{activePipeline && selected?.source_type === 'video' && <div className="preview-switch" title="Phát mượt dùng trình phát video native; AI Overlay dùng MJPEG đã vẽ box."><button type="button" className={previewMode === 'smooth' ? 'active' : 'secondary'} onClick={()=>setPreviewMode('smooth')}>Phát mượt</button><button type="button" className={previewMode === 'overlay' ? 'active' : 'secondary'} onClick={()=>setPreviewMode('overlay')}>AI Overlay</button></div>}<button className={activePipeline ? 'danger' : ''} disabled={!selected || busy || (!activePipeline && selectedVideoMissing && !sourceAutoRepairAvailable)} onClick={togglePipeline}>{activePipeline ? 'Dừng AI' : 'Chạy AI'}</button></div></div>
+          <div className={`camera-stage ${smoothNativePlayback ? 'native-video-stage' : ''}`}>{smoothNativePlayback ? <><video key={`${selected.id}-${activePipeline.session_id}`} src={nativeVideoUrl} autoPlay muted controls playsInline preload="auto" /><CountingLineOverlay line={lineForm} /><span className="smooth-badge">Phát mượt · AI xử lý nền</span></> : activePipeline ? <img src={`/ai/streams/${selected.id}.mjpg?session=${activePipeline.session_id}`} alt="Live AI stream" /> : <img src={previewUrl} alt="Preview camera" onLoad={e=>{e.currentTarget.style.visibility='visible'}} onError={e=>{e.currentTarget.style.visibility='hidden'}} />}</div>
+          <div className="camera-select"><label>Camera</label><select value={selectedId || ''} onChange={e => setSelectedId(Number(e.target.value))}><option value="">-- Chọn camera --</option>{cameras.map(c => <option key={c.id} value={c.id}>{c.code} · {c.name}</option>)}</select><span>{activePipeline ? `AI ${activePipeline.processing_progress ?? 0}% · FPS ${activePipeline.fps}/${activePipeline.source_fps || '-'} · RT x${activePipeline.realtime_factor ?? 0} · lag ${activePipeline.playback_lag_seconds ?? 0}s · ${activePipeline.inference_ms ?? 0} ms · Tổng ${activePipeline.total_count} · IN ${activePipeline.in_count ?? 0} · OUT ${activePipeline.out_count ?? 0} · cứu ${activePipeline.rescued_crossings ?? 0}` : selected?.source_url || 'Chưa có camera'}</span></div>
           {selected && !activePipeline && <div className={`source-status ${sourceStatus?.valid ? 'ok' : 'bad'}`}><strong>{sourceStatus?.valid ? '✓ Nguồn sẵn sàng' : '⚠ Nguồn chưa sẵn sàng'}</strong><span>{sourceStatus?.message || 'Đang kiểm tra nguồn...'}</span>{sourceStatus?.suggested_source_url && <><small>Gợi ý: {sourceStatus.suggested_source_url}</small><button type="button" className="inline-action" onClick={applySuggestedSource}>Dùng nguồn gợi ý</button></>}</div>}
           {latestPipeline && !activePipeline && <div className="pipeline-result">Lần chạy gần nhất: <strong>{latestPipeline.status}</strong> · {latestPipeline.processed_frames} frame · {latestPipeline.total_count} lượt cắt vạch · đã ghi {latestPipeline.delivered_events ?? 0} sự kiện{latestPipeline.last_error ? ` · ${latestPipeline.last_error}` : ''}</div>}
         </article>
-        <article className="panel"><div className="panel-head"><div><span className="panel-kicker">VEHICLE COUNT</span><h2>Theo loại phương tiện · phiên hiện tại</h2></div></div><div className="vehicle-list">{vehicleRows.map(row => <div className="vehicle-row" key={row.label}><span>{row.label}</span><strong>{row.value}</strong></div>)}</div><p className="hint">Mỗi lần bấm Chạy AI là một phiên mới và bộ đếm này bắt đầu từ 0. Lịch sử cũ vẫn được giữ trong PostgreSQL. Track bị đổi ID ngắn hạn được nối lại; xe buýt/xe tải hoặc nhãn chưa chắc chắn được kiểm tra lại tại thời điểm cắt vạch.</p></article>
+        <article className="panel"><div className="panel-head"><div><span className="panel-kicker">VEHICLE COUNT</span><h2>Theo loại phương tiện · phiên hiện tại</h2></div></div><div className="vehicle-list">{vehicleRows.map(row => <div className="vehicle-row" key={row.label}><span>{row.label}</span><strong>{row.value}</strong></div>)}</div><p className="hint">Chế độ Phát mượt dùng trình phát video native nên hình không còn phụ thuộc nhịp inference/MJPEG. Mỗi lần bấm Chạy AI là một phiên mới và bộ đếm này bắt đầu từ 0. Lịch sử cũ vẫn được giữ trong PostgreSQL. Track bị đổi ID ngắn hạn được nối lại; xe buýt/xe tải hoặc nhãn chưa chắc chắn được kiểm tra lại tại thời điểm cắt vạch.</p></article>
       </section>
 
       <section className="line-layout" id="cameras">
         <article className="panel line-panel"><div className="panel-head"><div><span className="panel-kicker">COUNTING LINE</span><h2>Đặt vạch đếm trực tiếp trên hình</h2></div><span className={`lock-state ${activePipeline ? 'locked' : ''}`}>{activePipeline ? 'Đang khóa khi AI chạy' : 'Có thể chỉnh'}</span></div>
-          <p className="hint"><strong>Nguyên tắc:</strong> vạch vàng phải cắt ngang hướng xe chạy. Với video clip bạn gửi, đường xe chạy theo chiều trên ↔ dưới màn hình, nên dùng vạch gần ngang lòng đường. Chỉ xe thực sự đi từ một phía sang phía kia mới được đếm.</p>
           <CountingLineEditor previewUrl={previewUrl} line={lineForm} onChange={setLineForm} disabled={!!activePipeline} />
           <div className="preset-row"><button disabled={busy || !!activePipeline} onClick={()=>applyPreset('road-horizontal')}>Gợi ý cho clip hiện tại</button><button disabled={busy || !!activePipeline} onClick={()=>applyPreset('horizontal')}>Đường ngang</button><button disabled={busy || !!activePipeline} onClick={()=>applyPreset('vertical')}>Đường dọc</button></div>
           <div className="nudge-grid"><button disabled={!!activePipeline} onClick={()=>moveLine(0,-0.02)}>↑ Lên</button><button disabled={!!activePipeline} onClick={()=>moveLine(0,0.02)}>↓ Xuống</button><button disabled={!!activePipeline} onClick={()=>moveLine(-0.02,0)}>← Trái</button><button disabled={!!activePipeline} onClick={()=>moveLine(0.02,0)}>→ Phải</button><button disabled={!!activePipeline} onClick={()=>resizeLine(1.12)}>Dài hơn</button><button disabled={!!activePipeline} onClick={()=>resizeLine(0.88)}>Ngắn hơn</button></div>
@@ -289,6 +371,23 @@ function App() {
           <input className="wide" value={form.location || ''} onChange={e => setForm({...form, location:e.target.value})} placeholder="Vị trí / mô tả ngắn" />
           <div className="camera-actions"><button disabled={busy || !!activePipeline}>{editingId ? 'Cập nhật camera' : 'Tạo camera'}</button>{editingId && <span className={form.source_type === 'video' && !videoPathSet.has(form.source_url) ? 'bad-text' : 'ok-text'}>{form.source_type === 'video' ? (videoPathSet.has(form.source_url) ? 'File video đang tồn tại.' : 'Hãy chọn lại file video rồi cập nhật camera.') : 'Nguồn sẽ được kiểm tra trước khi chạy AI.'}</span>}</div>
         </form><p className="hint">Khi AI đang chạy, hệ thống khóa nguồn và vạch đếm để bảo đảm một phiên dùng đúng một cấu hình. Bấm <strong>Dừng AI</strong> trước khi chỉnh.</p></article>
+      </section>
+
+      <section className="training-layout" id="training">
+        <article className="panel training-panel"><div className="panel-head"><div><span className="panel-kicker">DATASET STUDIO</span><h2>Dataset giao thông Việt Nam</h2></div><span className="lock-state">V0.5.4</span></div>
+          <p className="hint">Trích frame từ video thật của camera, dùng YOLO26 tạo nhãn gợi ý, sau đó chia train/val/test. <strong>Auto-label không phải ground truth</strong>; muốn tăng độ chính xác thật sự cần rà soát/sửa nhãn sai trước khi huấn luyện.</p>
+          <div className="dataset-form"><input value={datasetForm.name} onChange={e=>setDatasetForm({...datasetForm,name:e.target.value})} placeholder="Tên dataset" /><label>Mỗi N frame<input type="number" min="1" value={datasetForm.every_n_frames} onChange={e=>setDatasetForm({...datasetForm,every_n_frames:e.target.value})}/></label><label>Tối đa ảnh<input type="number" min="10" value={datasetForm.max_images} onChange={e=>setDatasetForm({...datasetForm,max_images:e.target.value})}/></label><button disabled={!selected || busy || selected?.source_type !== 'video'} onClick={createDataset}>1. Trích frame</button></div>
+          <div className="dataset-select"><label>Dataset</label><select value={selectedDatasetId || ''} onChange={e=>setSelectedDatasetId(Number(e.target.value))}><option value="">-- Chọn dataset --</option>{datasets.map(d=><option key={d.id} value={d.id}>#{d.id} · {d.name} · {d.status}</option>)}</select></div>
+          {selectedDataset && <div className="dataset-stats"><div><span>Ảnh</span><strong>{selectedDataset.image_count}</strong></div><div><span>Ảnh có nhãn</span><strong>{selectedDataset.labeled_images}</strong></div><div><span>Boxes</span><strong>{selectedDataset.box_count}</strong></div><div><span>Train/Val/Test</span><strong>{selectedDataset.train_count}/{selectedDataset.val_count}/{selectedDataset.test_count}</strong></div></div>}
+          <div className="training-actions"><button disabled={!selectedDataset || busy} onClick={()=>datasetAction('autolabel')}>2. Auto-label YOLO26</button><button disabled={!selectedDataset || busy || !['pseudo_labeled','labeled','ready'].includes(selectedDataset?.status)} onClick={()=>datasetAction('prepare')}>3. Chia train/val/test</button></div>
+          <p className="hint">Nhãn YOLO được lưu trong <code>datasets/&lt;slug&gt;/raw/labels</code>. Có thể mở bằng CVAT/Label Studio/Roboflow hoặc sửa file YOLO trước khi bấm bước 3. Xe đạp chỉ nên gán khi thực sự là bicycle/pedal-cycle; xe máy phải là motorcycle.</p>
+        </article>
+        <article className="panel training-panel"><div className="panel-head"><div><span className="panel-kicker">FINE-TUNE</span><h2>Huấn luyện YOLO26 tùy biến</h2></div></div>
+          <div className="train-form"><label>Base model<select value={trainingForm.base_model} onChange={e=>setTrainingForm({...trainingForm,base_model:e.target.value})}><option value="yolo26s.pt">YOLO26s</option><option value="yolo26m.pt">YOLO26m</option></select></label><label>Epochs<input type="number" min="1" value={trainingForm.epochs} onChange={e=>setTrainingForm({...trainingForm,epochs:e.target.value})}/></label><label>Image size<input type="number" min="320" step="32" value={trainingForm.imgsz} onChange={e=>setTrainingForm({...trainingForm,imgsz:e.target.value})}/></label><label>Batch<input type="number" min="1" value={trainingForm.batch} onChange={e=>setTrainingForm({...trainingForm,batch:e.target.value})}/></label></div>
+          <button disabled={!selectedDataset || selectedDataset?.status !== 'ready' || busy || trainingRuns.some(r=>r.status==='running')} onClick={startTraining}>4. Bắt đầu fine-tune RTX 3060</button>
+          <div className="event-list training-runs">{trainingRuns.length ? trainingRuns.map(run=><div className="event-row training-row" key={run.id}><span>Run #{run.id} · Dataset #{run.dataset_id} · {run.base_model}</span><strong>{String(run.status).toUpperCase()} · {Number(run.progress || 0).toFixed(1)}%</strong><small>Epoch {run.current_epoch}/{run.epochs} · P {run.precision?.toFixed?.(3) ?? '-'} · R {run.recall?.toFixed?.(3) ?? '-'} · mAP50 {run.map50?.toFixed?.(3) ?? '-'} · mAP50-95 {run.map50_95?.toFixed?.(3) ?? '-'}</small>{run.status==='completed' && <button className="inline-action" onClick={()=>activateTraining(run)}>5. Kích hoạt best.pt</button>}{run.last_error && <small className="bad-text">{run.last_error}</small>}</div>) : <div className="empty">Chưa có training run.</div>}</div>
+          <p className="hint">Sau khi kích hoạt <code>best.pt</code>, các phiên AI mới sẽ dùng model tùy biến. Không có model nào bảo đảm 100% trong mọi cảnh; V0.5.4 tiếp tục quy trình đo Precision/Recall/mAP để biết chính xác model cải thiện đến đâu.</p>
+        </article>
       </section>
 
       <section className="content-grid lower-grid" id="events">
