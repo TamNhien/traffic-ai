@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './styles.css'
 
-const APP_VERSION = '0.5.9'
+const APP_VERSION = '0.5.10'
 const vehicleLabels = {
   motorcycle: 'Xe máy', bicycle: 'Xe đạp', car: 'Ô tô', bus: 'Xe buýt', truck: 'Xe tải', other: 'Khác'
 }
@@ -228,7 +228,7 @@ function AnnotationEditor({ dataset, onChanged }) {
   const currentIndex = Math.max(0, items.findIndex(i=>i.image_name===currentName))
   const imageUrl = currentName ? `/api/datasets/${dataset.id}/images/${encodeURIComponent(currentName)}?v=${encodeURIComponent(dataset.updated_at || '')}` : ''
   return <section className="panel annotation-panel" id="annotation">
-    <div className="panel-head"><div><span className="panel-kicker">ANNOTATION STUDIO · SMART REVIEW</span><h2>3. Chỉ rà soát ảnh cần thiết trước khi train lại</h2></div><span className="lock-state">V0.5.9</span></div>
+    <div className="panel-head"><div><span className="panel-kicker">ANNOTATION STUDIO · SMART REVIEW</span><h2>3. Chỉ rà soát ảnh cần thiết trước khi train lại</h2></div><span className="lock-state">V0.5.10</span></div>
     <p className="hint"><strong>Không cần sửa tay cả 1.200 ảnh.</strong> Chế độ mặc định đưa ảnh xe máy/xe đạp, confidence thấp, ảnh đông xe hoặc ảnh không detection lên trước. Ảnh ô tô/bus/truck rõ và confidence cao có thể duyệt nhanh sau khi bạn spot-check.</p>
     <div className="annotation-summary"><span>Tổng ảnh: <strong>{indexData?.total ?? 0}</strong></span><span>Đang hiện: <strong>{indexData?.filtered_total ?? 0}</strong></span><span>Cần ưu tiên: <strong>{indexData?.priority_images ?? 0}</strong></span><span>Có thể duyệt nhanh: <strong>{indexData?.safe_auto_accept_images ?? 0}</strong></span><span>Đã duyệt: <strong>{indexData?.reviewed_images ?? dataset.reviewed_images ?? 0}</strong></span><span>Ảnh khó: <strong>{indexData?.difficult_images ?? dataset.difficult_images ?? 0}</strong></span><span>Mất cân bằng: <strong>{indexData?.imbalance_ratio ? `x${indexData.imbalance_ratio}` : '—'}</strong></span></div>
     <div className="smart-review-bar"><label>Lọc ảnh<select value={reviewMode} onChange={e=>setReviewMode(e.target.value)}><option value="priority">🔥 Ưu tiên cần kiểm tra</option><option value="unreviewed">Chưa duyệt</option><option value="difficult">Ảnh khó</option><option value="all">Tất cả ảnh</option></select></label><button className="secondary" disabled={bulkBusy || !(indexData?.safe_auto_accept_images>0)} onClick={acceptSafe}>{bulkBusy?'Đang duyệt...':'Duyệt nhanh ảnh tin cậy'}</button></div>
@@ -577,7 +577,7 @@ const activateTraining = async run => {
       </section>
 
       <section className="training-layout" id="training">
-        <article className="panel training-panel"><div className="panel-head"><div><span className="panel-kicker">DATASET STUDIO · CLEAN RETRAIN</span><h2>Dataset giao thông Việt Nam</h2></div><span className="lock-state">V0.5.9</span></div>
+        <article className="panel training-panel"><div className="panel-head"><div><span className="panel-kicker">DATASET STUDIO · CLEAN RETRAIN</span><h2>Dataset giao thông Việt Nam</h2></div><span className="lock-state">V0.5.10</span></div>
           <p className="hint"><strong>Train lại từ đầu</strong> nên tạo dataset mới sạch từ video gốc. V0.5.9 mặc định lấy mỗi 15 frame, tối đa 600 ảnh và tự loại frame gần trùng; vì vậy bạn không còn phải mặc định xử lý 1.200 ảnh gần giống nhau.</p>
           <div className="dataset-form"><input value={datasetForm.name} onChange={e=>setDatasetForm({...datasetForm,name:e.target.value})} placeholder="Tên dataset" /><label>Mỗi N frame<input type="number" min="1" value={datasetForm.every_n_frames} onChange={e=>setDatasetForm({...datasetForm,every_n_frames:e.target.value})}/></label><label>Tối đa ảnh<input type="number" min="10" value={datasetForm.max_images} onChange={e=>setDatasetForm({...datasetForm,max_images:e.target.value})}/></label><label>Ngưỡng thay đổi<input type="number" min="0" max="1" step="0.001" value={datasetForm.min_change_ratio} onChange={e=>setDatasetForm({...datasetForm,min_change_ratio:e.target.value})}/></label><label className="check"><input type="checkbox" checked={!!datasetForm.smart_dedupe} onChange={e=>setDatasetForm({...datasetForm,smart_dedupe:e.target.checked})}/> Loại frame gần trùng</label><button disabled={!selected || busy || selected?.source_type !== 'video'} onClick={createDataset}>1. Trích frame thông minh</button></div>
           <p className="hint">Gợi ý video ~30 FPS: <strong>N=15</strong> ≈ 2 frame ứng viên/giây trước khi lọc; <strong>N=30</strong> ≈ 1 frame/giây. Với một góc camera cố định, thường nên bắt đầu khoảng <strong>400–800 ảnh đa dạng</strong>, không cần cố đủ 1.200 ảnh.</p>

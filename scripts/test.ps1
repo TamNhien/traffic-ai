@@ -202,7 +202,9 @@ function Assert-TechnologyVersionsContract {
     @{ Path = "docker-compose.yml"; Needle = "nginx:1.31.6-alpine" },
     @{ Path = "backend\Dockerfile"; Needle = "python:3.14.7-slim" },
     @{ Path = "ai-service\Dockerfile"; Needle = "python:3.14.7-slim" },
-    @{ Path = "frontend\Dockerfile"; Needle = "node:26.9.0-alpine" },
+    @{ Path = "frontend\Dockerfile"; Needle = "node:26.10.0-alpine" },
+    @{ Path = "frontend\package.json"; Needle = '"node": ">=26.10.0"' },
+    @{ Path = ".nvmrc"; Needle = "26.10.0" },
     @{ Path = "frontend\Dockerfile"; Needle = "nginx:1.31.6-alpine" },
     @{ Path = "frontend\Dockerfile"; Needle = "npm@12.1.0" }
   )
@@ -216,6 +218,42 @@ function Assert-TechnologyVersionsContract {
   Write-Host "[OK] Technology versions contract" -ForegroundColor Green
 }
 
+
+function Assert-CiNodePortabilityV0510Contract {
+  Write-Host "`n[Traffic AI] CI + Node.js portability V0.5.10" -ForegroundColor Cyan
+  $workflowFiles = @(
+    (Join-Path $root ".github\workflows\release.yml")
+    (Join-Path $root ".github\workflows\ci.yml")
+    (Join-Path $root ".github\workflows\ci-release-reusable.yml")
+  )
+  foreach ($workflow in $workflowFiles) {
+    $text = Get-Content $workflow -Raw -Encoding UTF8
+    if ($text -match 'actions/checkout@v4' -or $text -match 'actions/setup-python@v5' -or $text -match 'actions/setup-node@v4') {
+      throw "Workflow vẫn còn GitHub Action chạy Node.js 20: $workflow"
+    }
+    if ($text -notmatch 'actions/checkout@v7' -or $text -notmatch 'actions/setup-python@v7') {
+      throw "Workflow chưa nâng checkout/setup-python lên major Node.js 24: $workflow"
+    }
+  }
+  $releaseText = Get-Content (Join-Path $root ".github\workflows\release.yml") -Raw -Encoding UTF8
+  $ciText = Get-Content (Join-Path $root ".github\workflows\ci.yml") -Raw -Encoding UTF8
+  $reusableText = Get-Content (Join-Path $root ".github\workflows\ci-release-reusable.yml") -Raw -Encoding UTF8
+  foreach ($text in @($releaseText, $ciText, $reusableText)) {
+    if ($text -notmatch 'AI_DATASET_ROOT:.*runner\.temp' -or $text -notmatch 'AI_TRAINING_ROOT:.*runner\.temp' -or $text -notmatch 'AI_MODEL_ROOT:.*runner\.temp') {
+      throw "GitHub Actions AI test chưa dùng runner.temp cho dữ liệu ghi được."
+    }
+  }
+  foreach ($text in @($releaseText, $ciText, $reusableText)) {
+    if ($text -match 'Set up Node\.js' -and ($text -notmatch 'actions/setup-node@v7' -or $text -notmatch "node-version: '26\.10\.0'")) {
+      throw "Workflow frontend chưa dùng setup-node@v7 + Node.js 26.10.0."
+    }
+  }
+  $training = Get-Content (Join-Path $root "ai-service\app\training.py") -Raw -Encoding UTF8
+  if ($training -notmatch 'AI_MODEL_ROOT' -or $training -notmatch 'AI_DATASET_ROOT' -or $training -notmatch 'AI_TRAINING_ROOT') {
+    throw "AI training roots chưa cấu hình qua environment cho CI/non-Docker."
+  }
+  Write-Host "[OK] CI + Node.js portability V0.5.10" -ForegroundColor Green
+}
 
 function Assert-CountingLineUiCleanupContract {
   Write-Host "`n[Traffic AI] Counting line UI cleanup contract" -ForegroundColor Cyan
@@ -262,18 +300,18 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.9") { throw "VERSION phải là 0.5.9, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0023_clean_retrain_v059.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0023_clean_retrain_v059.py." }
+  if ($version -ne "0.5.10") { throw "VERSION phải là 0.5.10, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0024_ci_node_v0510.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0024_ci_node_v0510.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0023_clean_retrain_v059"' -or $migrationText -notmatch 'down_revision = "0022_strict_gate_v058"' -or $migrationText -notmatch "value='0.5.9'") {
-    throw "Migration 0023_clean_retrain_v059 không đúng contract V0.5.9."
+  if ($migrationText -notmatch 'revision = "0024_ci_node_v0510"' -or $migrationText -notmatch 'down_revision = "0023_clean_retrain_v059"' -or $migrationText -notmatch "value='0.5.10'") {
+    throw "Migration 0024_ci_node_v0510 không đúng contract V0.5.10."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
 
 function Assert-AlembicRevisionSafetyContract {
-  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.9" -ForegroundColor Cyan
+  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.10" -ForegroundColor Cyan
   $versionsDir = Join-Path $root "backend\alembic\versions"
   $bad = @()
   Get-ChildItem $versionsDir -Filter "*.py" | ForEach-Object {
@@ -297,7 +335,7 @@ function Assert-AlembicRevisionSafetyContract {
   if ($v17 -notmatch 'revision = "0017_ai_test_dep_v053"') {
     throw "Migration V0.5.3 chưa dùng revision ID rút gọn an toàn."
   }
-  Write-Host "[OK] Alembic revision-length safety V0.5.9" -ForegroundColor Green
+  Write-Host "[OK] Alembic revision-length safety V0.5.10" -ForegroundColor Green
 }
 
 
@@ -494,6 +532,7 @@ Assert-FrontendUtf8Contract
 Assert-FrontendBrandingContract
 Assert-ReleaseFallbackContract
 Assert-TechnologyVersionsContract
+Assert-CiNodePortabilityV0510Contract
 Assert-CountingLineUiCleanupContract
 Assert-SourceManagementContract
 Assert-GatewayRuntimeContract
@@ -586,6 +625,10 @@ Invoke-Step "Backend unit tests" {
 Invoke-Step "AI service unit tests" {
   docker run --rm `
     -e PYTHONPATH=/src/ai-service `
+    -e AI_DATASET_ROOT=/tmp/traffic-ai-tests/datasets `
+    -e AI_TRAINING_ROOT=/tmp/traffic-ai-tests/training-runs `
+    -e AI_MODEL_ROOT=/tmp/traffic-ai-tests/models `
+    -e VIDEO_DIR=/tmp/traffic-ai-tests/videos `
     -e PIP_ROOT_USER_ACTION=ignore `
     -e PIP_DISABLE_PIP_VERSION_CHECK=1 `
     -v "${root}:/src" -w /src/ai-service python:3.14.7-slim `
@@ -597,7 +640,7 @@ Invoke-Step "Frontend build" {
   $frontendLock = Join-Path $root "frontend\package-lock.json"
   if (Test-Path $frontendDist) { Remove-Item $frontendDist -Recurse -Force }
   if (Test-Path $frontendLock) { Remove-Item $frontendLock -Force }
-  docker run --rm -v "${root}:/src" -w /src/frontend node:26.9.0-alpine `
+  docker run --rm -v "${root}:/src" -w /src/frontend node:26.10.0-alpine `
     sh -lc "npm install -g npm@12.1.0 && npm install && npm audit --audit-level=high && npm run build"
 }
 

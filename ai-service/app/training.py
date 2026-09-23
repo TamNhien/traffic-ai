@@ -17,7 +17,7 @@ COCO_TO_DATASET = {3: 0, 1: 1, 2: 2, 5: 3, 7: 4}
 
 DATASET_ROOT = Path(os.getenv("AI_DATASET_ROOT", "/data/datasets"))
 TRAINING_ROOT = Path(os.getenv("AI_TRAINING_ROOT", "/data/training-runs"))
-MODEL_ROOT = Path("/data/models")
+MODEL_ROOT = Path(os.getenv("AI_MODEL_ROOT", "/data/models"))
 DATASET_ROOT.mkdir(parents=True, exist_ok=True)
 TRAINING_ROOT.mkdir(parents=True, exist_ok=True)
 MODEL_ROOT.mkdir(parents=True, exist_ok=True)

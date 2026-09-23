@@ -18,10 +18,10 @@ jobs:
         component: [backend, ai-service]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.14.7'
           cache: pip
@@ -43,6 +43,10 @@ jobs:
           DATABASE_URL_OVERRIDE: "sqlite+pysqlite:///:memory:"
           AI_SERVICE_URL: http://127.0.0.1:8001
           PYTHONPATH: .
+          AI_DATASET_ROOT: ${{ runner.temp }}/traffic-ai/datasets
+          AI_TRAINING_ROOT: ${{ runner.temp }}/traffic-ai/training-runs
+          AI_MODEL_ROOT: ${{ runner.temp }}/traffic-ai/models
+          VIDEO_DIR: ${{ runner.temp }}/traffic-ai/videos
         run: python -m pytest -q
 
   frontend-build:
@@ -50,12 +54,13 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: '26.9.0'
+          node-version: '26.10.0'
+          package-manager-cache: false
 
       - name: Verify web branding assets
         working-directory: frontend
@@ -81,7 +86,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Prepare CI environment
         run: cp .env.example .env

@@ -1,7 +1,20 @@
-# Traffic AI V0.5.9 — Clean Retrain + Smart Review 🚗🏷️
+# Traffic AI V0.5.10 — Node 26.10 + GitHub Actions CI Fix 🚗⚙️
 
+
+
+> **V0.5.10:** nâng Node.js frontend từ **26.9.0 → 26.10.0**, nâng GitHub Actions lên `actions/checkout@v7`, `actions/setup-python@v7`, `actions/setup-node@v7` để không còn action runtime Node.js 20, và sửa lỗi GitHub runner không có quyền ghi `/data` bằng `runner.temp`. Clean Retrain + Smart Review của V0.5.9 được giữ nguyên.
 
 > **V0.5.9-R1 hotfix:** sửa `scripts/test.ps1` để contract Dataset & Fine-tune Studio kiểm tra handler thật `startTraining` / `activateTraining` thay vì phụ thuộc nguyên văn nút `Bắt đầu fine-tune RTX 3060`. Runtime, database schema và migration vẫn là **0.5.9 / 0023_clean_retrain_v059**.
+
+## V0.5.10 sửa lỗi publish trên GitHub Actions
+
+Log V0.5.9 cho thấy local test/build đều PASS nhưng Release workflow dừng ở `Test AI service` vì `app/training.py` tạo `/data/datasets` khi import trên GitHub-hosted runner. V0.5.10 sửa theo hai lớp:
+
+- `AI_DATASET_ROOT`, `AI_TRAINING_ROOT`, `AI_MODEL_ROOT`, `VIDEO_DIR` trên CI trỏ vào `${{ runner.temp }}`;
+- `MODEL_ROOT` trong `training.py` cũng đọc `AI_MODEL_ROOT`, không còn hard-code tuyệt đối `/data/models`;
+- GitHub Actions nâng lên `checkout/setup-python/setup-node @v7`;
+- frontend Docker/local test nâng Node.js lên `26.10.0`;
+- thêm `.nvmrc` và `engines.node >=26.10.0` để đồng bộ môi trường.
 
 V0.5.9 tập trung vào một việc thực tế: **train lại sạch mà không bắt người dùng ngồi sửa thủ công 1.200 frame gần giống nhau**.
 
@@ -427,7 +440,7 @@ bicycle thật để model học ranh giới hai class
 
 Đặc biệt phải có **bicycle thật** trong dataset. Nếu dataset chỉ có hàng nghìn xe máy và rất ít xe đạp, model khó học ranh giới class dù annotation xe máy đã đúng.
 
-## 8. Database V0.5.9
+## 8. Database V0.5.10
 
 Migration mới:
 
@@ -435,32 +448,47 @@ Migration mới:
 0022_strict_gate_v058
         ↓
 0023_clean_retrain_v059
+        ↓
+0024_ci_node_v0510
 ```
 
 `schema_version`:
 
 ```text
-0.5.9
+0.5.10
 ```
 
 Migration này không xóa dataset/model cũ. Việc xóa chỉ xảy ra khi người dùng chủ động bấm **Xóa dataset + ảnh cũ**.
 
 ## 9. GitHub Actions / phát hành
 
-V0.5.9 hạ các action về major ổn định trong workflow:
+V0.5.10 nâng GitHub Actions lên major hiện hành chạy trên runtime Node.js 24:
 
 ```text
-actions/checkout@v4
-actions/setup-python@v5
-actions/setup-node@v4
+actions/checkout@v7
+actions/setup-python@v7
+actions/setup-node@v7
 ```
+
+Node.js dùng để **build frontend** là `26.10.0`. Đây là hai lớp khác nhau: runtime nội bộ của GitHub Action là Node 24, còn project frontend được `setup-node` cài Node 26.10.0.
+
+AI unit test trên GitHub runner dùng thư mục ghi được:
+
+```text
+${{ runner.temp }}/traffic-ai/datasets
+${{ runner.temp }}/traffic-ai/training-runs
+${{ runner.temp }}/traffic-ai/models
+${{ runner.temp }}/traffic-ai/videos
+```
+
+nên không còn cố tạo `/data/datasets` trực tiếp trên host runner.
 
 Release artifact gồm:
 
 ```text
-traffic-ai-v0.5.9.zip
-traffic-ai-v0.5.9.tar.gz
-traffic-ai-v0.5.9-README.md
+traffic-ai-v0.5.10.zip
+traffic-ai-v0.5.10.tar.gz
+traffic-ai-v0.5.10-README.md
 SHA256SUMS.txt
 ```
 
@@ -514,8 +542,8 @@ Kiểm tra DB:
 Mong muốn:
 
 ```text
-0023_clean_retrain_v059
-schema_version = 0.5.9
+0024_ci_node_v0510
+schema_version = 0.5.10
 ```
 
 ## 11. Phát hành — vẫn chỉ một lệnh
@@ -531,7 +559,7 @@ test
 → build
 → commit
 → push GitHub
-→ tag v0.5.9
+→ tag v0.5.10
 → GitHub Actions
 → GitHub Release
 → ZIP + TAR.GZ + README + SHA256SUMS
@@ -606,7 +634,7 @@ Annotation Studio của V0.5.6–V0.5.7 vẫn được giữ nguyên để sửa
 - YOLO26m: refiner và lựa chọn fine-tune chính xác hơn.
 - ByteTrack: tracking.
 - React **19.3.0** + Vite **8.3.0**.
-- Node.js **26.9.0** + npm **12.1.0**.
+- Node.js **26.10.0** + npm **12.1.0**.
 - Nginx **1.31.6**.
 - Docker Compose + NVIDIA GPU override.
 
