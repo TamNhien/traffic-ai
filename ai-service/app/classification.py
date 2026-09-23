@@ -25,12 +25,14 @@ class TrackLabelSmoother:
 
         scores: dict[str, float] = defaultdict(float)
         hits: dict[str, int] = defaultdict(int)
-        for label, confidence in samples:
-            # Squared confidence gives repeated high-confidence observations more
-            # influence than a single low-confidence class flip.
-            scores[label] += max(confidence, 0.01) ** 2
+        # Prefer repeated, confident observations while still allowing the
+        # classification to adapt if the detector consistently corrects itself.
+        newest_first = list(reversed(samples))
+        for age, (label, confidence) in enumerate(newest_first):
+            recency = 0.96 ** age
+            scores[label] += (max(confidence, 0.01) ** 2) * recency
             hits[label] += 1
         label = max(scores, key=lambda item: (scores[item], hits[item]))
         total = sum(scores.values()) or 1.0
         certainty = scores[label] / total
-        return label, certainty, len(samples)
+        return label, certainty, hits[label]

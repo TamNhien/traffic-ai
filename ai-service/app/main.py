@@ -13,7 +13,7 @@ from app.runtime import registry
 from app.schemas import PipelineStart, SourceValidationRequest
 from app.sources import inspect_source, list_video_sources, read_source_preview
 
-APP_VERSION = '0.3.0'
+APP_VERSION = '0.3.3'
 app = FastAPI(title='Traffic AI Service', version=APP_VERSION)
 SNAPSHOT_DIR = Path(os.getenv('SNAPSHOT_DIR', '/tmp/traffic-ai-snapshots'))
 SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
@@ -42,13 +42,16 @@ def health() -> dict:
         'status': 'ready',
         'service': 'ai-service',
         'version': APP_VERSION,
-        'pipeline': 'yolo26-bytetrack-smart-gate-v2',
+        'pipeline': 'yolo26-bytetrack-smart-gate-v3',
         'model': os.getenv('AI_MODEL_NAME', 'yolo26n.pt'),
         'device': os.getenv('AI_DEVICE', 'auto'),
         'performance': {
-            'imgsz': int(os.getenv('AI_IMGSZ', '960')),
-            'process_max_width': int(os.getenv('AI_PROCESS_MAX_WIDTH', '1280')),
-            'heavy_refine': os.getenv('AI_HEAVY_REFINE', '1'),
+            'imgsz': int(os.getenv('AI_IMGSZ', '832')),
+            'process_max_width': int(os.getenv('AI_PROCESS_MAX_WIDTH', '1152')),
+            'stream_every_n': int(os.getenv('AI_STREAM_EVERY_N', '2')),
+            'refine_at_crossing': os.getenv('AI_REFINE_AT_CROSSING', '1'),
+            'refine_model': os.getenv('AI_REFINE_MODEL_NAME', 'yolo26s.pt'),
+            'track_stitch_max_gap': int(os.getenv('AI_STITCH_MAX_GAP', '18')),
         },
         'gpu': gpu,
         'active_pipelines': len([p for p in registry.list() if p['status'] in {'starting', 'running'}]),

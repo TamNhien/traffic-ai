@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import threading
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from app.schemas import PipelineStart
@@ -16,12 +16,14 @@ class PipelineState:
     inference_ms: float = 0.0
     processed_frames: int = 0
     total_count: int = 0
+    counts_by_type: dict[str, int] = field(default_factory=lambda: {"motorcycle": 0, "bicycle": 0, "car": 0, "bus": 0, "truck": 0, "other": 0})
     in_count: int = 0
     out_count: int = 0
     detected_tracks: int = 0
     delivered_events: int = 0
     pending_events: int = 0
     delivery_failures: int = 0
+    stitch_recoveries: int = 0
     model_name: str | None = None
     imgsz: int | None = None
     half_precision: bool = False

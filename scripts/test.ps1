@@ -8,6 +8,26 @@ $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
 
+function Assert-PowerShellSyntaxContract {
+  Write-Host "`n[Traffic AI] PowerShell syntax contract" -ForegroundColor Cyan
+  $scriptFiles = Get-ChildItem $PSScriptRoot -Filter "*.ps1" -File
+  foreach ($scriptFile in $scriptFiles) {
+    $tokens = $null
+    $parseErrors = $null
+    [System.Management.Automation.Language.Parser]::ParseFile(
+      $scriptFile.FullName,
+      [ref]$tokens,
+      [ref]$parseErrors
+    ) | Out-Null
+    if ($parseErrors.Count -gt 0) {
+      $details = ($parseErrors | ForEach-Object { "line $($_.Extent.StartLineNumber): $($_.Message)" }) -join "; "
+      throw "PowerShell syntax lỗi trong $($scriptFile.Name): $details"
+    }
+  }
+  Write-Host "[OK] PowerShell syntax contract" -ForegroundColor Green
+}
+
+
 function Assert-LocalHttpsBootstrapContract {
   Write-Host "`n[Traffic AI] Local HTTPS bootstrap contract" -ForegroundColor Cyan
   $requiredScripts = @(
@@ -168,10 +188,12 @@ function Assert-TechnologyVersionsContract {
     @{ Path = "backend\requirements.txt"; Needle = "alembic==1.20.0" },
     @{ Path = "backend\requirements.txt"; Needle = "pydantic==2.13.5" },
     @{ Path = "backend\requirements.txt"; Needle = "pydantic-settings==2.15.0" },
+    @{ Path = "backend\requirements.txt"; Needle = "httpx2==2.13.0" },
     @{ Path = "ai-service\requirements.txt"; Needle = "opencv-python-headless==5.0.0.93" },
     @{ Path = "ai-service\requirements.txt"; Needle = "torch==2.14.0" },
     @{ Path = "ai-service\requirements.txt"; Needle = "torchvision==0.29.0" },
     @{ Path = "ai-service\requirements.txt"; Needle = "ultralytics==8.4.158" },
+    @{ Path = "ai-service\requirements.txt"; Needle = "httpx2==2.13.0" },
     @{ Path = "frontend\package.json"; Needle = '"react": "19.3.0"' },
     @{ Path = "frontend\package.json"; Needle = '"react-dom": "19.3.0"' },
     @{ Path = "frontend\package.json"; Needle = '"vite": "8.3.0"' },
@@ -181,7 +203,8 @@ function Assert-TechnologyVersionsContract {
     @{ Path = "backend\Dockerfile"; Needle = "python:3.14.7-slim" },
     @{ Path = "ai-service\Dockerfile"; Needle = "python:3.14.7-slim" },
     @{ Path = "frontend\Dockerfile"; Needle = "node:26.9.0-alpine" },
-    @{ Path = "frontend\Dockerfile"; Needle = "nginx:1.31.6-alpine" }
+    @{ Path = "frontend\Dockerfile"; Needle = "nginx:1.31.6-alpine" },
+    @{ Path = "frontend\Dockerfile"; Needle = "npm@12.1.0" }
   )
   foreach ($check in $checks) {
     $path = Join-Path $root $check.Path
@@ -210,15 +233,31 @@ function Assert-SourceManagementContract {
   Write-Host "[OK] Camera/video source management contract" -ForegroundColor Green
 }
 
+function Assert-GatewayRuntimeContract {
+  Write-Host "`n[Traffic AI] Gateway Docker-DNS/502 resilience contract" -ForegroundColor Cyan
+  $nginxText = Get-Content (Join-Path $root "gateway\nginx.conf") -Raw -Encoding UTF8
+  $startText = Get-Content (Join-Path $PSScriptRoot "start.ps1") -Raw -Encoding UTF8
+  if ($nginxText -notmatch 'resolver 127\.0\.0\.11' -or $nginxText -notmatch 'server frontend:80 resolve' -or $nginxText -notmatch 'server backend:8000 resolve' -or $nginxText -notmatch 'server ai-service:8001 resolve') {
+    throw "Gateway chưa dùng Docker DNS động cho frontend/backend/AI Service."
+  }
+  if ($nginxText -notmatch 'zone traffic_ai_frontend' -or $nginxText -notmatch 'zone traffic_ai_backend' -or $nginxText -notmatch 'zone traffic_ai_service') {
+    throw "Nginx upstream động thiếu shared zone."
+  }
+  if ($startText -notmatch '--force-recreate.*gateway' -or $startText -notmatch 'Test-HttpsEndpoint') {
+    throw "start.ps1 chưa recreate/verify Gateway sau khi Docker Compose thay container IP."
+  }
+  Write-Host "[OK] Gateway Docker-DNS/502 resilience contract" -ForegroundColor Green
+}
+
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.3.0") { throw "VERSION phải là 0.3.0, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0008_smart_gate_v2.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0008_smart_gate_v2.py." }
+  if ($version -ne "0.3.3") { throw "VERSION phải là 0.3.3, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0011_gateway_dns_runtime.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0011_gateway_dns_runtime.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0008_smart_gate_v2"' -or $migrationText -notmatch "value='0.3.0'") {
-    throw "Migration 0008_smart_gate_v2 không đúng contract V0.3.0."
+  if ($migrationText -notmatch 'revision = "0011_gateway_dns_runtime"' -or $migrationText -notmatch "value='0.3.3'") {
+    throw "Migration 0011_gateway_dns_runtime không đúng contract V0.3.3."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
@@ -231,6 +270,7 @@ function Invoke-Step([string]$Title, [scriptblock]$Action) {
 }
 
 Remove-LegacyReleaseScripts
+Assert-PowerShellSyntaxContract
 Assert-LocalHttpsBootstrapContract
 Assert-BackendHealthContract
 Assert-FrontendUtf8Contract
@@ -238,9 +278,10 @@ Assert-FrontendBrandingContract
 Assert-ReleaseFallbackContract
 Assert-TechnologyVersionsContract
 Assert-SourceManagementContract
+Assert-GatewayRuntimeContract
 Assert-VersionConsistencyContract
 
-Write-Host "`n[Traffic AI] Smart Gate 2.0 / interactive counting-line contract" -ForegroundColor Cyan
+Write-Host "`n[Traffic AI] Smart Gate 3.0 / session reset + track continuity contract" -ForegroundColor Cyan
 $countingText = Get-Content (Join-Path $root "ai-service\app\counting.py") -Raw -Encoding UTF8
 $classText = Get-Content (Join-Path $root "ai-service\app\classification.py") -Raw -Encoding UTF8
 $frontendText = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
@@ -252,10 +293,14 @@ if ($countingText -notmatch 'dead_band_ratio' -or $countingText -notmatch 'count
 if ($classText -notmatch 'TrackLabelSmoother' -or $frontendText -notmatch 'CountingLineEditor' -or $frontendText -notmatch 'Dừng AI để chỉnh vạch') {
   throw "Thiếu ổn định nhãn theo Track ID hoặc trình chỉnh vạch trực tiếp/khóa khi AI chạy."
 }
-if ($trackerText -notmatch 'track_buffer: 75' -or $smartRoutesText -notmatch 'preview.jpg') {
-  throw "Thiếu ByteTrack traffic profile hoặc endpoint preview để đặt vạch."
+if ($trackerText -notmatch 'track_buffer: 100' -or $smartRoutesText -notmatch 'preview.jpg') {
+  throw "Thiếu ByteTrack traffic profile V3 hoặc endpoint preview để đặt vạch."
 }
-Write-Host "[OK] Smart Gate 2.0 / interactive counting-line contract" -ForegroundColor Green
+$trackingText = Get-Content (Join-Path $root "ai-service\app\tracking.py") -Raw -Encoding UTF8
+if ($trackingText -notmatch 'TrackContinuityResolver' -or $frontendText -notmatch 'sessionCounts' -or $frontendText -notmatch 'Bộ đếm phiên mới đã reset về 0') {
+  throw "Thiếu track stitching hoặc bộ đếm frontend theo từng phiên."
+}
+Write-Host "[OK] Smart Gate 3.0 / session reset + track continuity contract" -ForegroundColor Green
 
 Write-Host "`n[Traffic AI] AI counting/persistence contract" -ForegroundColor Cyan
 $workerText = Get-Content (Join-Path $root "ai-service\app\worker.py") -Raw -Encoding UTF8
@@ -302,7 +347,7 @@ Invoke-Step "Frontend build" {
   if (Test-Path $frontendDist) { Remove-Item $frontendDist -Recurse -Force }
   if (Test-Path $frontendLock) { Remove-Item $frontendLock -Force }
   docker run --rm -v "${root}:/src" -w /src/frontend node:26.9.0-alpine `
-    sh -lc "npm install -g npm@12.0.2 && npm install && npm audit --audit-level=high && npm run build"
+    sh -lc "npm install -g npm@12.1.0 && npm install && npm audit --audit-level=high && npm run build"
 }
 
 if (-not $SkipDockerBuild) {

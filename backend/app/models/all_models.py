@@ -64,7 +64,7 @@ class Camera(Base):
     source_url: Mapped[str] = mapped_column(Text, nullable=False)
     location: Mapped[str | None] = mapped_column(String(255))
     description: Mapped[str | None] = mapped_column(Text)
-    confidence_threshold: Mapped[float] = mapped_column(Float, default=0.25, nullable=False)
+    confidence_threshold: Mapped[float] = mapped_column(Float, default=0.20, nullable=False)
     line_x1: Mapped[float] = mapped_column(Float, default=0.1, nullable=False)
     line_y1: Mapped[float] = mapped_column(Float, default=0.5, nullable=False)
     line_x2: Mapped[float] = mapped_column(Float, default=0.9, nullable=False)

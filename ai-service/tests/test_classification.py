@@ -8,5 +8,5 @@ def test_track_label_smoothing_resists_one_frame_bus_truck_flip() -> None:
     smoother.update(1, "bus", 0.91)
     label, certainty, hits = smoother.stable_label(1, "bus")
     assert label == "truck"
-    assert hits == 5
+    assert hits == 4
     assert certainty > 0.6

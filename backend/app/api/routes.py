@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-import httpx
+import httpx2 as httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
 from pydantic import BaseModel
 from sqlalchemy import func, select, text

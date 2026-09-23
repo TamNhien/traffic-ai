@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './styles.css'
 
-const APP_VERSION = '0.3.0'
+const APP_VERSION = '0.3.3'
 const vehicleLabels = {
   motorcycle: 'Xe máy', bicycle: 'Xe đạp', car: 'Ô tô', bus: 'Xe buýt', truck: 'Xe tải', other: 'Khác'
 }
@@ -11,7 +11,7 @@ const clamp01 = value => Math.min(1, Math.max(0, Number(value)))
 const defaultCameraForm = () => ({
   name: 'Camera demo', code: 'CAM-001', source_type: 'video',
   source_url: '/data/videos/demo.mp4', location: 'Khu vực demo',
-  confidence_threshold: 0.25, line_x1: 0.32, line_y1: 0.59, line_x2: 0.84, line_y2: 0.59
+  confidence_threshold: 0.20, line_x1: 0.32, line_y1: 0.59, line_x2: 0.84, line_y2: 0.59
 })
 
 function StatCard({ title, value, note }) {
@@ -95,7 +95,7 @@ function App() {
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
   const [form, setForm] = useState(defaultCameraForm())
-  const [lineForm, setLineForm] = useState({confidence_threshold:0.25,line_x1:0.32,line_y1:0.59,line_x2:0.84,line_y2:0.59})
+  const [lineForm, setLineForm] = useState({confidence_threshold:0.20,line_x1:0.32,line_y1:0.59,line_x2:0.84,line_y2:0.59})
 
   const load = async () => {
     try {
@@ -128,7 +128,10 @@ function App() {
   const selected = cameras.find(c => c.id === Number(selectedId))
   const activePipeline = pipelines.find(p => p.camera_id === Number(selectedId) && ['starting', 'running'].includes(p.status))
   const latestPipeline = pipelines.find(p => p.camera_id === Number(selectedId))
-  const vehicleRows = useMemo(() => Object.entries(vehicleLabels).map(([key, label]) => ({ label, value: summary?.by_vehicle_type?.[key] || 0 })), [summary])
+  const sessionPipeline = activePipeline || latestPipeline
+  const sessionCounts = sessionPipeline?.counts_by_type || {}
+  const vehicleRows = useMemo(() => Object.entries(vehicleLabels).map(([key, label]) => ({ label, value: sessionCounts?.[key] || 0 })), [sessionCounts])
+  const sessionTotal = sessionPipeline?.total_count ?? 0
   const videoPathSet = useMemo(() => new Set(videoSources.map(v => v.source_url)), [videoSources])
   const selectedVideoMissing = selected?.source_type === 'video' && sourceStatus?.valid === false
   const sourceAutoRepairAvailable = selectedVideoMissing && !!sourceStatus?.suggested_source_url
@@ -139,12 +142,12 @@ function App() {
     setEditingId(selected.id)
     setForm({
       name: selected.name, code: selected.code, source_type: selected.source_type, source_url: selected.source_url,
-      location: selected.location || '', confidence_threshold: selected.confidence_threshold ?? 0.25,
+      location: selected.location || '', confidence_threshold: selected.confidence_threshold ?? 0.20,
       line_x1: selected.line_x1 ?? 0.32, line_y1: selected.line_y1 ?? 0.59,
       line_x2: selected.line_x2 ?? 0.84, line_y2: selected.line_y2 ?? 0.59
     })
     setLineForm({
-      confidence_threshold: selected.confidence_threshold ?? 0.25,
+      confidence_threshold: selected.confidence_threshold ?? 0.20,
       line_x1: selected.line_x1 ?? 0.32, line_y1: selected.line_y1 ?? 0.59,
       line_x2: selected.line_x2 ?? 0.84, line_y2: selected.line_y2 ?? 0.59
     })
@@ -188,8 +191,12 @@ function App() {
       const response = await fetch(`/api/cameras/${selected.id}/${action}`, { method: 'POST' })
       const body = await response.json()
       if (!response.ok) throw new Error(body.detail || 'Không thể thay đổi pipeline')
-      if (action === 'start' && body.source_repaired) setNotice(`Đã tự sửa nguồn thành ${body.source_url} và bắt đầu AI.`)
-      else setNotice(action === 'start' ? 'AI đã bắt đầu. Chỉ phương tiện thực sự cắt vạch vàng mới được đếm.' : 'Đã dừng AI. Bây giờ có thể chỉnh vạch đếm.')
+      if (action === 'start') {
+        const fresh = body.pipeline || {camera_id:selected.id, session_id:body.session_id, status:'starting', total_count:0, in_count:0, out_count:0, counts_by_type:{}}
+        setPipelines(prev => [fresh, ...prev.filter(p => p.camera_id !== selected.id)])
+      }
+      if (action === 'start' && body.source_repaired) setNotice(`Đã tự sửa nguồn thành ${body.source_url} và bắt đầu AI. Bộ đếm phiên mới đã reset về 0.`)
+      else setNotice(action === 'start' ? 'AI đã bắt đầu. Bộ đếm phiên mới đã reset về 0; lịch sử PostgreSQL vẫn được giữ.' : 'Đã dừng AI. Bây giờ có thể chỉnh vạch đếm.')
       await load()
     } catch (err) { setError(err.message) } finally { setBusy(false) }
   }
@@ -241,14 +248,14 @@ function App() {
     <aside className="sidebar">
       <div className="brand"><img className="brand-logo" src={`/logo.svg?v=${APP_VERSION}`} alt="Traffic AI" /><div><strong>Traffic AI</strong><span>YOLO26 + ByteTrack</span></div></div>
       <nav><a className="active" href="#overview">Tổng quan</a><a href="#live">Giám sát</a><a href="#cameras">Camera</a><a href="#events">Sự kiện</a></nav>
-      <div className="sidebar-footer">V{APP_VERSION} · Smart Gate 2.0</div>
+      <div className="sidebar-footer">V{APP_VERSION} · Smart Gate 3.0</div>
     </aside>
     <main>
       <header className="topbar"><div><p className="eyebrow">ĐỒ ÁN TRÍ TUỆ NHÂN TẠO</p><h1>Phát hiện, theo dõi và đếm phương tiện</h1></div><div className={`health ${health?.status === 'ok' ? 'online' : ''}`}><span className="dot" />{health?.status === 'ok' ? 'Hệ thống hoạt động' : 'Đang kết nối'}</div></header>
       {error && <div className="error-banner">{error}</div>}{notice && <div className="notice-banner">{notice}</div>}
       <section className="stats-grid" id="overview">
         <StatCard title="Camera" value={summary?.total_cameras ?? '—'} note={`${summary?.active_cameras ?? 0} đang chạy`} />
-        <StatCard title="Phương tiện" value={summary?.total_events ?? '—'} note="Chỉ tính xe đã cắt vạch" />
+        <StatCard title="Phương tiện phiên" value={sessionTotal} note={`Lịch sử PostgreSQL: ${summary?.total_events ?? 0}`} />
         <StatCard title="Phiên đếm" value={summary?.running_sessions ?? '—'} note="Đang hoạt động" />
         <StatCard title="GPU" value={systemStatus?.ai?.gpu?.available ? 'CUDA' : (systemStatus?.ai_service === 'ready' ? 'CPU' : '—')} note={systemStatus?.ai?.gpu?.name || systemStatus?.ai?.model || 'AI service'} />
       </section>
@@ -261,7 +268,7 @@ function App() {
           {selected && !activePipeline && <div className={`source-status ${sourceStatus?.valid ? 'ok' : 'bad'}`}><strong>{sourceStatus?.valid ? '✓ Nguồn sẵn sàng' : '⚠ Nguồn chưa sẵn sàng'}</strong><span>{sourceStatus?.message || 'Đang kiểm tra nguồn...'}</span>{sourceStatus?.suggested_source_url && <><small>Gợi ý: {sourceStatus.suggested_source_url}</small><button type="button" className="inline-action" onClick={applySuggestedSource}>Dùng nguồn gợi ý</button></>}</div>}
           {latestPipeline && !activePipeline && <div className="pipeline-result">Lần chạy gần nhất: <strong>{latestPipeline.status}</strong> · {latestPipeline.processed_frames} frame · {latestPipeline.total_count} lượt cắt vạch · đã ghi {latestPipeline.delivered_events ?? 0} sự kiện{latestPipeline.last_error ? ` · ${latestPipeline.last_error}` : ''}</div>}
         </article>
-        <article className="panel"><div className="panel-head"><div><span className="panel-kicker">VEHICLE COUNT</span><h2>Theo loại phương tiện</h2></div></div><div className="vehicle-list">{vehicleRows.map(row => <div className="vehicle-row" key={row.label}><span>{row.label}</span><strong>{row.value}</strong></div>)}</div><p className="hint">Nhãn xe được làm mượt theo toàn bộ Track ID. Xe buýt/xe tải được kiểm tra lại bằng crop cận cảnh khi cắt vạch.</p></article>
+        <article className="panel"><div className="panel-head"><div><span className="panel-kicker">VEHICLE COUNT</span><h2>Theo loại phương tiện · phiên hiện tại</h2></div></div><div className="vehicle-list">{vehicleRows.map(row => <div className="vehicle-row" key={row.label}><span>{row.label}</span><strong>{row.value}</strong></div>)}</div><p className="hint">Mỗi lần bấm Chạy AI là một phiên mới và bộ đếm này bắt đầu từ 0. Lịch sử cũ vẫn được giữ trong PostgreSQL. Track bị đổi ID ngắn hạn được nối lại; xe buýt/xe tải hoặc nhãn chưa chắc chắn được kiểm tra lại tại thời điểm cắt vạch.</p></article>
       </section>
 
       <section className="line-layout" id="cameras">
@@ -272,7 +279,7 @@ function App() {
           <div className="nudge-grid"><button disabled={!!activePipeline} onClick={()=>moveLine(0,-0.02)}>↑ Lên</button><button disabled={!!activePipeline} onClick={()=>moveLine(0,0.02)}>↓ Xuống</button><button disabled={!!activePipeline} onClick={()=>moveLine(-0.02,0)}>← Trái</button><button disabled={!!activePipeline} onClick={()=>moveLine(0.02,0)}>→ Phải</button><button disabled={!!activePipeline} onClick={()=>resizeLine(1.12)}>Dài hơn</button><button disabled={!!activePipeline} onClick={()=>resizeLine(0.88)}>Ngắn hơn</button></div>
           <div className="line-grid">{lineField('line_x1','X1')}{lineField('line_y1','Y1')}{lineField('line_x2','X2')}{lineField('line_y2','Y2')}{lineField('confidence_threshold','Confidence')}</div>
           <button disabled={!selected || busy || !!activePipeline} onClick={saveCountingLine}>Lưu vị trí vạch</button>
-          <p className="hint">Confidence mặc định 0,25 để giảm bỏ sót xe nhỏ/xa. Không nên hạ quá thấp nếu cảnh có nhiều xe đỗ hai bên đường.</p>
+          <p className="hint">Confidence mặc định 0,20 để giảm bỏ sót xe nhỏ/xa. Không nên hạ quá thấp nếu cảnh có nhiều xe đỗ hai bên đường.</p>
         </article>
 
         <article className="panel"><div className="panel-head"><div><span className="panel-kicker">CAMERA SOURCE</span><h2>{editingId ? `Sửa Camera #${editingId}` : 'Tạo camera mới'}</h2></div><button className="secondary" type="button" disabled={busy || !!activePipeline} onClick={beginNewCamera}>Camera mới</button></div><form className="camera-form" onSubmit={saveCamera}>
@@ -285,7 +292,7 @@ function App() {
       </section>
 
       <section className="content-grid lower-grid" id="events">
-        <article className="panel"><div className="panel-head"><div><span className="panel-kicker">RECENT EVENTS</span><h2>Lịch sử đếm gần nhất</h2></div></div><div className="event-list">{events.length ? events.map(e => <div className="event-row" key={e.id}><span>#{e.tracking_id ?? '-'} · {vehicleLabels[e.vehicle_type] || e.vehicle_type}</span><strong>{String(e.direction).toUpperCase()}</strong><small>{new Date(e.detected_at).toLocaleString()}</small></div>) : <div className="empty">Chưa có phương tiện cắt vạch đếm.</div>}</div></article>
+        <article className="panel"><div className="panel-head"><div><span className="panel-kicker">RECENT EVENTS</span><h2>Lịch sử PostgreSQL · mọi phiên</h2></div></div><div className="event-list">{events.length ? events.map(e => <div className="event-row" key={e.id}><span>#{e.tracking_id ?? '-'} · {vehicleLabels[e.vehicle_type] || e.vehicle_type}</span><strong>{String(e.direction).toUpperCase()}</strong><small>{new Date(e.detected_at).toLocaleString()}</small></div>) : <div className="empty">Chưa có phương tiện cắt vạch đếm.</div>}</div></article>
         <article className="panel"><div className="panel-head"><div><span className="panel-kicker">COUNTING SESSIONS</span><h2>Lịch sử phiên chạy</h2></div></div><div className="event-list">{sessions.length ? sessions.map(s => <div className="event-row" key={s.id}><span>Session #{s.id} · Camera #{s.camera_id}</span><strong>{String(s.status).toUpperCase()}</strong><small>{s.total_vehicles} lượt cắt vạch · FPS {s.average_fps ?? '-'} · {new Date(s.started_at).toLocaleString()}</small></div>) : <div className="empty">Chưa có phiên chạy.</div>}</div></article>
       </section>
     </main>

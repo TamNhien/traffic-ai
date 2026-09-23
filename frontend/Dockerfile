@@ -1,7 +1,7 @@
 FROM node:26.9.0-alpine AS build
 WORKDIR /app
 COPY package*.json ./
-RUN npm install -g npm@12.0.2 \
+RUN npm install -g npm@12.1.0 \
     && if [ -f package-lock.json ]; then npm ci; else npm install; fi \
     && npm audit --audit-level=high
 COPY . .

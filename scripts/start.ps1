@@ -24,6 +24,22 @@ function Show-StartupDiagnostics {
   docker compose -f docker-compose.yml logs --tail 120 ai-service 2>$null
 }
 
+function Show-GatewayDiagnostics {
+  Write-Host "`n[Traffic AI] Gateway logs (last 120 lines)" -ForegroundColor Yellow
+  docker compose -f docker-compose.yml logs --tail 120 gateway 2>$null
+}
+
+function Test-HttpsEndpoint([string]$Url, [int]$Attempts = 20) {
+  for ($i = 1; $i -le $Attempts; $i++) {
+    try {
+      $code = (& curl.exe -k -sS -o NUL -w "%{http_code}" --max-time 4 $Url 2>$null | Select-Object -Last 1).Trim()
+      if ($code -eq "200") { return $true }
+    } catch {}
+    Start-Sleep -Seconds 1
+  }
+  return $false
+}
+
 if (-not (Test-Path ".\.env")) {
   Copy-Item ".\.env.example" ".\.env"
   Write-Warning ".env được tạo từ .env.example. Nếu đây là môi trường mới, hãy đổi POSTGRES_PASSWORD trước khi triển khai thật."
@@ -40,6 +56,34 @@ if (Test-Path $envPath) {
     Write-Host "[Traffic AI] Đã nâng baseline model trong .env: yolo11n.pt -> yolo26n.pt" -ForegroundColor Yellow
   }
 }
+
+# V0.3.3: giữ tuning V0.3.x và harden Gateway/Docker DNS.
+function Set-EnvDefaultUpgrade([string]$Key, [string]$OldValue, [string]$NewValue) {
+  $text = Get-Content $envPath -Raw
+  $pattern = "(?m)^" + [regex]::Escape($Key) + "=" + [regex]::Escape($OldValue) + "[ \t]*\r?$"
+  if ($text -match $pattern) {
+    $text = [regex]::Replace($text, $pattern, "$Key=$NewValue")
+    [System.IO.File]::WriteAllText($envPath, $text, [System.Text.UTF8Encoding]::new($false))
+    Write-Host "[Traffic AI] Tuning ${Key}: $OldValue -> $NewValue" -ForegroundColor Yellow
+  }
+}
+function Ensure-EnvSetting([string]$Key, [string]$Value) {
+  $text = Get-Content $envPath -Raw
+  if ($text -notmatch ("(?m)^" + [regex]::Escape($Key) + "=")) {
+    Add-Content -Path $envPath -Value "$Key=$Value" -Encoding UTF8
+    Write-Host "[Traffic AI] Đã thêm $Key=$Value vào .env" -ForegroundColor Yellow
+  }
+}
+Set-EnvDefaultUpgrade "AI_IMGSZ" "960" "832"
+Set-EnvDefaultUpgrade "AI_PROCESS_MAX_WIDTH" "1280" "1152"
+Set-EnvDefaultUpgrade "AI_JPEG_QUALITY" "76" "72"
+Set-EnvDefaultUpgrade "AI_CLASS_HISTORY" "18" "24"
+Ensure-EnvSetting "AI_STREAM_EVERY_N" "2"
+Ensure-EnvSetting "AI_STREAM_MAX_WIDTH" "960"
+Ensure-EnvSetting "AI_STITCH_MAX_GAP" "18"
+Ensure-EnvSetting "AI_STITCH_DISTANCE_RATIO" "0.085"
+Ensure-EnvSetting "AI_REFINE_AT_CROSSING" "1"
+Ensure-EnvSetting "AI_REFINE_MODEL_NAME" "yolo26s.pt"
 
 # V0.2.8: bootstrap HTTPS/hosts tự động.
 & (Join-Path $PSScriptRoot "ensure-local-https.ps1") -HostName "traffic-ai.test"
@@ -83,8 +127,25 @@ if ($LASTEXITCODE -ne 0) {
   }
 }
 
+# Gateway có thể đã sống từ phiên bản trước trong khi frontend/backend vừa bị recreate.
+# Force-recreate để nạp nginx.conf mới; Nginx V0.3.3 đồng thời dùng Docker DNS động.
+Write-Host "[Traffic AI] Đồng bộ Gateway với IP container hiện tại..." -ForegroundColor Cyan
+docker compose -f docker-compose.yml up -d --no-deps --force-recreate gateway
+if ($LASTEXITCODE -ne 0) {
+  Show-GatewayDiagnostics
+  throw "Không thể recreate traffic-ai-gateway."
+}
+
+$dashboardOk = Test-HttpsEndpoint "https://traffic-ai.test:8443/" 25
+$apiOk = Test-HttpsEndpoint "https://traffic-ai.test:8444/api/health" 25
+if (-not $dashboardOk -or -not $apiOk) {
+  Show-GatewayDiagnostics
+  Show-StartupDiagnostics
+  throw "Gateway chưa proxy được Dashboard/API sau khi startup (Dashboard=$dashboardOk, API=$apiOk)."
+}
+
 Write-Host ""
-Write-Host "[OK] Traffic AI V0.3.0 đã khởi động." -ForegroundColor Green
+Write-Host "[OK] Traffic AI V0.3.3 đã khởi động." -ForegroundColor Green
 Write-Host "Dashboard : https://traffic-ai.test:8443"
 Write-Host "API Docs  : https://traffic-ai.test:8444/docs"
 Write-Host "PostgreSQL: 127.0.0.1:5445 / traffic_ai_db"

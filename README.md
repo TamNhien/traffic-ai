@@ -1,4 +1,4 @@
-# Traffic AI V0.3.0
+# Traffic AI V0.3.3
 
 **Đồ án môn Trí tuệ nhân tạo:** Nghiên cứu và xây dựng hệ thống phát hiện, phân loại, theo dõi và đếm phương tiện giao thông qua camera.
 
@@ -10,7 +10,7 @@
 
 ## 1. Trạng thái hiện tại
 
-V0.3.0 tập trung vào độ tin cậy khi đếm thật trên video giao thông: tăng tốc pipeline, giảm bỏ sót xe nhỏ/xa, ổn định nhãn theo toàn bộ Track ID, xử lý riêng nhầm lẫn xe buýt/xe tải tại thời điểm cắt vạch, đếm hai chiều IN/OUT và cho phép chỉnh vạch trực tiếp trên ảnh xem trước. **Chỉ phương tiện thực sự đi từ một phía của vạch vàng sang phía còn lại mới được ghi nhận vào PostgreSQL.**
+V0.3.3 tập trung **sửa triệt để 502 Bad Gateway sau khi Docker Compose recreate Backend/Frontend/AI Service**. Gateway Nginx nay dùng Docker embedded DNS `127.0.0.11` với upstream `resolve`, nên địa chỉ IP container được làm mới tự động thay vì bị giữ cứng từ lần khởi động cũ. `start.ps1` còn force-recreate Gateway sau khi các service chính đã healthy và kiểm tra thực tế cả Dashboard lẫn API trước khi báo khởi động thành công. Pipeline Smart Gate 3.0, reset bộ đếm theo session, Track Continuity Resolver và các tối ưu AI của V0.3.2 được giữ nguyên.
 
 Các thay đổi chính:
 
@@ -18,7 +18,7 @@ Các thay đổi chính:
 - **ByteTrack traffic profile:** tăng `track_buffer` để giảm rớt ID khi xe bị che khuất ngắn hoặc khung hình bị chói.
 - **Track-level class smoothing:** nhãn phương tiện không còn lấy từ đúng một frame; hệ thống tích lũy confidence của cả Track ID.
 - **Heavy-vehicle refinement:** khi xe được ổn định là `bus/truck`, crop xe tại vạch được kiểm tra lại ở độ phân giải cao hơn trước khi ghi event.
-- **Tối ưu RTX 3060:** xử lý frame ở chiều rộng tối đa 1280 px, inference `imgsz=960`, FP16 khi CUDA khả dụng và JPEG stream giảm chất lượng xuống mức hợp lý để tăng FPS.
+- **Tối ưu RTX 3060:** xử lý frame ở chiều rộng tối đa 1152 px, inference `imgsz=832`, FP16 khi CUDA khả dụng và JPEG stream giảm chất lượng xuống mức hợp lý để tăng FPS.
 - **Confidence mặc định 0,25** thay cho 0,35 để giảm bỏ sót xe nhỏ/xa; migration chỉ hạ các camera còn đúng giá trị mặc định cũ.
 - **Trình chỉnh vạch trực tiếp:** khi AI dừng, kéo cả vạch để di chuyển hoặc kéo hai đầu tròn để xoay/đổi chiều dài; có nút Lên/Xuống/Trái/Phải/Dài hơn/Ngắn hơn.
 - **Khóa cấu hình khi đang đếm:** UI và Backend đều không cho đổi nguồn/vạch/confidence khi session đang chạy.
@@ -59,7 +59,7 @@ Y2 = 0.59
 | Vite | `8.3.0` |
 | @vitejs/plugin-react | `6.1.1` |
 | Node.js | `26.9.0` Current |
-| npm | `12.0.2` |
+| npm | `12.1.0` |
 | Nginx | `1.31.6` mainline |
 
 ## 2. Cổng và địa chỉ cố định
@@ -260,11 +260,11 @@ cd D:\LienThongDH\DoAn\traffic-ai
 Các bước kiểm thử gồm:
 
 1. Contract HTTPS, Backend health, UTF-8, logo/favicon và GitHub Release.
-2. Contract khóa phiên bản công nghệ V0.3.0.
+2. Contract khóa phiên bản công nghệ V0.3.3, PowerShell syntax, Gateway Docker-DNS và Smart Gate 3.0.
 3. Contract quản lý nguồn video/camera, preflight và auto-repair đường dẫn cũ.
 4. Kiểm tra cú pháp Backend và AI Service trên Python 3.14.7.
 5. Backend unit tests và AI Service unit tests bằng pytest 9.1.1.
-6. Cài npm 12.0.2, kiểm tra `npm audit --audit-level=high`, build React/Vite bằng Node 26.9.0.
+6. Cài npm 12.1.0, kiểm tra `npm audit --audit-level=high`, build React/Vite bằng Node 26.9.0.
 7. Validate Docker Compose.
 8. Build các Docker image ứng dụng.
 
@@ -325,7 +325,7 @@ Kiểm tra .env và khóa riêng TLS không bị commit
          ↓
 Commit source
          ↓
-Tạo tag theo file `VERSION` (ví dụ `v0.3.0`)
+Tạo tag theo file `VERSION` (ví dụ `v0.3.3`)
          ↓
 Push main
          ↓
@@ -717,11 +717,35 @@ Các phiên bản được sắp xếp **tăng dần**:
 - Backend idempotency đổi thành `session_id + tracking_id + direction` để không chặn lượt quay lại hợp lệ.
 - ByteTrack dùng profile giao thông riêng với `track_buffer=75`, giảm mất ID ngắn hạn.
 - Thêm `TrackLabelSmoother` để bỏ dao động class theo từng frame; xe buýt/xe tải được kiểm tra lại bằng crop ở thời điểm crossing.
-- Tối ưu tốc độ bằng resize frame xử lý, `imgsz=960`, FP16 CUDA và JPEG stream nhẹ hơn.
+- Tối ưu tốc độ bằng resize frame xử lý, `imgsz=832`, FP16 CUDA và JPEG stream nhẹ hơn.
 - Confidence mặc định giảm từ `0.35` xuống `0.25` cho camera còn dùng default cũ.
 - Thêm ảnh preview và trình kéo vạch trực tiếp; khi AI đang chạy toàn bộ chỉnh sửa runtime bị khóa.
 - Thêm nút Lên/Xuống/Trái/Phải/Dài hơn/Ngắn hơn và preset phù hợp video hiện tại.
 - Thêm migration `0008_smart_gate_v2`, cập nhật `schema_version=0.3.0`.
+
+### V0.3.1 — Reset theo phiên, nối Track ID và tối ưu realtime
+
+- Dashboard không còn dùng tổng `vehicle_events` toàn lịch sử làm bộ đếm đang chạy; mỗi lần **Chạy AI** tạo state mới với tổng/IN/OUT/theo loại bắt đầu từ `0`.
+- Tổng lịch sử vẫn được giữ nguyên trong PostgreSQL và hiển thị riêng, không xóa dữ liệu cũ khi replay clip.
+- Thêm `TrackContinuityResolver`: khi ByteTrack mất xe vài frame rồi cấp ID mới ở phía bên kia vạch, hệ thống có thể nối ID mới về canonical track cũ theo khoảng cách, thời gian và nhóm loại xe.
+- Smart Gate 3.0 giảm dead-band và giữ finite counting segment để tăng độ nhạy nhưng vẫn chỉ đếm xe thật sự cắt vạch.
+- ByteTrack traffic profile đổi thành `track_buffer=100`, threshold thấp hơn và match threshold cao hơn để giữ xe nhỏ/xa lâu hơn.
+- Confidence mặc định từ `0.25` xuống `0.20` chỉ cho camera còn dùng đúng default cũ; giá trị người dùng đã chỉnh không bị ghi đè.
+- Tăng history phân loại lên `24`; điểm số nhãn có trọng số confidence + recency.
+- Crossing chưa chắc chắn hoặc bus/truck được refiner bằng `yolo26s.pt` (lazy load); detector realtime chính vẫn là `yolo26n.pt`.
+- Tối ưu realtime: `AI_IMGSZ=832`, `AI_PROCESS_MAX_WIDTH=1152`, MJPEG chỉ encode mỗi 2 frame và stream tối đa 960 px; inference/tracking vẫn chạy mọi frame nên không hy sinh logic crossing.
+- `start.ps1` tự nâng các giá trị mặc định V0.3.0 trong `.env` và chỉ thêm biến tuning còn thiếu, không ghi đè cấu hình tùy chỉnh khác.
+- Thêm migration `0009_session_realtime_v3`, cập nhật `schema_version=0.3.1`.
+
+### V0.3.2 — Sửa PowerShell startup, httpx2 và npm 12.1
+
+- Sửa `ParserError` trong `scripts/start.ps1`: chuỗi `Tuning $Key:` được đổi thành `Tuning ${Key}:` để PowerShell không hiểu nhầm dấu `:` là phần của variable scope.
+- Thêm **PowerShell syntax contract** trong `scripts/test.ps1`; toàn bộ `scripts/*.ps1` được parse bằng `System.Management.Automation.Language.Parser` trước các bước build/test.
+- Chuyển HTTP client runtime/test từ `httpx 0.28.1` sang `httpx2 2.13.0`; code giữ alias `import httpx2 as httpx` để API gọi nội bộ không phải viết lại hàng loạt.
+- Loại cảnh báo `StarletteDeprecationWarning: Using httpx with starlette.testclient is deprecated` bằng cách cài `httpx2` đúng theo TestClient mới.
+- Nâng npm từ `12.0.2` lên `12.1.0` trong local test, Dockerfile và toàn bộ GitHub Actions workflow.
+- Giữ nguyên Smart Gate 3.0, reset bộ đếm theo session, Track Continuity Resolver, YOLO26n + ByteTrack và YOLO26s refiner của V0.3.1.
+- Thêm migration `0010_runtime_hardening`; không thay đổi cấu trúc bảng, chỉ đồng bộ `schema_version=0.3.2`.
 
 ## 15. Lộ trình tiếp theo
 
@@ -740,3 +764,13 @@ Các phiên bản được sắp xếp **tăng dần**:
 - Thống kê theo giờ/ngày/camera/loại xe.
 - Xuất báo cáo Excel/CSV.
 - Nhiều camera và tối ưu hiệu năng GPU.
+
+### V0.3.3 — Sửa 502 Bad Gateway và Docker DNS động
+
+- Sửa nguyên nhân Gateway giữ IP cũ của `frontend`, `backend` hoặc `ai-service` sau khi Docker Compose recreate container.
+- Nginx Gateway dùng Docker embedded DNS `127.0.0.11`, upstream shared `zone` và `resolve` để tự refresh IP service.
+- `start.ps1` force-recreate riêng Gateway sau khi các service chính healthy để chắc chắn nạp cấu hình Nginx mới.
+- Sau startup, script kiểm tra thực tế `https://traffic-ai.test:8443/` và `https://traffic-ai.test:8444/api/health`; nếu proxy chưa hoạt động thì in Gateway/Backend/AI logs và fail thay vì báo xanh giả.
+- Thêm contract kiểm thử `Gateway Docker-DNS/502 resilience` để ngăn regression.
+- Thêm migration `0011_gateway_dns_runtime`; không đổi cấu trúc dữ liệu, chỉ đồng bộ `schema_version=0.3.3`.
+
