@@ -37,14 +37,16 @@ function New-DirectGitHubRelease([string]$Tag) {
 
   $zip = Join-Path $distRoot "traffic-ai-$Tag.zip"
   $tar = Join-Path $distRoot "traffic-ai-$Tag.tar.gz"
+  $readme = Join-Path $distRoot "traffic-ai-$Tag-README.md"
   $sums = Join-Path $distRoot "SHA256SUMS.txt"
   $prefix = "traffic-ai-$Tag/"
 
   Invoke-Checked { git archive --format=zip --prefix=$prefix -o $zip $Tag } "Không tạo được ZIP release."
   Invoke-Checked { git archive --format=tar.gz --prefix=$prefix -o $tar $Tag } "Không tạo được TAR.GZ release."
+  Copy-Item (Join-Path $root "README.md") $readme -Force
 
   $lines = @()
-  foreach ($artifact in @($zip, $tar)) {
+  foreach ($artifact in @($zip, $tar, $readme)) {
     $hash = (Get-FileHash -Algorithm SHA256 $artifact).Hash.ToLowerInvariant()
     $lines += "$hash  $(Split-Path $artifact -Leaf)"
   }
@@ -56,7 +58,7 @@ function New-DirectGitHubRelease([string]$Tag) {
     return
   }
 
-  gh release create $Tag $zip $tar $sums --repo "$Owner/$Repository" --title "Traffic AI $Tag" --generate-notes --verify-tag
+  gh release create $Tag $zip $tar $readme $sums --repo "$Owner/$Repository" --title "Traffic AI $Tag" --notes-file $readme --verify-tag
   if ($LASTEXITCODE -ne 0) { throw "Tạo GitHub Release trực tiếp thất bại." }
   Write-Host "[OK] Đã tạo GitHub Release trực tiếp: $Tag" -ForegroundColor Green
 }

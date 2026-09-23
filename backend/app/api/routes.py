@@ -21,8 +21,10 @@ router = APIRouter(prefix="/api")
 class DatasetCreate(BaseModel):
     name: str
     camera_id: int
-    every_n_frames: int = 10
-    max_images: int = 1200
+    every_n_frames: int = 15
+    max_images: int = 600
+    smart_dedupe: bool = True
+    min_change_ratio: float = 0.008
 
 
 class DatasetAction(BaseModel):
@@ -30,6 +32,10 @@ class DatasetAction(BaseModel):
     train_ratio: float = 0.70
     val_ratio: float = 0.20
     seed: int = 2026
+
+
+class AnnotationBulkAccept(BaseModel):
+    min_confidence: float = 0.70
 
 
 class TrainingCreate(BaseModel):
@@ -501,7 +507,7 @@ def create_dataset(payload: DatasetCreate, db: Session = Depends(get_db)) -> dic
     if camera is None:
         raise HTTPException(status_code=404, detail="Camera not found")
     if camera.source_type.value != "video":
-        raise HTTPException(status_code=422, detail="V0.5.8 trích dataset tự động từ video local trước; RTSP sẽ bổ sung ở bản sau.")
+        raise HTTPException(status_code=422, detail="V0.5.9 trích dataset tự động từ video local trước; RTSP sẽ bổ sung ở bản sau.")
     base_slug = _dataset_slug(payload.name)
     slug = base_slug
     suffix = 1
@@ -517,6 +523,8 @@ def create_dataset(payload: DatasetCreate, db: Session = Depends(get_db)) -> dic
         response = httpx.post(f"{settings.ai_service_url}/datasets/extract", json={
             "slug": slug, "source_url": camera.source_url, "every_n_frames": payload.every_n_frames,
             "max_images": payload.max_images,
+            "smart_dedupe": payload.smart_dedupe,
+            "min_change_ratio": payload.min_change_ratio,
         }, timeout=120.0)
         response.raise_for_status(); info = response.json()
         row.image_count = int(info.get("image_count", 0)); row.status = "extracted"
@@ -524,7 +532,7 @@ def create_dataset(payload: DatasetCreate, db: Session = Depends(get_db)) -> dic
     except Exception as exc:
         row.status = "error"; db.commit()
         raise HTTPException(status_code=502, detail=f"Không trích được dataset: {exc}") from exc
-    return _dataset_payload(row)
+    return {**_dataset_payload(row), **{k: info.get(k) for k in ("sampled_candidates", "skipped_similar", "smart_dedupe", "min_change_ratio")}}
 
 
 @router.post("/datasets/{dataset_id}/autolabel")
@@ -550,10 +558,20 @@ def dataset_stats_route(dataset_id: int, db: Session = Depends(get_db)) -> dict:
 
 
 @router.get("/datasets/{dataset_id}/annotations")
-def list_dataset_annotations(dataset_id: int, offset: int = Query(default=0, ge=0), limit: int = Query(default=200, ge=1, le=1000), db: Session = Depends(get_db)) -> dict:
+def list_dataset_annotations(
+    dataset_id: int,
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=200, ge=1, le=1000),
+    review_mode: str = Query(default="priority"),
+    db: Session = Depends(get_db),
+) -> dict:
     row = db.get(DatasetRecord, dataset_id)
     if row is None: raise HTTPException(status_code=404, detail="Dataset not found")
-    response = httpx.get(f"{settings.ai_service_url}/datasets/{row.slug}/annotations", params={"offset": offset, "limit": limit}, timeout=30.0)
+    response = httpx.get(
+        f"{settings.ai_service_url}/datasets/{row.slug}/annotations",
+        params={"offset": offset, "limit": limit, "review_mode": review_mode},
+        timeout=30.0,
+    )
     if not response.is_success: raise HTTPException(status_code=502, detail=response.text)
     info = response.json()
     row.reviewed_images = int(info.get("reviewed_images", row.reviewed_images or 0))
@@ -601,6 +619,75 @@ def save_dataset_annotation(dataset_id: int, image_name: str, payload: Annotatio
         pass
     db.commit(); db.refresh(row)
     return {**info, "dataset": _dataset_payload(row)}
+
+
+@router.post("/datasets/{dataset_id}/annotations/accept-safe")
+def accept_safe_dataset_annotations(dataset_id: int, payload: AnnotationBulkAccept, db: Session = Depends(get_db)) -> dict:
+    row = db.get(DatasetRecord, dataset_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    response = httpx.post(
+        f"{settings.ai_service_url}/datasets/{row.slug}/annotations/accept-safe",
+        json={"min_confidence": payload.min_confidence},
+        timeout=60.0,
+    )
+    if not response.is_success:
+        raise HTTPException(status_code=response.status_code if response.status_code < 500 else 502, detail=response.text)
+    info = response.json()
+    row.reviewed_images = int(info.get("reviewed_images", row.reviewed_images or 0))
+    if row.reviewed_images > 0:
+        row.status = "labeled"
+    db.commit(); db.refresh(row)
+    return {**info, "dataset": _dataset_payload(row)}
+
+
+@router.post("/datasets/{dataset_id}/reset-labels")
+def reset_dataset_labels_route(dataset_id: int, db: Session = Depends(get_db)) -> dict:
+    row = db.get(DatasetRecord, dataset_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    running = db.scalar(select(TrainingRun.id).where(TrainingRun.dataset_id == dataset_id, TrainingRun.status.in_(["queued", "running"])))
+    if running is not None:
+        raise HTTPException(status_code=409, detail="Không thể làm lại nhãn khi training run của dataset đang chạy.")
+    response = httpx.post(f"{settings.ai_service_url}/datasets/{row.slug}/reset-labels", timeout=60.0)
+    if not response.is_success:
+        raise HTTPException(status_code=response.status_code if response.status_code < 500 else 502, detail=response.text)
+    info = response.json()
+    row.status = "extracted"
+    row.labeled_images = 0
+    row.box_count = 0
+    row.reviewed_images = 0
+    row.difficult_images = 0
+    row.train_count = 0
+    row.val_count = 0
+    row.test_count = 0
+    db.commit(); db.refresh(row)
+    return {**info, "dataset": _dataset_payload(row)}
+
+
+@router.delete("/datasets/{dataset_id}")
+def delete_dataset_route(dataset_id: int, db: Session = Depends(get_db)) -> dict:
+    row = db.get(DatasetRecord, dataset_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    runs = db.scalars(select(TrainingRun).where(TrainingRun.dataset_id == dataset_id).order_by(TrainingRun.id)).all()
+    if any(run.status in {"queued", "running"} for run in runs):
+        raise HTTPException(status_code=409, detail="Không thể xóa dataset khi training run đang chạy.")
+    run_ids = [int(run.id) for run in runs]
+    response = httpx.post(
+        f"{settings.ai_service_url}/datasets/purge",
+        json={"slug": row.slug, "run_ids": run_ids, "purge_training_runs": True},
+        timeout=120.0,
+    )
+    if not response.is_success:
+        raise HTTPException(status_code=response.status_code if response.status_code < 500 else 502, detail=response.text)
+    info = response.json()
+    # Xóa history training của dataset khỏi DB. best.pt đã export trong /data/models được giữ lại.
+    for run in runs:
+        db.delete(run)
+    db.delete(row)
+    db.commit()
+    return {**info, "dataset_id": dataset_id, "deleted": True}
 
 
 @router.post("/datasets/{dataset_id}/prepare")

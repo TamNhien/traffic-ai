@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './styles.css'
 
-const APP_VERSION = '0.5.8'
+const APP_VERSION = '0.5.9'
 const vehicleLabels = {
   motorcycle: 'Xe máy', bicycle: 'Xe đạp', car: 'Ô tô', bus: 'Xe buýt', truck: 'Xe tải', other: 'Khác'
 }
@@ -100,7 +100,9 @@ function AnnotationEditor({ dataset, onChanged }) {
   const [boxes, setBoxes] = useState([])
   const [selectedBox, setSelectedBox] = useState(-1)
   const [newClassId, setNewClassId] = useState(0)
+  const [reviewMode, setReviewMode] = useState('priority')
   const [saving, setSaving] = useState(false)
+  const [bulkBusy, setBulkBusy] = useState(false)
   const [message, setMessage] = useState('')
   const stageRef = useRef(null)
   const drawRef = useRef(null)
@@ -112,14 +114,15 @@ function AnnotationEditor({ dataset, onChanged }) {
   }
 
   const loadIndex = async preferred => {
-    if (!dataset?.id) { setIndexData(null); setCurrentName(''); setAnnotation(null); setBoxes([]); return }
-    const response = await fetch(`/api/datasets/${dataset.id}/annotations?limit=1000`, {cache:'no-store'})
+    if (!dataset?.id) { setIndexData(null); setCurrentName(''); setAnnotation(null); setBoxes([]); return '' }
+    const response = await fetch(`/api/datasets/${dataset.id}/annotations?limit=1000&review_mode=${encodeURIComponent(reviewMode)}`, {cache:'no-store'})
     const body = await readBody(response)
     if (!response.ok) throw new Error(body.detail || 'Không tải được danh sách annotation')
     setIndexData(body)
     const names = body.items || []
     const next = preferred && names.some(i=>i.image_name===preferred) ? preferred : (currentName && names.some(i=>i.image_name===currentName) ? currentName : names[0]?.image_name || '')
     setCurrentName(next)
+    if (!next) { setAnnotation(null); setBoxes([]); setSelectedBox(-1) }
     return next
   }
 
@@ -140,7 +143,7 @@ function AnnotationEditor({ dataset, onChanged }) {
       } catch (err) { if (!cancelled) setMessage(err.message) }
     })()
     return ()=>{ cancelled = true }
-  }, [dataset?.id, dataset?.updated_at])
+  }, [dataset?.id, dataset?.updated_at, reviewMode])
 
   useEffect(() => {
     if (currentName) loadAnnotation(currentName).catch(err=>setMessage(err.message))
@@ -194,8 +197,24 @@ function AnnotationEditor({ dataset, onChanged }) {
       const body = await readBody(response)
       if (!response.ok) throw new Error(body.detail || 'Không lưu được annotation')
       setAnnotation(body); setBoxes(body.boxes || []); setMessage('Đã lưu nhãn ground-truth cho ảnh này.')
-      await loadIndex(currentName); onChanged?.()
+      const next = await loadIndex(currentName)
+      if (next && next !== currentName) await loadAnnotation(next)
+      onChanged?.()
     } catch (err) { setMessage(err.message) } finally { setSaving(false) }
+  }
+  const acceptSafe = async () => {
+    if (!dataset?.id || bulkBusy) return
+    const count = Number(indexData?.safe_auto_accept_images || 0)
+    if (!count) { setMessage('Không có ảnh đủ điều kiện duyệt nhanh an toàn.'); return }
+    if (!window.confirm(`Đánh dấu ${count} ảnh auto-label độ tin cậy cao là đã duyệt? Xe máy/xe đạp và ảnh không có detection KHÔNG được tự duyệt.`)) return
+    setBulkBusy(true); setMessage('')
+    try {
+      const response = await fetch(`/api/datasets/${dataset.id}/annotations/accept-safe`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({min_confidence:0.70})})
+      const body = await readBody(response)
+      if (!response.ok) throw new Error(body.detail || 'Không duyệt nhanh được annotation')
+      setMessage(`Đã duyệt nhanh ${body.accepted_images || 0} ảnh tin cậy. Xe máy/xe đạp vẫn để lại cho bạn kiểm tra.`)
+      await loadIndex(''); onChanged?.()
+    } catch (err) { setMessage(err.message) } finally { setBulkBusy(false) }
   }
   const move = delta => {
     const items = indexData?.items || []
@@ -209,17 +228,21 @@ function AnnotationEditor({ dataset, onChanged }) {
   const currentIndex = Math.max(0, items.findIndex(i=>i.image_name===currentName))
   const imageUrl = currentName ? `/api/datasets/${dataset.id}/images/${encodeURIComponent(currentName)}?v=${encodeURIComponent(dataset.updated_at || '')}` : ''
   return <section className="panel annotation-panel" id="annotation">
-    <div className="panel-head"><div><span className="panel-kicker">ANNOTATION STUDIO</span><h2>3. Rà soát nhãn thật trước khi train lại</h2></div><span className="lock-state">V0.5.8</span></div>
-    <div className="annotation-summary"><span>Ảnh: <strong>{indexData?.total ?? 0}</strong></span><span>Đã duyệt: <strong>{indexData?.reviewed_images ?? dataset.reviewed_images ?? 0}</strong></span><span>Ảnh khó: <strong>{indexData?.difficult_images ?? dataset.difficult_images ?? 0}</strong></span><span>Mất cân bằng: <strong>{indexData?.imbalance_ratio ? `x${indexData.imbalance_ratio}` : '—'}</strong></span></div>
+    <div className="panel-head"><div><span className="panel-kicker">ANNOTATION STUDIO · SMART REVIEW</span><h2>3. Chỉ rà soát ảnh cần thiết trước khi train lại</h2></div><span className="lock-state">V0.5.9</span></div>
+    <p className="hint"><strong>Không cần sửa tay cả 1.200 ảnh.</strong> Chế độ mặc định đưa ảnh xe máy/xe đạp, confidence thấp, ảnh đông xe hoặc ảnh không detection lên trước. Ảnh ô tô/bus/truck rõ và confidence cao có thể duyệt nhanh sau khi bạn spot-check.</p>
+    <div className="annotation-summary"><span>Tổng ảnh: <strong>{indexData?.total ?? 0}</strong></span><span>Đang hiện: <strong>{indexData?.filtered_total ?? 0}</strong></span><span>Cần ưu tiên: <strong>{indexData?.priority_images ?? 0}</strong></span><span>Có thể duyệt nhanh: <strong>{indexData?.safe_auto_accept_images ?? 0}</strong></span><span>Đã duyệt: <strong>{indexData?.reviewed_images ?? dataset.reviewed_images ?? 0}</strong></span><span>Ảnh khó: <strong>{indexData?.difficult_images ?? dataset.difficult_images ?? 0}</strong></span><span>Mất cân bằng: <strong>{indexData?.imbalance_ratio ? `x${indexData.imbalance_ratio}` : '—'}</strong></span></div>
+    <div className="smart-review-bar"><label>Lọc ảnh<select value={reviewMode} onChange={e=>setReviewMode(e.target.value)}><option value="priority">🔥 Ưu tiên cần kiểm tra</option><option value="unreviewed">Chưa duyệt</option><option value="difficult">Ảnh khó</option><option value="all">Tất cả ảnh</option></select></label><button className="secondary" disabled={bulkBusy || !(indexData?.safe_auto_accept_images>0)} onClick={acceptSafe}>{bulkBusy?'Đang duyệt...':'Duyệt nhanh ảnh tin cậy'}</button></div>
     <div className="annotation-workspace">
       <div className="annotation-list">
-        <div className="annotation-nav"><button className="secondary" disabled={currentIndex<=0} onClick={()=>move(-1)}>← Trước</button><span>{items.length ? `${currentIndex+1}/${items.length}` : '0/0'}</span><button className="secondary" disabled={currentIndex>=items.length-1} onClick={()=>move(1)}>Sau →</button></div>
-        <select size="12" value={currentName} onChange={e=>setCurrentName(e.target.value)}>{items.map(item=><option value={item.image_name} key={item.image_name}>{item.reviewed?'✓ ':''}{item.difficult?'⚠ ':''}{item.image_name} · {item.box_count}</option>)}</select>
+        <div className="annotation-nav"><button className="secondary" disabled={currentIndex<=0 || !items.length} onClick={()=>move(-1)}>← Trước</button><span>{items.length ? `${currentIndex+1}/${items.length}` : '0/0'}</span><button className="secondary" disabled={!items.length || currentIndex>=items.length-1} onClick={()=>move(1)}>Sau →</button></div>
+        <select size="12" value={currentName} onChange={e=>setCurrentName(e.target.value)}>{items.map(item=><option value={item.image_name} key={item.image_name}>{item.reviewed?'✓ ':''}{item.difficult?'⚠ ':''}{item.priority_score>=35?'🔥 ':''}{item.image_name} · {item.box_count} box · P{item.priority_score}</option>)}</select>
+        {!items.length && <div className="empty">Không còn ảnh trong bộ lọc này. Có thể chuyển sang “Chưa duyệt” hoặc “Tất cả ảnh”.</div>}
         <div className="class-balance">{Object.entries(indexData?.per_class || {}).map(([name,count])=><span key={name}>{vehicleLabels[name] || name}: <strong>{count}</strong></span>)}</div>
       </div>
       <div className="annotation-editor-wrap">
+        {annotation && <div className="review-reason"><strong>Ưu tiên P{annotation.priority_score ?? 0}</strong> · {(annotation.priority_reasons || []).join(' · ') || 'Không có cảnh báo'}{annotation.min_confidence!=null ? ` · conf thấp nhất ${Number(annotation.min_confidence).toFixed(2)}` : ''}</div>}
         <div className="annotation-stage" ref={stageRef} onPointerDown={beginDraw} onPointerUp={finishDraw}>
-          {imageUrl ? <img src={imageUrl} alt={currentName} draggable="false" /> : <div className="empty">Dataset chưa có ảnh.</div>}
+          {imageUrl ? <img src={imageUrl} alt={currentName} draggable="false" /> : <div className="empty">Không có ảnh trong bộ lọc hiện tại.</div>}
           <svg viewBox="0 0 1 1" preserveAspectRatio="none">{boxes.map((box,index)=><g key={`${index}-${box.x}-${box.y}`} onPointerDown={e=>{e.stopPropagation();setSelectedBox(index);setNewClassId(box.class_id);setMessage('')}}><rect className={`annotation-box ${selectedBox===index?'selected':''}`} x={box.x-box.w/2} y={box.y-box.h/2} width={box.w} height={box.h}/><text className="annotation-label" fontSize="0.025" x={Math.max(0.002,box.x-box.w/2)} y={Math.max(0.025,box.y-box.h/2)}>Box {index+1} · {annotationClasses[box.class_id]}</text></g>)}</svg>
         </div>
         <div className={`annotation-selection ${selectedBox>=0?'has-selection':''}`}>
@@ -234,7 +257,6 @@ function AnnotationEditor({ dataset, onChanged }) {
     </div>
   </section>
 }
-
 
 function App() {
   const [previewMode, setPreviewMode] = useState('smooth')
@@ -256,7 +278,7 @@ function App() {
   const [lineForm, setLineForm] = useState({confidence_threshold:0.12,line_x1:0.32,line_y1:0.59,line_x2:0.84,line_y2:0.59})
   const [datasets, setDatasets] = useState([])
   const [trainingRuns, setTrainingRuns] = useState([])
-  const [datasetForm, setDatasetForm] = useState({name:'Dataset giao thông Việt Nam', every_n_frames:10, max_images:1200})
+  const [datasetForm, setDatasetForm] = useState({name:'Dataset giao thông Việt Nam', every_n_frames:15, max_images:600, smart_dedupe:true, min_change_ratio:0.008})
   const [selectedDatasetId, setSelectedDatasetId] = useState(null)
   const [trainingForm, setTrainingForm] = useState({epochs:80, imgsz:640, batch:8, base_model:'yolo26s.pt'})
 
@@ -293,7 +315,8 @@ function App() {
       setDatasets(datasetData)
       setTrainingRuns(trainingRes.ok ? await trainingRes.json() : [])
       if (cameraData.length) setSelectedId(prev => prev || cameraData[0].id)
-      if (datasetData.length) setSelectedDatasetId(prev => prev || datasetData[0].id)
+      if (datasetData.length) setSelectedDatasetId(prev => datasetData.some(d=>d.id===Number(prev)) ? prev : datasetData[0].id)
+      else setSelectedDatasetId(null)
     } catch (err) {
       setError(err.message || 'Không thể tải dữ liệu')
     }
@@ -446,9 +469,9 @@ const createDataset = async () => {
   if (!selected) return
   setBusy(true); setError(''); setNotice('')
   try {
-    const response = await fetch('/api/datasets', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name:datasetForm.name, camera_id:selected.id, every_n_frames:Number(datasetForm.every_n_frames), max_images:Number(datasetForm.max_images)})})
+    const response = await fetch('/api/datasets', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name:datasetForm.name, camera_id:selected.id, every_n_frames:Number(datasetForm.every_n_frames), max_images:Number(datasetForm.max_images), smart_dedupe:!!datasetForm.smart_dedupe, min_change_ratio:Number(datasetForm.min_change_ratio)})})
     const body = await readApiBody(response); if (!response.ok) throw new Error(body.detail || `Không tạo được dataset (HTTP ${response.status})`)
-    setSelectedDatasetId(body.id); setNotice(`Đã trích ${body.image_count} frame vào dataset ${body.name}.`); await load()
+    setSelectedDatasetId(body.id); setNotice(`Đã giữ ${body.image_count} frame đa dạng${body.skipped_similar!=null ? `, bỏ ${body.skipped_similar} frame gần trùng` : ''} trong dataset ${body.name}.`); await load()
   } catch (err) { setError(err.message) } finally { setBusy(false) }
 }
 
@@ -462,6 +485,29 @@ const datasetAction = async action => {
     if (action === 'autolabel') setNotice(`Auto-label xong: ${body.labeled_images}/${body.image_count} ảnh có phương tiện, ${body.box_count} bounding box. Đây là nhãn gợi ý, cần rà soát trước khi train.`)
     else setNotice(`Dataset ready: train ${body.train_count}, val ${body.val_count}, test ${body.test_count}.`)
     await load()
+  } catch (err) { setError(err.message) } finally { setBusy(false) }
+}
+
+const resetDatasetLabels = async () => {
+  if (!selectedDataset || busy) return
+  if (!window.confirm(`Làm lại nhãn cho dataset “${selectedDataset.name}”? Ảnh gốc vẫn giữ, nhưng pseudo-label, trạng thái đã duyệt và train/val/test hiện tại sẽ bị xóa.`)) return
+  setBusy(true); setError(''); setNotice('')
+  try {
+    const response = await fetch(`/api/datasets/${selectedDataset.id}/reset-labels`, {method:'POST'})
+    const body = await readApiBody(response); if (!response.ok) throw new Error(body.detail || 'Không reset được nhãn dataset')
+    setNotice(`Đã xóa nhãn cũ và giữ lại ${body.image_count || 0} ảnh gốc. Bây giờ chạy Auto-label lại.`); await load()
+  } catch (err) { setError(err.message) } finally { setBusy(false) }
+}
+
+const deleteDataset = async () => {
+  if (!selectedDataset || busy) return
+  if (!window.confirm(`XÓA dataset “${selectedDataset.name}” cùng toàn bộ ảnh và thư mục training-runs liên quan? best.pt đã export trong thư mục models vẫn được giữ. Thao tác này không hoàn tác.`)) return
+  setBusy(true); setError(''); setNotice('')
+  try {
+    const deletedName = selectedDataset.name
+    const response = await fetch(`/api/datasets/${selectedDataset.id}`, {method:'DELETE'})
+    const body = await readApiBody(response); if (!response.ok) throw new Error(body.detail || 'Không xóa được dataset')
+    setSelectedDatasetId(null); setNotice(`Đã xóa dataset ${deletedName} và ảnh cũ. Model đã export trong models vẫn được giữ.`); await load()
   } catch (err) { setError(err.message) } finally { setBusy(false) }
 }
 
@@ -531,19 +577,21 @@ const activateTraining = async run => {
       </section>
 
       <section className="training-layout" id="training">
-        <article className="panel training-panel"><div className="panel-head"><div><span className="panel-kicker">DATASET STUDIO</span><h2>Dataset giao thông Việt Nam</h2></div><span className="lock-state">V0.5.8</span></div>
-          <p className="hint">Trích frame từ video thật của camera, dùng YOLO26 tạo nhãn gợi ý, sau đó rà soát nhãn trong Annotation Studio rồi mới chia train/val/test. <strong>Auto-label không phải ground truth</strong>; muốn tăng độ chính xác thật sự cần rà soát/sửa nhãn sai trước khi huấn luyện.</p>
-          <div className="dataset-form"><input value={datasetForm.name} onChange={e=>setDatasetForm({...datasetForm,name:e.target.value})} placeholder="Tên dataset" /><label>Mỗi N frame<input type="number" min="1" value={datasetForm.every_n_frames} onChange={e=>setDatasetForm({...datasetForm,every_n_frames:e.target.value})}/></label><label>Tối đa ảnh<input type="number" min="10" value={datasetForm.max_images} onChange={e=>setDatasetForm({...datasetForm,max_images:e.target.value})}/></label><button disabled={!selected || busy || selected?.source_type !== 'video'} onClick={createDataset}>1. Trích frame</button></div>
+        <article className="panel training-panel"><div className="panel-head"><div><span className="panel-kicker">DATASET STUDIO · CLEAN RETRAIN</span><h2>Dataset giao thông Việt Nam</h2></div><span className="lock-state">V0.5.9</span></div>
+          <p className="hint"><strong>Train lại từ đầu</strong> nên tạo dataset mới sạch từ video gốc. V0.5.9 mặc định lấy mỗi 15 frame, tối đa 600 ảnh và tự loại frame gần trùng; vì vậy bạn không còn phải mặc định xử lý 1.200 ảnh gần giống nhau.</p>
+          <div className="dataset-form"><input value={datasetForm.name} onChange={e=>setDatasetForm({...datasetForm,name:e.target.value})} placeholder="Tên dataset" /><label>Mỗi N frame<input type="number" min="1" value={datasetForm.every_n_frames} onChange={e=>setDatasetForm({...datasetForm,every_n_frames:e.target.value})}/></label><label>Tối đa ảnh<input type="number" min="10" value={datasetForm.max_images} onChange={e=>setDatasetForm({...datasetForm,max_images:e.target.value})}/></label><label>Ngưỡng thay đổi<input type="number" min="0" max="1" step="0.001" value={datasetForm.min_change_ratio} onChange={e=>setDatasetForm({...datasetForm,min_change_ratio:e.target.value})}/></label><label className="check"><input type="checkbox" checked={!!datasetForm.smart_dedupe} onChange={e=>setDatasetForm({...datasetForm,smart_dedupe:e.target.checked})}/> Loại frame gần trùng</label><button disabled={!selected || busy || selected?.source_type !== 'video'} onClick={createDataset}>1. Trích frame thông minh</button></div>
+          <p className="hint">Gợi ý video ~30 FPS: <strong>N=15</strong> ≈ 2 frame ứng viên/giây trước khi lọc; <strong>N=30</strong> ≈ 1 frame/giây. Với một góc camera cố định, thường nên bắt đầu khoảng <strong>400–800 ảnh đa dạng</strong>, không cần cố đủ 1.200 ảnh.</p>
           <div className="dataset-select"><label>Dataset</label><select value={selectedDatasetId || ''} onChange={e=>setSelectedDatasetId(Number(e.target.value))}><option value="">-- Chọn dataset --</option>{datasets.map(d=><option key={d.id} value={d.id}>#{d.id} · {d.name} · {d.status}</option>)}</select></div>
           {selectedDataset && <div className="dataset-stats"><div><span>Ảnh</span><strong>{selectedDataset.image_count}</strong></div><div><span>Ảnh có nhãn</span><strong>{selectedDataset.labeled_images}</strong></div><div><span>Boxes</span><strong>{selectedDataset.box_count}</strong></div><div><span>Đã rà soát</span><strong>{selectedDataset.reviewed_images ?? 0}</strong></div><div><span>Ảnh khó</span><strong>{selectedDataset.difficult_images ?? 0}</strong></div><div><span>Train/Val/Test</span><strong>{selectedDataset.train_count}/{selectedDataset.val_count}/{selectedDataset.test_count}</strong></div></div>}
-          <div className="training-actions"><button disabled={!selectedDataset || busy} onClick={()=>datasetAction('autolabel')}>2. Auto-label YOLO26</button><button disabled={!selectedDataset || busy || !['pseudo_labeled','labeled','ready'].includes(selectedDataset?.status)} onClick={()=>datasetAction('prepare')}>4. Chia train/val/test</button></div>
-          <p className="hint">Nhãn YOLO được lưu trong <code>datasets/&lt;slug&gt;/raw/labels</code>. Có thể sửa trực tiếp ở Annotation Studio bên dưới. Sau khi sửa nhãn, bấm bước 4 để tạo lại train/val/test trước khi huấn luyện. Xe đạp chỉ nên gán khi thực sự là bicycle/pedal-cycle; xe máy phải là motorcycle.</p>
+          <div className="training-actions"><button disabled={!selectedDataset || busy} onClick={()=>datasetAction('autolabel')}>2. Auto-label YOLO26</button><button disabled={!selectedDataset || busy || !['pseudo_labeled','labeled','ready'].includes(selectedDataset?.status)} onClick={()=>datasetAction('prepare')}>4. Chia train/val/test</button><button className="secondary" disabled={!selectedDataset || busy} onClick={resetDatasetLabels}>Làm lại nhãn · giữ ảnh</button><button className="danger" disabled={!selectedDataset || busy} onClick={deleteDataset}>Xóa dataset + ảnh cũ</button></div>
+          <p className="hint"><strong>Không sửa tay tất cả ảnh.</strong> Sau Auto-label, xuống Annotation Studio và để bộ lọc “🔥 Ưu tiên cần kiểm tra”: hệ thống đưa xe máy/xe đạp, confidence thấp, ảnh đông xe và ảnh không detection lên trước. Nút “Duyệt nhanh ảnh tin cậy” chỉ áp dụng cho ảnh rõ, không chứa motorcycle/bicycle và không phải ảnh rỗng.</p>
+          <p className="hint">Nếu ảnh đã tốt nhưng nhãn sai, dùng <strong>Làm lại nhãn · giữ ảnh</strong>. Nếu muốn bắt đầu hoàn toàn sạch, dùng <strong>Xóa dataset + ảnh cũ</strong> rồi trích dataset mới. Xóa dataset không xóa file <code>best.pt</code> đã export trong <code>models/</code>.</p>
         </article>
-        <article className="panel training-panel"><div className="panel-head"><div><span className="panel-kicker">FINE-TUNE</span><h2>Huấn luyện YOLO26 tùy biến</h2></div></div>
+        <article className="panel training-panel"><div className="panel-head"><div><span className="panel-kicker">FINE-TUNE</span><h2>Huấn luyện YOLO26 tùy biến</h2></div><span className="lock-state">Fresh run</span></div>
           <div className="train-form"><label>Base model<select value={trainingForm.base_model} onChange={e=>setTrainingForm({...trainingForm,base_model:e.target.value})}><option value="yolo26s.pt">YOLO26s</option><option value="yolo26m.pt">YOLO26m</option></select></label><label>Epochs<input type="number" min="1" value={trainingForm.epochs} onChange={e=>setTrainingForm({...trainingForm,epochs:e.target.value})}/></label><label>Image size<input type="number" min="320" step="32" value={trainingForm.imgsz} onChange={e=>setTrainingForm({...trainingForm,imgsz:e.target.value})}/></label><label>Batch<input type="number" min="1" value={trainingForm.batch} onChange={e=>setTrainingForm({...trainingForm,batch:e.target.value})}/></label></div>
-          <button disabled={!selectedDataset || selectedDataset?.status !== 'ready' || busy || trainingRuns.some(r=>r.status==='running')} onClick={startTraining}>5. Bắt đầu fine-tune RTX 3060</button>
+          <p className="hint"><strong>Train mới từ đầu trong Traffic AI</strong> = tạo một Training Run mới từ base model pretrained bạn chọn (khuyến nghị YOLO26s), <strong>không tiếp tục học từ best.pt cũ</strong>. Đây là fine-tune mới, không phải random-weight training.</p><button disabled={!selectedDataset || selectedDataset?.status !== 'ready' || busy || trainingRuns.some(r=>r.status==='running')} onClick={startTraining}>5. Bắt đầu fine-tune mới RTX 3060</button>
           <div className="event-list training-runs">{trainingRuns.length ? trainingRuns.map(run=><div className="event-row training-row" key={run.id}><span>Run #{run.id} · Dataset #{run.dataset_id} · {run.base_model}</span><strong>{String(run.status).toUpperCase()} · {Number(run.progress || 0).toFixed(1)}%</strong><small>Epoch {run.current_epoch}/{run.epochs} · P {run.precision?.toFixed?.(3) ?? '-'} · R {run.recall?.toFixed?.(3) ?? '-'} · mAP50 {run.map50?.toFixed?.(3) ?? '-'} · mAP50-95 {run.map50_95?.toFixed?.(3) ?? '-'}</small>{run.status==='completed' && (run.is_active_model ? <span className="active-model-badge">✓ ĐANG DÙNG best.pt</span> : <button className="inline-action" disabled={busy} onClick={()=>activateTraining(run)}>6. Kích hoạt best.pt</button>)}{run.last_error && <small className="bad-text">{run.last_error}</small>}</div>) : <div className="empty">Chưa có training run.</div>}</div>
-          <p className="hint">Sau khi kích hoạt <code>best.pt</code>, các phiên AI mới sẽ dùng model tùy biến. Không có model nào bảo đảm 100% trong mọi cảnh; V0.5.8 siết đếm đúng vạch, tăng khả năng bắt xe nhanh và giảm nhầm xe máy/xe đạp. Annotation Studio vẫn dùng để sửa pseudo-label thành ground truth trước khi train lại.</p>
+          <p className="hint">Sau khi kích hoạt <code>best.pt</code>, các phiên AI mới sẽ dùng model tùy biến. Không có model nào bảo đảm 100% trong mọi cảnh; V0.5.9 giữ Strict Gate V0.5.8 và bổ sung Clean Retrain + Smart Review để giảm công sửa nhãn thủ công. Annotation Studio vẫn dùng để sửa pseudo-label thành ground truth trước khi train lại.</p>
         </article>
       </section>
 

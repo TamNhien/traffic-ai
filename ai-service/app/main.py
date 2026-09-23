@@ -10,12 +10,12 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.runtime import registry
-from app.schemas import AnnotationSaveRequest, DatasetAutoLabelRequest, DatasetExtractRequest, DatasetPrepareRequest, PipelineStart, SourceValidationRequest, TrainingStartRequest
+from app.schemas import AnnotationBulkAcceptRequest, AnnotationSaveRequest, DatasetAutoLabelRequest, DatasetExtractRequest, DatasetPrepareRequest, DatasetPurgeRequest, PipelineStart, SourceValidationRequest, TrainingStartRequest
 from app.sources import inspect_source, list_video_sources, read_source_preview, resolve_video_path
-from app.training import auto_label, dataset_stats, extract_frames, prepare_dataset, training_registry
-from app.annotation import get_annotation, get_annotation_image, list_annotations, save_annotation
+from app.training import auto_label, dataset_stats, extract_frames, prepare_dataset, purge_dataset, reset_dataset_labels, training_registry
+from app.annotation import accept_safe_annotations, get_annotation, get_annotation_image, list_annotations, save_annotation
 
-APP_VERSION = '0.5.8'
+APP_VERSION = '0.5.9'
 app = FastAPI(title='Traffic AI Service', version=APP_VERSION)
 SNAPSHOT_DIR = Path(os.getenv('SNAPSHOT_DIR', '/tmp/traffic-ai-snapshots'))
 SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
@@ -130,7 +130,7 @@ def dataset_extract(payload: DatasetExtractRequest) -> dict:
         source = resolve_video_path(payload.source_url)
         if not source.exists():
             raise ValueError(f"Không tìm thấy video: {payload.source_url}")
-        return extract_frames(source, payload.slug, payload.every_n_frames, payload.max_images)
+        return extract_frames(source, payload.slug, payload.every_n_frames, payload.max_images, payload.smart_dedupe, payload.min_change_ratio)
     except Exception as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -160,9 +160,14 @@ def dataset_statistics(slug: str) -> dict:
 
 
 @app.get('/datasets/{slug}/annotations')
-def dataset_annotations(slug: str, offset: int = Query(default=0, ge=0), limit: int = Query(default=200, ge=1, le=1000)) -> dict:
+def dataset_annotations(
+    slug: str,
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=200, ge=1, le=1000),
+    review_mode: str = Query(default='priority'),
+) -> dict:
     try:
-        return list_annotations(slug, offset=offset, limit=limit)
+        return list_annotations(slug, offset=offset, limit=limit, review_mode=review_mode)
     except Exception as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -194,6 +199,32 @@ def dataset_annotation_save(slug: str, image_name: str, payload: AnnotationSaveR
         return save_annotation(slug, image_name, [box.model_dump() for box in payload.boxes], payload.reviewed, payload.difficult)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail='Không tìm thấy ảnh annotation.') from exc
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post('/datasets/{slug}/annotations/accept-safe')
+def dataset_annotations_accept_safe(slug: str, payload: AnnotationBulkAcceptRequest) -> dict:
+    try:
+        return accept_safe_annotations(slug, payload.min_confidence)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post('/datasets/{slug}/reset-labels')
+def dataset_reset_labels(slug: str) -> dict:
+    try:
+        return reset_dataset_labels(slug)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail='Không tìm thấy dataset.') from exc
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post('/datasets/purge')
+def dataset_purge(payload: DatasetPurgeRequest) -> dict:
+    try:
+        return purge_dataset(payload.slug, payload.run_ids, payload.purge_training_runs)
     except Exception as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

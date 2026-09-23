@@ -262,18 +262,18 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.8") { throw "VERSION phải là 0.5.8, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0022_strict_gate_v058.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0022_strict_gate_v058.py." }
+  if ($version -ne "0.5.9") { throw "VERSION phải là 0.5.9, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0023_clean_retrain_v059.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0023_clean_retrain_v059.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0022_strict_gate_v058"' -or $migrationText -notmatch 'down_revision = "0021_annotation_ux_v057"' -or $migrationText -notmatch "value='0.5.8'") {
-    throw "Migration 0022_strict_gate_v058 không đúng contract V0.5.8."
+  if ($migrationText -notmatch 'revision = "0023_clean_retrain_v059"' -or $migrationText -notmatch 'down_revision = "0022_strict_gate_v058"' -or $migrationText -notmatch "value='0.5.9'") {
+    throw "Migration 0023_clean_retrain_v059 không đúng contract V0.5.9."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
 
 function Assert-AlembicRevisionSafetyContract {
-  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.8" -ForegroundColor Cyan
+  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.9" -ForegroundColor Cyan
   $versionsDir = Join-Path $root "backend\alembic\versions"
   $bad = @()
   Get-ChildItem $versionsDir -Filter "*.py" | ForEach-Object {
@@ -297,7 +297,7 @@ function Assert-AlembicRevisionSafetyContract {
   if ($v17 -notmatch 'revision = "0017_ai_test_dep_v053"') {
     throw "Migration V0.5.3 chưa dùng revision ID rút gọn an toàn."
   }
-  Write-Host "[OK] Alembic revision-length safety V0.5.8" -ForegroundColor Green
+  Write-Host "[OK] Alembic revision-length safety V0.5.9" -ForegroundColor Green
 }
 
 
@@ -340,7 +340,11 @@ function Assert-DatasetTrainingContract {
   if ($routes -notmatch '/datasets' -or $routes -notmatch '/training/runs' -or $routes -notmatch '/activate') { throw "Backend thiếu API dataset/training/model activation." }
   if ($training -notmatch 'extract_frames' -or $training -notmatch 'auto_label' -or $training -notmatch 'prepare_dataset' -or $training -notmatch 'TrainingRegistry') { throw "AI Service thiếu pipeline dataset/fine-tune." }
   if ($aiMain -notmatch '/datasets/extract' -or $aiMain -notmatch '/training/start') { throw "AI Service thiếu endpoint training." }
-  if ($frontend -notmatch 'Dataset giao thông Việt Nam' -or $frontend -notmatch 'Bắt đầu fine-tune RTX 3060' -or $frontend -notmatch 'Kích hoạt best.pt') { throw "Frontend thiếu Dataset & Fine-tune Studio." }
+  $hasDatasetStudio = $frontend -match 'Dataset giao thông Việt Nam'
+  $hasTrainingHandler = $frontend -match 'const\s+startTraining\s*=\s*async' -and $frontend -match 'onClick=\{startTraining\}'
+  $hasActivationHandler = $frontend -match 'const\s+activateTraining\s*=\s*async' -and $frontend -match 'activateTraining\(run\)'
+  $hasActivationUi = $frontend -match 'Kích hoạt best\.pt'
+  if (-not $hasDatasetStudio -or -not $hasTrainingHandler -or -not $hasActivationHandler -or -not $hasActivationUi) { throw "Frontend thiếu Dataset & Fine-tune Studio." }
   if ($compose -notmatch './datasets:/data/datasets' -or $compose -notmatch './training-runs:/data/training-runs') { throw "Docker Compose thiếu volume dataset/training." }
   Write-Host "[OK] Dataset & Fine-tune Studio V0.5.0 contract" -ForegroundColor Green
 }
@@ -446,6 +450,35 @@ function Assert-StrictGateV058Contract {
 }
 
 
+function Assert-CleanRetrainV059Contract {
+  Write-Host "`n[Traffic AI] Clean Retrain + Smart Review V0.5.9" -ForegroundColor Cyan
+  $training = Get-Content (Join-Path $root "ai-service\app\training.py") -Raw -Encoding UTF8
+  $annotation = Get-Content (Join-Path $root "ai-service\app\annotation.py") -Raw -Encoding UTF8
+  $aiMain = Get-Content (Join-Path $root "ai-service\app\main.py") -Raw -Encoding UTF8
+  $routes = Get-Content (Join-Path $root "backend\app\api\routes.py") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  if ($training -notmatch '_candidate_changed_enough' -or $training -notmatch 'smart_dedupe' -or $training -notmatch 'skipped_similar') {
+    throw "V0.5.9 thiếu smart frame extraction / near-duplicate filtering."
+  }
+  if ($training -notmatch '_review_priority' -or $annotation -notmatch 'review_mode' -or $annotation -notmatch 'accept_safe_annotations') {
+    throw "V0.5.9 thiếu Smart Review / review priority / bulk safe accept."
+  }
+  if ($training -notmatch 'purge_dataset' -or $training -notmatch 'reset_dataset_labels' -or $aiMain -notmatch '/datasets/purge' -or $aiMain -notmatch '/reset-labels') {
+    throw "V0.5.9 thiếu reset/xóa dataset vật lý."
+  }
+  if ($routes -notmatch '@router\.delete\("/datasets/\{dataset_id\}"\)' -or $routes -notmatch '/annotations/accept-safe' -or $routes -notmatch '/reset-labels') {
+    throw "Backend V0.5.9 thiếu API xóa/reset dataset hoặc Smart Review proxy."
+  }
+  if ($frontend -notmatch 'Trích frame thông minh' -or $frontend -notmatch 'Xóa dataset \+ ảnh cũ' -or $frontend -notmatch 'Duyệt nhanh ảnh tin cậy' -or $frontend -notmatch 'Ưu tiên cần kiểm tra') {
+    throw "Frontend V0.5.9 thiếu Clean Retrain / Smart Review UX."
+  }
+  if ($frontend -notmatch 'không tiếp tục học từ best\.pt cũ' -or $frontend -notmatch 'every_n_frames:15' -or $frontend -notmatch 'max_images:600') {
+    throw "Frontend V0.5.9 chưa giải thích fresh training run hoặc default sampling mới."
+  }
+  Write-Host "[OK] Clean Retrain + Smart Review V0.5.9" -ForegroundColor Green
+}
+
+
 function Invoke-Step([string]$Title, [scriptblock]$Action) {
   Write-Host "`n[Traffic AI] $Title" -ForegroundColor Cyan
   & $Action
@@ -473,6 +506,7 @@ Assert-ActivationUiContract
 Assert-AnnotationStudioContract
 Assert-AnnotationUxClarityContract
 Assert-StrictGateV058Contract
+Assert-CleanRetrainV059Contract
 
 Write-Host "`n[Traffic AI] Realtime Gate 4.0 / accuracy + non-blocking runtime contract" -ForegroundColor Cyan
 $countingText = Get-Content (Join-Path $root "ai-service\app\counting.py") -Raw -Encoding UTF8

@@ -1,3 +1,548 @@
+# Traffic AI V0.5.9 — Clean Retrain + Smart Review 🚗🏷️
+
+
+> **V0.5.9-R1 hotfix:** sửa `scripts/test.ps1` để contract Dataset & Fine-tune Studio kiểm tra handler thật `startTraining` / `activateTraining` thay vì phụ thuộc nguyên văn nút `Bắt đầu fine-tune RTX 3060`. Runtime, database schema và migration vẫn là **0.5.9 / 0023_clean_retrain_v059**.
+
+V0.5.9 tập trung vào một việc thực tế: **train lại sạch mà không bắt người dùng ngồi sửa thủ công 1.200 frame gần giống nhau**.
+
+Bản này giữ nguyên toàn bộ Strict Gate/Fast Crossing của V0.5.8 và bổ sung workflow dataset mới:
+
+```text
+Video gốc
+   ↓
+Trích frame thông minh
+   ↓
+Bỏ frame gần trùng
+   ↓
+Auto-label YOLO26
+   ↓
+Smart Review
+   ├─ ưu tiên motorcycle / bicycle
+   ├─ confidence thấp
+   ├─ ảnh đông xe
+   └─ ảnh không detection
+   ↓
+Spot-check + sửa ảnh rủi ro
+   ↓
+Duyệt nhanh ảnh tin cậy
+   ↓
+Train / Val / Test
+   ↓
+Fresh fine-tune từ YOLO26s pretrained
+   ↓
+best.pt mới
+   ↓
+Kích hoạt → Chạy AI = INFERENCE
+```
+
+## 1. “Train lại từ đầu” trong Traffic AI nghĩa là gì?
+
+Trong dự án này, cách nên dùng là **tạo một Training Run mới từ base model pretrained `yolo26s.pt`**, không tiếp tục từ `best.pt` cũ.
+
+```text
+YOLO26s pretrained
+       ↓
+Dataset mới sạch
+       ↓
+Fine-tune run mới
+       ↓
+best.pt mới
+```
+
+Đây là **fresh fine-tune**, không phải huấn luyện random weights từ số 0. Random-weight training thường cần dataset lớn hơn rất nhiều và không phù hợp với bộ dữ liệu vài trăm đến vài nghìn ảnh của một góc camera.
+
+Trong giao diện **FINE-TUNE**, chọn:
+
+```text
+Base model: YOLO26s
+```
+
+Không chọn `best.pt` cũ làm base model nếu mục tiêu là làm lại sạch.
+
+## 2. Dataset cũ và ảnh cũ có xóa được không?
+
+Có. V0.5.9 thêm hai thao tác riêng để tránh xóa nhầm.
+
+### A. Nhãn sai nhưng ảnh vẫn tốt
+
+Bấm:
+
+```text
+Làm lại nhãn · giữ ảnh
+```
+
+Hệ thống giữ:
+
+```text
+datasets/<slug>/raw/images/
+```
+
+và xóa/reset:
+
+```text
+raw/labels/
+annotation_review.json
+raw/auto_label_meta.json
+images/train|val|test
+labels/train|val|test
+dataset.yaml
+```
+
+Sau đó chạy lại **Auto-label YOLO26** rồi Smart Review.
+
+### B. Muốn làm lại hoàn toàn sạch
+
+Bấm:
+
+```text
+Xóa dataset + ảnh cũ
+```
+
+Hệ thống xóa đồng bộ cả database và file vật lý của dataset, đồng thời dọn thư mục `training-runs/run-<id>` liên quan. Nếu một training run của dataset vẫn đang `queued/running`, thao tác xóa bị chặn để tránh hỏng dữ liệu.
+
+**Model đã export trong `models/` được giữ nguyên**, kể cả `best.pt` đang dùng. Vì vậy bạn có thể train dataset mới mà hệ thống inference hiện tại vẫn dùng model cũ cho tới khi bạn chủ động kích hoạt model mới.
+
+> Không nên tự `Remove-Item datasets/...` bằng tay khi PostgreSQL vẫn còn record dataset, vì UI sẽ thấy record nhưng file đã mất. Dùng nút xóa trong Dataset Studio để DB và disk luôn đồng bộ.
+
+## 3. Vì sao không cần sửa tay 1.200 ảnh?
+
+V0.5.8 lấy frame theo chu kỳ cố định và có thể sinh nhiều ảnh gần giống nhau. Ví dụ video 30 FPS với `N=10` tạo khoảng 3 frame ứng viên mỗi giây; camera cố định sẽ có rất nhiều frame nền gần như giống nhau.
+
+V0.5.9 đổi mặc định:
+
+```text
+Mỗi N frame       = 15
+Tối đa ảnh        = 600
+Loại frame gần trùng = BẬT
+Ngưỡng thay đổi   = 0.008
+```
+
+Quy trình trích mới:
+
+```text
+frame ứng viên
+    ↓
+ảnh xám 160×90
+    ↓
+so với frame đã giữ gần nhất
+    ↓
+tỷ lệ pixel thay đổi đủ lớn?
+    ├─ Không → bỏ frame gần trùng
+    └─ Có    → lưu vào dataset
+```
+
+Ví dụ:
+
+```text
+1.100 frame ứng viên
+      ↓
+350 frame gần trùng bị bỏ
+      ↓
+600 frame đa dạng được giữ
+```
+
+Con số thực tế phụ thuộc video. Mục tiêu không phải “càng nhiều ảnh càng tốt”, mà là **ảnh đa dạng + nhãn đúng**.
+
+### Gợi ý sampling
+
+Với video khoảng 30 FPS:
+
+```text
+N = 15  → khoảng 2 frame ứng viên/giây trước lọc
+N = 30  → khoảng 1 frame ứng viên/giây trước lọc
+```
+
+Với một góc camera cố định, nên bắt đầu khoảng:
+
+```text
+400–800 ảnh đa dạng
+```
+
+sau đó đánh giá benchmark. Chỉ tăng dataset khi còn lỗi thực tế chưa được đại diện đủ.
+
+## 4. Smart Review — chỉ xem ảnh có nguy cơ sai trước
+
+Sau khi bấm:
+
+```text
+2. Auto-label YOLO26
+```
+
+V0.5.9 lưu thêm metadata confidence và tính **review priority** cho từng ảnh.
+
+Annotation Studio mặc định mở bộ lọc:
+
+```text
+🔥 Ưu tiên cần kiểm tra
+```
+
+Các ảnh được đưa lên đầu khi có một hoặc nhiều yếu tố:
+
+```text
+motorcycle / bicycle
+bicycle prediction
+confidence thấp
+nhiều xe trong cùng frame
+không phát hiện phương tiện nào
+```
+
+Đây là đúng nhóm bạn nên dành thời gian sửa tay, đặc biệt với lỗi hiện tại:
+
+```text
+Xe máy → Xe đạp ❌
+```
+
+Các bộ lọc có sẵn:
+
+```text
+🔥 Ưu tiên cần kiểm tra
+Chưa duyệt
+Ảnh khó
+Tất cả ảnh
+```
+
+## 5. “Duyệt nhanh ảnh tin cậy” hoạt động thế nào?
+
+Sau khi bạn xem thử một số ảnh và thấy auto-label ổn, có thể bấm:
+
+```text
+Duyệt nhanh ảnh tin cậy
+```
+
+V0.5.9 cố ý rất bảo thủ. Hệ thống **không tự duyệt**:
+
+```text
+ảnh có motorcycle
+ảnh có bicycle
+ảnh không detection
+ảnh đông xe
+ảnh confidence thấp
+```
+
+Chỉ các frame rõ, ít box, class không phải xe hai bánh và confidence cao mới đủ điều kiện.
+
+Điều này giúp giảm khối lượng click thủ công mà vẫn để nhóm xe máy/xe đạp — lỗi quan trọng nhất của dự án — cho người dùng kiểm tra thật.
+
+## 6. Quy trình train lại sạch — từng bước
+
+### Bước 0 — quyết định giữ hay xóa dataset cũ
+
+Nếu frame cũ vẫn đa dạng và đúng góc camera:
+
+```text
+Làm lại nhãn · giữ ảnh
+```
+
+Nếu muốn làm mới hoàn toàn:
+
+```text
+Xóa dataset + ảnh cũ
+```
+
+### Bước 1 — trích frame thông minh
+
+Trong **Dataset Studio**:
+
+```text
+Tên dataset       : traffic-vietnam-clean-01
+Mỗi N frame       : 15
+Tối đa ảnh        : 600
+Ngưỡng thay đổi   : 0.008
+☑ Loại frame gần trùng
+```
+
+Bấm:
+
+```text
+1. Trích frame thông minh
+```
+
+Thông báo sẽ cho biết số frame được giữ và số frame gần trùng đã bỏ.
+
+### Bước 2 — Auto-label
+
+Bấm:
+
+```text
+2. Auto-label YOLO26
+```
+
+Auto-label chỉ là **pseudo-label**, chưa phải ground truth.
+
+### Bước 3 — Smart Review
+
+Xuống **Annotation Studio · Smart Review**.
+
+Đầu tiên giữ bộ lọc:
+
+```text
+🔥 Ưu tiên cần kiểm tra
+```
+
+Ưu tiên sửa theo thứ tự:
+
+```text
+1. bicycle nhưng thực tế là motorcycle
+2. motorcycle nhưng box sai/mất box
+3. ảnh không detection nhưng có xe
+4. ảnh nhiều xe bị thiếu box
+5. bus/truck/car bị nhầm class
+```
+
+Hotkey khi đã chọn box:
+
+```text
+1 → Xe máy
+2 → Xe đạp
+3 → Ô tô
+4 → Xe buýt
+5 → Xe tải
+Delete / Backspace → xóa box
+```
+
+Sau khi sửa ảnh, đánh dấu:
+
+```text
+☑ Đã rà soát
+```
+
+rồi bấm:
+
+```text
+Lưu nhãn
+```
+
+### Bước 3B — spot-check ảnh dễ
+
+Chuyển bộ lọc sang:
+
+```text
+Chưa duyệt
+```
+
+Xem ngẫu nhiên một số frame auto-label được coi là ổn. Nếu chất lượng tốt, bấm:
+
+```text
+Duyệt nhanh ảnh tin cậy
+```
+
+Không nên bấm duyệt nhanh trước khi spot-check.
+
+### Bước 4 — chia Train / Val / Test
+
+Sau khi sửa annotation, bấm:
+
+```text
+4. Chia train/val/test
+```
+
+Mặc định:
+
+```text
+Train 70%
+Val   20%
+Test  10%
+Seed  2026
+```
+
+V0.5.9 tạo lại:
+
+```text
+images/train
+images/val
+images/test
+labels/train
+labels/val
+labels/test
+dataset.yaml
+```
+
+### Bước 5 — Fine-tune mới
+
+Khuyến nghị ban đầu cho RTX 3060:
+
+```text
+Base model : YOLO26s
+Epochs     : 80
+Image size : 640
+Batch      : 8
+Device     : auto/CUDA
+```
+
+Bấm:
+
+```text
+5. Bắt đầu fine-tune mới RTX 3060
+```
+
+Training run mới khởi tạo từ `yolo26s.pt`, **không học tiếp từ `best.pt` cũ**.
+
+### Bước 6 — kích hoạt best.pt mới
+
+Khi run hoàn tất:
+
+```text
+COMPLETED
+```
+
+kiểm tra:
+
+```text
+Precision
+Recall
+mAP50
+mAP50-95
+```
+
+rồi bấm:
+
+```text
+6. Kích hoạt best.pt
+```
+
+Lúc này:
+
+```text
+Kích hoạt best.pt
+       ↓
+Chạy AI
+       ↓
+INFERENCE
+```
+
+Chạy video không làm model train thêm.
+
+## 7. Điều gì nên rà soát thủ công nhiều nhất cho lỗi xe máy → xe đạp?
+
+Không cần chia thời gian đều cho mọi class. Với camera của dự án, ưu tiên:
+
+```text
+motorcycle ở xa
+motorcycle bị motion blur
+xe tay ga nhìn từ trên xuống
+xe máy bị che một phần
+motorcycle đi cạnh bicycle thật
+bicycle thật để model học ranh giới hai class
+```
+
+Đặc biệt phải có **bicycle thật** trong dataset. Nếu dataset chỉ có hàng nghìn xe máy và rất ít xe đạp, model khó học ranh giới class dù annotation xe máy đã đúng.
+
+## 8. Database V0.5.9
+
+Migration mới:
+
+```text
+0022_strict_gate_v058
+        ↓
+0023_clean_retrain_v059
+```
+
+`schema_version`:
+
+```text
+0.5.9
+```
+
+Migration này không xóa dataset/model cũ. Việc xóa chỉ xảy ra khi người dùng chủ động bấm **Xóa dataset + ảnh cũ**.
+
+## 9. GitHub Actions / phát hành
+
+V0.5.9 hạ các action về major ổn định trong workflow:
+
+```text
+actions/checkout@v4
+actions/setup-python@v5
+actions/setup-node@v4
+```
+
+Release artifact gồm:
+
+```text
+traffic-ai-v0.5.9.zip
+traffic-ai-v0.5.9.tar.gz
+traffic-ai-v0.5.9-README.md
+SHA256SUMS.txt
+```
+
+Fallback GitHub CLI vẫn được giữ nếu GitHub Actions Release thất bại.
+
+## 10. Cập nhật trên máy
+
+Chép source mới đè vào:
+
+```text
+D:\LienThongDH\DoAn\traffic-ai
+```
+
+Giữ dữ liệu runtime:
+
+```text
+.env
+gateway\certs\
+videos\
+models\
+snapshots\
+datasets\
+training-runs\
+```
+
+Không chạy:
+
+```powershell
+docker compose down -v
+```
+
+Kiểm thử:
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+.\scripts\test.ps1
+```
+
+Khởi động:
+
+```powershell
+.\scripts\start.ps1
+```
+
+Kiểm tra DB:
+
+```powershell
+.\scripts\verify-database.ps1
+```
+
+Mong muốn:
+
+```text
+0023_clean_retrain_v059
+schema_version = 0.5.9
+```
+
+## 11. Phát hành — vẫn chỉ một lệnh
+
+Sau khi chạy ổn:
+
+```powershell
+.\scripts\publish.ps1
+```
+
+```text
+test
+→ build
+→ commit
+→ push GitHub
+→ tag v0.5.9
+→ GitHub Actions
+→ GitHub Release
+→ ZIP + TAR.GZ + README + SHA256SUMS
+```
+
+Nếu GitHub Actions Release lỗi, `publish.ps1` tự fallback sang `gh release create`; người dùng không cần chạy thêm chuỗi lệnh Git/gh thủ công.
+
+---
+
+# Lịch sử V0.5.8-R1
+
 # Traffic AI V0.5.8-R1 — Strict Gate + Fast Crossing (Test Contract Hotfix)
 
 **Đồ án môn Trí tuệ nhân tạo:** Nghiên cứu và xây dựng hệ thống phát hiện, phân loại, theo dõi và đếm phương tiện giao thông qua camera.

@@ -23,8 +23,10 @@ class PipelineStart(BaseModel):
 class DatasetExtractRequest(BaseModel):
     slug: str = Field(min_length=2, max_length=80)
     source_url: str = Field(min_length=1)
-    every_n_frames: int = Field(default=10, ge=1, le=10000)
-    max_images: int = Field(default=1200, ge=10, le=50000)
+    every_n_frames: int = Field(default=15, ge=1, le=10000)
+    max_images: int = Field(default=600, ge=10, le=50000)
+    smart_dedupe: bool = True
+    min_change_ratio: float = Field(default=0.008, ge=0.0, le=1.0)
 
 
 class DatasetAutoLabelRequest(BaseModel):
@@ -38,6 +40,18 @@ class DatasetPrepareRequest(BaseModel):
     train_ratio: float = Field(default=0.70, ge=0.50, lt=1.0)
     val_ratio: float = Field(default=0.20, gt=0.0, lt=0.50)
     seed: int = 2026
+
+
+
+
+class DatasetPurgeRequest(BaseModel):
+    slug: str = Field(min_length=2, max_length=80)
+    run_ids: list[int] = Field(default_factory=list)
+    purge_training_runs: bool = True
+
+
+class AnnotationBulkAcceptRequest(BaseModel):
+    min_confidence: float = Field(default=0.70, ge=0.50, le=0.99)
 
 
 class TrainingStartRequest(BaseModel):

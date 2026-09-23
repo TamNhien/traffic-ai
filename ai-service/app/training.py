@@ -40,6 +40,71 @@ def dataset_dir(slug: str) -> Path:
     return candidate
 
 
+
+
+def _candidate_changed_enough(changed_ratio: float, min_change_ratio: float) -> bool:
+    """Return True when a sampled frame is visually different enough to keep.
+
+    This helper is intentionally dependency-free so unit tests can verify the
+    smart-frame policy without importing OpenCV/Numpy.
+    """
+    return float(changed_ratio) >= max(0.0, float(min_change_ratio))
+
+
+def _review_priority(boxes: list[dict[str, Any]]) -> dict[str, Any]:
+    """Score pseudo-labels so humans review risky frames first.
+
+    Motorcycle/bicycle confusion is the primary failure mode for this project,
+    so any two-wheel prediction is deliberately kept out of bulk auto-accept.
+    Empty detections are also review candidates because they may hide a miss.
+    """
+    if not boxes:
+        return {
+            "score": 55,
+            "reasons": ["Không phát hiện phương tiện"],
+            "safe_auto_accept": False,
+            "min_confidence": None,
+            "mean_confidence": None,
+        }
+    confidences = [max(0.0, min(1.0, float(b.get("confidence", 0.0)))) for b in boxes]
+    class_ids = [int(b.get("class_id", -1)) for b in boxes]
+    score = 0
+    reasons: list[str] = []
+    min_conf = min(confidences)
+    mean_conf = sum(confidences) / max(1, len(confidences))
+    has_two_wheeler = any(cid in {0, 1} for cid in class_ids)
+    has_bicycle = 1 in class_ids
+    if has_two_wheeler:
+        score += 35
+        reasons.append("Có xe máy/xe đạp cần kiểm tra kỹ")
+    if has_bicycle:
+        score += 15
+        reasons.append("Có nhãn bicycle")
+    if min_conf < 0.45:
+        score += 35
+        reasons.append("Confidence thấp")
+    elif min_conf < 0.60:
+        score += 20
+        reasons.append("Confidence trung bình")
+    if len(boxes) >= 8:
+        score += 25
+        reasons.append("Khung hình rất đông xe")
+    elif len(boxes) >= 5:
+        score += 15
+        reasons.append("Khung hình đông xe")
+    safe_auto_accept = (
+        not has_two_wheeler
+        and len(boxes) <= 4
+        and min_conf >= 0.70
+        and mean_conf >= 0.78
+    )
+    return {
+        "score": min(100, score),
+        "reasons": reasons or ["Nhãn tương đối ổn định"],
+        "safe_auto_accept": safe_auto_accept,
+        "min_confidence": round(min_conf, 4),
+        "mean_confidence": round(mean_conf, 4),
+    }
 def split_items(items: list[str], train_ratio: float, val_ratio: float, seed: int) -> dict[str, list[str]]:
     if not 0.5 <= train_ratio < 1.0:
         raise ValueError("train_ratio phải từ 0.5 đến dưới 1.0")
@@ -53,12 +118,23 @@ def split_items(items: list[str], train_ratio: float, val_ratio: float, seed: in
     return {"train": values[:train_end], "val": values[train_end:val_end], "test": values[val_end:]}
 
 
-def extract_frames(source_path: Path, slug: str, every_n_frames: int = 10, max_images: int = 1200) -> dict[str, Any]:
+def extract_frames(
+    source_path: Path,
+    slug: str,
+    every_n_frames: int = 15,
+    max_images: int = 600,
+    smart_dedupe: bool = True,
+    min_change_ratio: float = 0.008,
+) -> dict[str, Any]:
     # OpenCV là dependency runtime nặng. Import tại nơi sử dụng để các unit test
-    # thuần logic (health/source metadata/split dataset) không phải cài OpenCV.
+    # thuần logic không phải cài OpenCV.
     import cv2
     if every_n_frames < 1:
         raise ValueError("every_n_frames phải >= 1")
+    if max_images < 10:
+        raise ValueError("max_images phải >= 10")
+    if not 0.0 <= min_change_ratio <= 1.0:
+        raise ValueError("min_change_ratio phải nằm trong 0..1")
     target = dataset_dir(slug)
     raw_images = target / "raw" / "images"
     raw_labels = target / "raw" / "labels"
@@ -70,23 +146,48 @@ def extract_frames(source_path: Path, slug: str, every_n_frames: int = 10, max_i
     source_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
     source_fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
     written = 0
+    sampled = 0
+    skipped_similar = 0
     frame_index = 0
+    last_signature = None
     try:
         while written < max_images:
             ok, frame = cap.read()
             if not ok:
                 break
             if frame_index % every_n_frames == 0:
-                name = f"frame_{frame_index:08d}.jpg"
-                if not cv2.imwrite(str(raw_images / name), frame, [int(cv2.IMWRITE_JPEG_QUALITY), 92]):
-                    raise RuntimeError(f"Không ghi được frame {name}")
-                written += 1
+                sampled += 1
+                keep = True
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                signature = cv2.resize(gray, (160, 90), interpolation=cv2.INTER_AREA)
+                if smart_dedupe and last_signature is not None:
+                    diff = cv2.absdiff(signature, last_signature)
+                    _, changed = cv2.threshold(diff, 12, 255, cv2.THRESH_BINARY)
+                    changed_ratio = float(cv2.countNonZero(changed)) / float(changed.size or 1)
+                    keep = _candidate_changed_enough(changed_ratio, min_change_ratio)
+                    if not keep:
+                        skipped_similar += 1
+                if keep:
+                    name = f"frame_{frame_index:08d}.jpg"
+                    if not cv2.imwrite(str(raw_images / name), frame, [int(cv2.IMWRITE_JPEG_QUALITY), 92]):
+                        raise RuntimeError(f"Không ghi được frame {name}")
+                    written += 1
+                    last_signature = signature
             frame_index += 1
     finally:
         cap.release()
     meta = {
-        "slug": safe_slug(slug), "source_path": str(source_path), "source_frames": source_frames,
-        "source_fps": source_fps, "sample_every_n_frames": every_n_frames, "image_count": written,
+        "slug": safe_slug(slug),
+        "source_path": str(source_path),
+        "source_frames": source_frames,
+        "source_fps": source_fps,
+        "sample_every_n_frames": every_n_frames,
+        "max_images": max_images,
+        "smart_dedupe": bool(smart_dedupe),
+        "min_change_ratio": float(min_change_ratio),
+        "sampled_candidates": sampled,
+        "skipped_similar": skipped_similar,
+        "image_count": written,
     }
     (target / "metadata.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
     return meta
@@ -103,9 +204,13 @@ def auto_label(slug: str, model_path: str, confidence: float = 0.25) -> dict[str
     model = YOLO(model_path)
     labeled_images = 0
     boxes_total = 0
+    priority_images = 0
+    safe_auto_accept_images = 0
+    review_meta: dict[str, Any] = {}
     for image in images:
         results = model.predict(str(image), conf=confidence, verbose=False)
         lines: list[str] = []
+        box_meta: list[dict[str, Any]] = []
         if results:
             result = results[0]
             boxes = getattr(result, "boxes", None)
@@ -116,12 +221,37 @@ def auto_label(slug: str, model_path: str, confidence: float = 0.25) -> dict[str
                     if mapped is None:
                         continue
                     xywhn = box.xywhn[0].tolist()
+                    conf_value = float(box.conf[0].item()) if getattr(box, "conf", None) is not None else 0.0
                     lines.append(f"{mapped} " + " ".join(f"{float(v):.6f}" for v in xywhn))
+                    box_meta.append({
+                        "class_id": mapped,
+                        "class_name": VEHICLE_CLASSES[mapped],
+                        "confidence": round(conf_value, 4),
+                    })
         (label_dir / f"{image.stem}.txt").write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+        review = _review_priority(box_meta)
+        if review["score"] >= 35:
+            priority_images += 1
+        if review["safe_auto_accept"]:
+            safe_auto_accept_images += 1
+        review_meta[image.name] = {
+            "box_count": len(box_meta),
+            "classes": sorted({b["class_name"] for b in box_meta}),
+            **review,
+        }
         if lines:
             labeled_images += 1
             boxes_total += len(lines)
-    return {"image_count": len(images), "labeled_images": labeled_images, "box_count": boxes_total, "classes": VEHICLE_CLASSES}
+    meta_path = target / "raw" / "auto_label_meta.json"
+    meta_path.write_text(json.dumps(review_meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {
+        "image_count": len(images),
+        "labeled_images": labeled_images,
+        "box_count": boxes_total,
+        "classes": VEHICLE_CLASSES,
+        "priority_images": priority_images,
+        "safe_auto_accept_images": safe_auto_accept_images,
+    }
 
 
 def dataset_stats(slug: str) -> dict[str, Any]:
@@ -146,7 +276,71 @@ def dataset_stats(slug: str) -> dict[str, Any]:
                     boxes += 1
             except Exception:
                 continue
-    return {"image_count": len(images), "labeled_images": labeled_images, "label_count": len(labels), "box_count": boxes, "per_class": per_class}
+    review_meta: dict[str, Any] = {}
+    meta_path = target / "raw" / "auto_label_meta.json"
+    if meta_path.exists():
+        try:
+            loaded = json.loads(meta_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                review_meta = loaded
+        except Exception:
+            review_meta = {}
+    priority_images = sum(1 for v in review_meta.values() if isinstance(v, dict) and int(v.get("score", 0)) >= 35)
+    safe_auto_accept_images = sum(1 for v in review_meta.values() if isinstance(v, dict) and bool(v.get("safe_auto_accept")))
+    return {
+        "image_count": len(images),
+        "labeled_images": labeled_images,
+        "label_count": len(labels),
+        "box_count": boxes,
+        "per_class": per_class,
+        "priority_images": priority_images,
+        "safe_auto_accept_images": safe_auto_accept_images,
+    }
+
+
+def reset_dataset_labels(slug: str) -> dict[str, Any]:
+    """Keep extracted images but remove pseudo labels/review/splits for a clean relabel."""
+    target = dataset_dir(slug)
+    if not target.exists():
+        raise FileNotFoundError(slug)
+    raw_images = target / "raw" / "images"
+    image_count = len(list(raw_images.glob("*.jpg"))) if raw_images.exists() else 0
+    for path in [target / "raw" / "labels", target / "images", target / "labels"]:
+        if path.exists():
+            shutil.rmtree(path)
+    (target / "raw" / "labels").mkdir(parents=True, exist_ok=True)
+    for path in [target / "dataset.yaml", target / "annotation_review.json", target / "raw" / "auto_label_meta.json"]:
+        if path.exists():
+            path.unlink()
+    return {"slug": safe_slug(slug), "image_count": image_count, "status": "extracted"}
+
+
+def purge_dataset(slug: str, run_ids: list[int] | None = None, purge_training_runs: bool = True) -> dict[str, Any]:
+    """Delete dataset files and optional run folders, but never exported models in /data/models."""
+    target = dataset_dir(slug)
+    removed_dataset = False
+    if target.exists():
+        shutil.rmtree(target)
+        removed_dataset = True
+    removed_runs: list[int] = []
+    if purge_training_runs:
+        for raw_id in run_ids or []:
+            run_id = int(raw_id)
+            if run_id < 1:
+                continue
+            run_dir = (TRAINING_ROOT / f"run-{run_id}").resolve()
+            root = TRAINING_ROOT.resolve()
+            if root != run_dir and root not in run_dir.parents:
+                continue
+            if run_dir.exists():
+                shutil.rmtree(run_dir)
+                removed_runs.append(run_id)
+    return {
+        "slug": safe_slug(slug),
+        "removed_dataset": removed_dataset,
+        "removed_training_runs": removed_runs,
+        "exported_models_preserved": True,
+    }
 
 
 def prepare_dataset(slug: str, train_ratio: float = 0.70, val_ratio: float = 0.20, seed: int = 2026) -> dict[str, Any]:
@@ -258,7 +452,7 @@ class TrainingRegistry:
             best = save_dir / "weights" / "best.pt"
             if not best.exists():
                 raise RuntimeError("Training hoàn tất nhưng không tìm thấy weights/best.pt")
-            exported = MODEL_ROOT / f"traffic-ai-v050-run-{state.run_id}-best.pt"
+            exported = MODEL_ROOT / f"traffic-ai-v059-run-{state.run_id}-best.pt"
             shutil.copy2(best, exported)
             metrics = getattr(results, "results_dict", {}) or {}
             state.precision = _metric(metrics, ["metrics/precision(B)", "precision"])

@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
@@ -35,7 +35,7 @@ jobs:
           fi
 
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@v5
         with:
           python-version: '3.14.7'
 
@@ -62,7 +62,7 @@ jobs:
           python -m pytest -q
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@v4
         with:
           node-version: '26.9.0'
 
@@ -87,7 +87,8 @@ jobs:
           mkdir -p dist
           git archive --format=zip --prefix="traffic-ai-${GITHUB_REF_NAME}/" -o "dist/traffic-ai-${GITHUB_REF_NAME}.zip" HEAD
           git archive --format=tar.gz --prefix="traffic-ai-${GITHUB_REF_NAME}/" -o "dist/traffic-ai-${GITHUB_REF_NAME}.tar.gz" HEAD
-          (cd dist && sha256sum traffic-ai-${GITHUB_REF_NAME}.zip traffic-ai-${GITHUB_REF_NAME}.tar.gz > SHA256SUMS.txt)
+          cp README.md "dist/traffic-ai-${GITHUB_REF_NAME}-README.md"
+          (cd dist && sha256sum traffic-ai-${GITHUB_REF_NAME}.zip traffic-ai-${GITHUB_REF_NAME}.tar.gz traffic-ai-${GITHUB_REF_NAME}-README.md > SHA256SUMS.txt)
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
@@ -102,7 +103,8 @@ jobs:
           gh release create "$GITHUB_REF_NAME" \
             "dist/traffic-ai-${GITHUB_REF_NAME}.zip" \
             "dist/traffic-ai-${GITHUB_REF_NAME}.tar.gz" \
+            "dist/traffic-ai-${GITHUB_REF_NAME}-README.md" \
             "dist/SHA256SUMS.txt" \
             --title "Traffic AI $GITHUB_REF_NAME" \
-            --generate-notes \
+            --notes-file "dist/traffic-ai-${GITHUB_REF_NAME}-README.md" \
             --verify-tag
