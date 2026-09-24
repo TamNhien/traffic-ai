@@ -1,98 +1,101 @@
-# Traffic AI V0.5.17 — Single-Object BUS/TRUCK Guard 🚛🚌
+# Traffic AI V0.5.18 — Crossing Engine 6.0 🚗⚡
 
-V0.5.17 tiếp tục từ V0.5.16 và sửa lỗi một **xe tải có thể bị nhận/đếm đồng thời thành Xe buýt + Xe tải** khi detector tạo hai bounding box BUS/TRUCK chồng lên cùng một phương tiện.
+V0.5.18 tiếp tục từ V0.5.17 và tập trung vào **độ chính xác của thời điểm cắt vạch + telemetry đếm**. Clip kiểm thử người dùng cung cấp ở V0.5.17 kết thúc với hệ thống báo **Tổng 11 · IN 5 · OUT 6**, nhưng có tới **9 lượt bị ghi là `cứu`**. Điều đó không có nghĩa 9 xe thật sự mất track dài: engine cũ coi mọi crossing có khoảng cách frame > 1 là rescue, kể cả trường hợp track đi qua dead-band quanh vạch rất bình thường.
 
-## Nguyên nhân
+> Con số 11/5/6 ở trên là **kết quả hệ thống trên clip**, không phải ground-truth đã kiểm đếm thủ công độc lập.
 
-YOLO/COCO có thể giữ hai detection khác class cho cùng một vật thể vì NMS mặc định là class-aware. Nếu cả BUS và TRUCK cùng đi vào ByteTrack, chúng có thể thành hai raw track ID và cùng cắt vạch, khiến một xe thật tạo hai lượt đếm.
+## Crossing Engine 6.0
 
-## Single-Object Guard V0.5.17
-
-Pipeline mới:
+V0.5.18 tách crossing thành ba mức:
 
 ```text
-Full-frame YOLO26 detector
-        ↓
-ByteTrack
-        ↓
-BUS/TRUCK overlap guard
-        ↓
-IoU >= 0.68 ?
-  ├─ Không → giữ riêng
-  └─ Có    → giữ box mạnh hơn
-              + alias raw ID còn lại vào cùng canonical track
-        ↓
-Temporal class smoothing
-        ↓
-best.pt refine tại crossing
-        ↓
-Road Guard + Strict Gate
-        ↓
-MỘT phương tiện = MỘT crossing event
+DIRECT
+  hai observation liên tiếp nằm hai phía vạch
+
+INTERPOLATED
+  track liên tục / gần liên tục,
+  có frame trong dead-band hoặc hụt tối đa vài frame
+
+RESCUED
+  có khoảng mất detection/tracking thật sự dài,
+  history mới phải nối qua gap
 ```
 
-Guard chỉ xử lý cặp **BUS ↔ TRUCK** chồng box mạnh; không gộp tùy tiện xe máy/ô tô trong giao thông đông.
-
-## Cấu hình mới
+Mặc định:
 
 ```env
-AI_AGNOSTIC_NMS=0
-AI_HEAVY_DUP_IOU=0.68
+AI_GATE_INTERPOLATION_GAP=3
 ```
 
-`AI_AGNOSTIC_NMS=0` giữ NMS class-aware mặc định để tránh làm mất các phương tiện thật đang chồng nhau trong cảnh đông. Lớp BUS/TRUCK guard riêng xử lý đúng xung đột cần sửa.
+Nghĩa là gap quan sát tối đa 3 frame vẫn được coi là nội suy ngắn; dài hơn mới được tính `rescued`.
 
-`AI_HEAVY_DUP_IOU=0.68` nghĩa là BUS/TRUCK phải chồng nhau ít nhất khoảng 68% mới bị xem là cùng một xe.
+### Local crossing segment
 
-## Telemetry
+Engine cũ lấy một điểm ổn định ở phía cũ và điểm hiện tại rồi dựng một đoạn dài để tìm giao điểm. V0.5.18 trước tiên tìm **cặp observation cục bộ gần vạch nhất** để nội suy giao điểm. Chỉ khi track quá thưa mới fallback sang history dài.
 
-Dòng runtime có thêm:
+Điều này giúp:
+
+- đếm sát thời điểm xe vừa cắt vạch hơn;
+- giảm telemetry `cứu` giả;
+- giữ Strict Finite Gate;
+- giữ Road Guard, không đếm xe ngoài lòng đường;
+- giữ Hybrid Recall, Auto Road-Zone và Single-Object BUS/TRUCK Guard.
+
+## Tổng xe hiển thị rõ hơn
+
+Panel `VEHICLE COUNT` có thêm:
 
 ```text
-gộp bus/truck N
+Tổng lượt cắt vạch
+IN
+OUT
+
+Trực tiếp
+Nội suy
+Cứu qua gap
 ```
 
-Ví dụ:
+`Tổng = IN + OUT` vẫn là số lượt xe cắt vạch của phiên hiện tại. Breakdown crossing chỉ giải thích **engine đã xác nhận lượt đó theo cách nào**, không cộng thêm xe.
+
+Ví dụ mục tiêu telemetry sau nâng cấp:
 
 ```text
-DET 8 · track 7 · road 4 · gộp bus/truck 1 · Tổng 22
+Tổng 11 · IN 5 · OUT 6
+Trực tiếp 4 · Nội suy 6 · Cứu 1
 ```
 
-`gộp bus/truck 1` nghĩa là frame đó hệ thống đã loại 1 detection BUS/TRUCK trùng cùng một xe trước bộ đếm.
+thay vì mọi dead-band crossing bị dồn vào `cứu`.
 
-## Thông số hiện tại của camera
+## Không thay đổi dataset/model
 
-Với cấu hình người dùng đang thử:
+V0.5.18 không xóa hoặc train lại:
 
 ```text
-X1 = 0.32
-Y1 = 0.81
-X2 = 0.84
-Y2 = 0.55
-Confidence = 0.05
+datasets/
+training-runs/
+models/
+best.pt
 ```
 
-V0.5.17 **không yêu cầu đổi Confidence** chỉ để sửa lỗi BUS/TRUCK đếm đôi. Có thể giữ `0.05` để cứu xe nhỏ/xa. Không nên hạ thấp thêm trước khi kiểm thử Single-Object Guard vì sẽ tăng detection yếu/false positive.
-
-Vạch vẫn nên gần vuông góc luồng xe thật và nằm hoàn toàn trong Road Zone.
+Model Run #3 đang kích hoạt vẫn được giữ. Confidence hiện tại `0.05` cũng không bị thay đổi bởi migration này.
 
 ## Database
 
-Migration:
+Migration mới:
 
 ```text
-0030_auto_road_v0516
-        ↓
 0031_single_vehicle_v0517
+        ↓
+0032_crossing_engine_v0518
 ```
 
 Mong muốn:
 
 ```text
-schema_version = 0.5.17
+schema_version = 0.5.18
 ```
 
-Migration chỉ nâng schema version, không xóa dataset, Run #3, `best.pt`, camera, vehicle events hoặc counting sessions.
+Migration chỉ nâng `schema_version`, không xóa dữ liệu.
 
 ## Cập nhật
 
@@ -102,7 +105,7 @@ Chép source đè vào:
 D:\LienThongDH\DoAn\traffic-ai
 ```
 
-Giữ nguyên:
+Giữ:
 
 ```text
 .env
@@ -130,17 +133,17 @@ cd D:\LienThongDH\DoAn\traffic-ai
 Contract mới:
 
 ```text
-[Traffic AI] Single-Object BUS/TRUCK Guard V0.5.17
-[OK] Single-Object BUS/TRUCK Guard V0.5.17
+[Traffic AI] Crossing Engine 6.0 V0.5.18
+[OK] Crossing Engine 6.0 V0.5.18
 ```
 
-Khởi động:
+Chạy:
 
 ```powershell
 .\scripts\start.ps1
 ```
 
-Kiểm tra DB:
+Kiểm tra database:
 
 ```powershell
 .\scripts\verify-database.ps1
@@ -149,17 +152,28 @@ Kiểm tra DB:
 Mong muốn:
 
 ```text
-0031_single_vehicle_v0517
-schema_version = 0.5.17
+0032_crossing_engine_v0518
+schema_version = 0.5.18
 ```
 
-Sau khi mở web, `Ctrl+F5`, chạy lại chính clip có xe tải và quan sát:
+Sau đó `Ctrl + F5` trên trình duyệt.
+
+## Kiểm thử clip hiện tại
+
+Khi chạy lại đúng clip đã gửi, theo dõi:
 
 ```text
-DET · track · road · gộp bus/truck · Tổng
+DET
+track
+road
+Tổng / IN / OUT
+trực tiếp
+nội suy
+cứu
+loại ngoài lòng đường
 ```
 
-Một xe tải đi qua chỉ được tạo **một** crossing event. Class cuối được chọn bằng temporal evidence + `best.pt` refiner.
+Nếu `Tổng` vẫn sai so với kiểm đếm thủ công, bước tiếp theo là tạo **Ground-truth Counting Benchmark** cho chính clip này: đánh dấu thời điểm từng xe cắt vạch và so event-by-event thay vì chỉ nhìn tổng cuối clip.
 
 ## Phát hành
 
@@ -170,5 +184,23 @@ Sau khi chạy ổn vẫn chỉ một lệnh:
 ```
 
 ```text
-→ test → build → push GitHub → tag v0.5.17 → GitHub Actions → Release
+→ test → build → push GitHub → tag v0.5.18 → GitHub Actions → Release
 ```
+
+## Kiểm thử khi đóng gói
+
+```text
+Python compile                    ✅
+AI Service unit tests             61/61 ✅
+Backend unit tests                 7/7 ✅
+Crossing direct                   ✅
+Crossing dead-band interpolation  ✅
+Small-gap interpolation           ✅
+Long-gap rescue                   ✅
+Strict Road Zone                  ✅
+BUS/TRUCK guard                   ✅
+Alembic revision safety           ✅
+Sensitive/runtime artifact scan   ✅
+```
+
+Frontend `npm install` trong môi trường đóng gói bị timeout mạng nên không ghi Vite build PASS giả. `./scripts/test.ps1` trên máy Windows/Docker của dự án vẫn là vòng xác nhận cuối cho frontend + Docker images.

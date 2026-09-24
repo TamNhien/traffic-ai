@@ -147,3 +147,50 @@ def test_self_crossing_road_zone_is_rejected_at_counter_creation() -> None:
     bad_zone = RoadZone(0.20, 0.20, 0.80, 0.80, 0.80, 0.20, 0.20, 0.80)
     with pytest.raises(ValueError, match="self-intersecting"):
         LineCrossingCounter(CountingLine(0.3, 0.5, 0.7, 0.5), road_zone=bad_zone)
+
+
+def test_crossing_engine_v6_classifies_consecutive_crossing_as_direct() -> None:
+    counter = LineCrossingCounter(CountingLine(0.1, 0.5, 0.9, 0.5), interpolation_gap_frames=3)
+    assert counter.update(901, (50, 20), 100, 100, 10) is None
+    assert counter.update(901, (50, 80), 100, 100, 11) == "in"
+    assert counter.direct_crossings == 1
+    assert counter.interpolated_crossings == 0
+    assert counter.rescued_crossings == 0
+    assert counter.crossing_mode_for(901) == "direct"
+
+
+def test_crossing_engine_v6_dead_band_crossing_is_interpolated_not_rescue() -> None:
+    counter = LineCrossingCounter(
+        CountingLine(0.1, 0.5, 0.9, 0.5),
+        dead_band_ratio=0.06,
+        interpolation_gap_frames=3,
+    )
+    assert counter.update(902, (50, 35), 100, 100, 1) is None
+    assert counter.update(902, (50, 49), 100, 100, 2) is None
+    assert counter.update(902, (50, 65), 100, 100, 3) == "in"
+    assert counter.direct_crossings == 0
+    assert counter.interpolated_crossings == 1
+    assert counter.rescued_crossings == 0
+    assert counter.crossing_mode_for(902) == "interpolated"
+
+
+def test_crossing_engine_v6_small_observation_gap_is_interpolated() -> None:
+    counter = LineCrossingCounter(CountingLine(0.1, 0.5, 0.9, 0.5), interpolation_gap_frames=3)
+    assert counter.update(903, (50, 20), 100, 100, 1) is None
+    assert counter.update(903, (50, 80), 100, 100, 3) == "in"
+    assert counter.interpolated_crossings == 1
+    assert counter.rescued_crossings == 0
+
+
+def test_crossing_engine_v6_long_gap_remains_rescue() -> None:
+    counter = LineCrossingCounter(
+        CountingLine(0.1, 0.5, 0.9, 0.5),
+        history_gap_frames=45,
+        interpolation_gap_frames=3,
+    )
+    assert counter.update(904, (50, 20), 100, 100, 2) is None
+    assert counter.update(904, (52, 82), 100, 100, 9) == "in"
+    assert counter.direct_crossings == 0
+    assert counter.interpolated_crossings == 0
+    assert counter.rescued_crossings == 1
+    assert counter.crossing_breakdown == {"direct": 0, "interpolated": 0, "rescued": 1}

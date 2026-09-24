@@ -300,18 +300,18 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.17") { throw "VERSION phải là 0.5.17, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0031_single_vehicle_v0517.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0031_single_vehicle_v0517.py." }
+  if ($version -ne "0.5.18") { throw "VERSION phải là 0.5.18, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0032_crossing_engine_v0518.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0032_crossing_engine_v0518.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0031_single_vehicle_v0517"' -or $migrationText -notmatch 'down_revision = "0030_auto_road_v0516"' -or $migrationText -notmatch "value='0.5.17'") {
-    throw "Migration 0031_single_vehicle_v0517 không đúng contract V0.5.17."
+  if ($migrationText -notmatch 'revision = "0032_crossing_engine_v0518"' -or $migrationText -notmatch 'down_revision = "0031_single_vehicle_v0517"' -or $migrationText -notmatch "value='0.5.18'") {
+    throw "Migration 0032_crossing_engine_v0518 không đúng contract V0.5.18."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
 
 function Assert-AlembicRevisionSafetyContract {
-  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.17" -ForegroundColor Cyan
+  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.18" -ForegroundColor Cyan
   $versionsDir = Join-Path $root "backend\alembic\versions"
   $bad = @()
   Get-ChildItem $versionsDir -Filter "*.py" | ForEach-Object {
@@ -335,7 +335,7 @@ function Assert-AlembicRevisionSafetyContract {
   if ($v17 -notmatch 'revision = "0017_ai_test_dep_v053"') {
     throw "Migration V0.5.3 chưa dùng revision ID rút gọn an toàn."
   }
-  Write-Host "[OK] Alembic revision-length safety V0.5.17" -ForegroundColor Green
+  Write-Host "[OK] Alembic revision-length safety V0.5.18" -ForegroundColor Green
 }
 
 
@@ -536,6 +536,29 @@ function Assert-SingleVehicleGuardV0517Contract {
     throw "start.ps1 chưa bổ sung tuning Single-Object Guard vào .env cũ."
   }
   Write-Host "[OK] Single-Object BUS/TRUCK Guard V0.5.17" -ForegroundColor Green
+}
+
+
+function Assert-CrossingEngineV0518Contract {
+  Write-Host "`n[Traffic AI] Crossing Engine 6.0 V0.5.18" -ForegroundColor Cyan
+  $counting = Get-Content (Join-Path $root "ai-service\app\counting.py") -Raw -Encoding UTF8
+  $runtime = Get-Content (Join-Path $root "ai-service\app\runtime.py") -Raw -Encoding UTF8
+  $worker = Get-Content (Join-Path $root "ai-service\app\worker.py") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  $envExample = Get-Content (Join-Path $root ".env.example") -Raw -Encoding UTF8
+  if ($counting -notmatch 'direct_crossings' -or $counting -notmatch 'interpolated_crossings' -or $counting -notmatch 'crossing_mode_for' -or $counting -notmatch 'interpolation_gap_frames') {
+    throw "Thiếu phân loại direct/interpolated/rescued của Crossing Engine 6.0."
+  }
+  if ($runtime -notmatch 'direct_crossings' -or $runtime -notmatch 'interpolated_crossings' -or $worker -notmatch 'DIRECT-X' -or $worker -notmatch 'INTERP') {
+    throw "Thiếu telemetry Crossing Engine 6.0 ở runtime/overlay."
+  }
+  if ($frontend -notmatch 'Trực tiếp' -or $frontend -notmatch 'Nội suy' -or $frontend -notmatch 'Tổng lượt cắt vạch' -or $frontend -notmatch 'Crossing Engine 6\.0') {
+    throw "Frontend thiếu tổng xe hoặc breakdown crossing V0.5.18."
+  }
+  if ($envExample -notmatch 'AI_GATE_INTERPOLATION_GAP=3') {
+    throw ".env.example thiếu AI_GATE_INTERPOLATION_GAP=3."
+  }
+  Write-Host "[OK] Crossing Engine 6.0 V0.5.18" -ForegroundColor Green
 }
 
 function Assert-SmoothPlaybackContract {
@@ -784,6 +807,7 @@ Assert-FullFrameDetectStrictRoadCountV0514Contract
 Assert-HybridRecallTrackRescueV0515Contract
 Assert-AutoRoadZoneV0516Contract
 Assert-SingleVehicleGuardV0517Contract
+Assert-CrossingEngineV0518Contract
 
 Write-Host "`n[Traffic AI] Road Zone + Frame Browser V0.5.11" -ForegroundColor Cyan
 $frontendV511 = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8

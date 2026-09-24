@@ -15,7 +15,7 @@ from app.sources import inspect_source, list_video_sources, read_source_preview,
 from app.training import auto_label, dataset_stats, extract_frames, prepare_dataset, purge_dataset, reset_dataset_labels, training_registry
 from app.annotation import accept_safe_annotations, get_annotation, get_annotation_image, list_annotations, save_annotation
 
-APP_VERSION = '0.5.17'
+APP_VERSION = '0.5.18'
 app = FastAPI(title='Traffic AI Service', version=APP_VERSION)
 SNAPSHOT_DIR = Path(os.getenv('SNAPSHOT_DIR', '/tmp/traffic-ai-snapshots'))
 SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
@@ -44,7 +44,7 @@ def health() -> dict:
         'status': 'ready',
         'service': 'ai-service',
         'version': APP_VERSION,
-        'pipeline': 'yolo26s-bytetrack-hybrid-auto-road-v5.16',
+        'pipeline': 'yolo26s-bytetrack-hybrid-crossing-v6',
         'model': os.getenv('AI_MODEL_NAME', 'yolo26s.pt'),
         'device': os.getenv('AI_DEVICE', 'auto'),
         'performance': {
@@ -61,6 +61,7 @@ def health() -> dict:
             'gate_roi_margin': float(os.getenv('AI_GATE_ROI_MARGIN', '0.16')),
             'gate_segment_margin': float(os.getenv('AI_GATE_SEGMENT_MARGIN', '0.0')),
             'gate_history_gap': int(os.getenv('AI_GATE_HISTORY_GAP', '45')),
+            'gate_interpolation_gap': int(os.getenv('AI_GATE_INTERPOLATION_GAP', '3')),
             'async_event_writer': True,
             'async_stream_encoder': True,
             'native_video_playback': os.getenv('AI_NATIVE_VIDEO_PREVIEW', '1'),

@@ -189,6 +189,7 @@ class LineCrossingCounter:
         dead_band_ratio: float = 0.006,
         rearm_distance_ratio: float = 0.028,
         history_gap_frames: int = 45,
+        interpolation_gap_frames: int = 3,
         min_perpendicular_ratio: float = 0.10,
         min_crossing_motion_ratio: float = 0.004,
     ) -> None:
@@ -200,12 +201,16 @@ class LineCrossingCounter:
         self.dead_band_ratio = max(0.0, float(dead_band_ratio))
         self.rearm_distance_ratio = max(self.dead_band_ratio, float(rearm_distance_ratio))
         self.history_gap_frames = max(2, int(history_gap_frames))
+        self.interpolation_gap_frames = max(1, min(self.history_gap_frames, int(interpolation_gap_frames)))
         self.min_perpendicular_ratio = max(0.0, min(1.0, float(min_perpendicular_ratio)))
         self.min_crossing_motion_ratio = max(0.0, float(min_crossing_motion_ratio))
         self._tracks: dict[int, _TrackGateState] = {}
         self.in_count = 0
         self.out_count = 0
+        self.direct_crossings = 0
+        self.interpolated_crossings = 0
         self.rescued_crossings = 0
+        self._last_crossing_mode: dict[int, str] = {}
         self.rejected_outside_segment = 0
         self.rejected_outside_road = 0
 
@@ -256,13 +261,45 @@ class LineCrossingCounter:
         if previous is None:
             return None
 
+        # Crossing Engine 6.0: use the most local pair of observations that
+        # actually brackets the line. Older builds intersected the last stable
+        # opposite-side sample directly with the current point, so normal
+        # dead-band samples near the line looked like a long "rescue" jump.
+        history = list(state.history)
+        previous_index = max(0, len(history) - 2)
+        for index in range(len(history) - 2, -1, -1):
+            if history[index] is previous:
+                previous_index = index
+                break
+
+        crossing_start = previous
+        crossing_end = sample
+        for left, right in zip(history[previous_index:-1], history[previous_index + 1:]):
+            if left.frame_index >= sample.frame_index:
+                break
+            # Adjacent samples bracket/touch the infinite gate. The finite-gate
+            # intersection below still decides whether the visible segment was
+            # really crossed.
+            if left.side == 0 or right.side == 0 or left.side * right.side < 0:
+                crossing_start, crossing_end = left, right
+
         crossing = segment_crossing_point(
-            previous.point,
-            anchor,
+            crossing_start.point,
+            crossing_end.point,
             a,
             b,
             segment_margin=self.segment_margin,
         )
+        if crossing is None:
+            # Fallback to the stable opposite-side pair for sparse/fast tracks.
+            crossing_start, crossing_end = previous, sample
+            crossing = segment_crossing_point(
+                previous.point,
+                anchor,
+                a,
+                b,
+                segment_margin=self.segment_margin,
+            )
         if crossing is None:
             self.rejected_outside_segment += 1
             return None
@@ -307,9 +344,29 @@ class LineCrossingCounter:
         state.counted_directions.add(direction)
         state.armed = False
         state.last_count_frame = sample.frame_index
-        gap = sample.frame_index - previous.frame_index
-        if gap > 1:
+
+        # Crossing quality is classified from actual observation continuity.
+        # DIRECT      = consecutive observations bracket the gate.
+        # INTERPOLATED= continuous/near-continuous track with dead-band samples
+        #               or only a very small observation gap.
+        # RESCUED     = a genuine longer detector/tracker gap bridged by history.
+        crossing_window = history[previous_index:]
+        frame_gaps = [
+            right.frame_index - left.frame_index
+            for left, right in zip(crossing_window, crossing_window[1:])
+            if right.frame_index > left.frame_index
+        ]
+        max_observation_gap = max(frame_gaps, default=1)
+        if len(crossing_window) == 2 and max_observation_gap <= 1:
+            crossing_mode = "direct"
+            self.direct_crossings += 1
+        elif max_observation_gap <= self.interpolation_gap_frames:
+            crossing_mode = "interpolated"
+            self.interpolated_crossings += 1
+        else:
+            crossing_mode = "rescued"
             self.rescued_crossings += 1
+        self._last_crossing_mode[int(track_id)] = crossing_mode
         state.history = deque([sample], maxlen=48)
 
         if direction == "in":
@@ -317,6 +374,18 @@ class LineCrossingCounter:
         else:
             self.out_count += 1
         return direction
+
+
+    def crossing_mode_for(self, track_id: int) -> str | None:
+        return self._last_crossing_mode.get(int(track_id))
+
+    @property
+    def crossing_breakdown(self) -> dict[str, int]:
+        return {
+            "direct": self.direct_crossings,
+            "interpolated": self.interpolated_crossings,
+            "rescued": self.rescued_crossings,
+        }
 
     @property
     def counted_tracks(self) -> int:

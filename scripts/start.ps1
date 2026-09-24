@@ -121,6 +121,7 @@ Ensure-EnvSetting "AI_STREAM_EVERY_N" "2"
 Ensure-EnvSetting "AI_STREAM_MAX_WIDTH" "960"
 Ensure-EnvSetting "AI_IOU" "0.55"
 Ensure-EnvSetting "AI_GATE_HISTORY_GAP" "45"
+Ensure-EnvSetting "AI_GATE_INTERPOLATION_GAP" "3"
 Ensure-EnvSetting "AI_GATE_MIN_NORMAL_RATIO" "0.10"
 Ensure-EnvSetting "AI_GATE_SEGMENT_MARGIN" "0.0"
 Ensure-EnvSetting "AI_GATE_DEAD_BAND_RATIO" "0.006"
@@ -222,7 +223,7 @@ if (-not $dashboardOk -or -not $apiOk) {
 }
 
 Write-Host ""
-Write-Host "[OK] Traffic AI V0.5.17 đã khởi động." -ForegroundColor Green
+Write-Host "[OK] Traffic AI V0.5.18 đã khởi động." -ForegroundColor Green
 Write-Host "Dashboard : https://traffic-ai.test:8443"
 Write-Host "API Docs  : https://traffic-ai.test:8444/docs"
 Write-Host "PostgreSQL: 127.0.0.1:5445 / traffic_ai_db"
