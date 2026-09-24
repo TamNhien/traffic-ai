@@ -73,7 +73,7 @@ class Camera(Base):
     status: Mapped[CameraStatus] = mapped_column(
         _enum(CameraStatus, "camera_status"), nullable=False, server_default="inactive"
     )
-    confidence_threshold: Mapped[float] = mapped_column(Float, nullable=False, server_default="0.12")
+    confidence_threshold: Mapped[float] = mapped_column(Float, nullable=False, server_default="0.06")
     line_x1: Mapped[float] = mapped_column(Float, nullable=False, server_default="0.32")
     line_y1: Mapped[float] = mapped_column(Float, nullable=False, server_default="0.59")
     line_x2: Mapped[float] = mapped_column(Float, nullable=False, server_default="0.84")

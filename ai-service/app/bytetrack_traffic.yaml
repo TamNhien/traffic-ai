@@ -1,7 +1,9 @@
 tracker_type: bytetrack
-track_high_thresh: 0.10
-track_low_thresh: 0.015
-new_track_thresh: 0.10
-track_buffer: 120
-match_thresh: 0.84
+# V0.5.15 high-recall traffic profile: accept weak small/fast detections early,
+# then let ByteTrack + Strict Road Guard decide whether a crossing is countable.
+track_high_thresh: 0.05
+track_low_thresh: 0.005
+new_track_thresh: 0.05
+track_buffer: 150
+match_thresh: 0.78
 fuse_score: true

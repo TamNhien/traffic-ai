@@ -99,6 +99,20 @@ if ($envTextV514 -notmatch '(?m)^AI_DETECTION_POLICY_V0514=1[ \t]*\r?$') {
   $envTextV514 = $envTextV514.TrimEnd("`r", "`n") + "`r`nAI_DETECTION_POLICY_V0514=1`r`n"
   [System.IO.File]::WriteAllText($envPath, $envTextV514, [System.Text.UTF8Encoding]::new($false))
 }
+# V0.5.15: high-recall hybrid tracking for custom best.pt.
+# Existing default 640 is upgraded once to 960; custom values other than 640 are preserved.
+$envTextV515 = Get-Content $envPath -Raw
+if ($envTextV515 -notmatch '(?m)^AI_HYBRID_POLICY_V0515=1[ \t]*\r?$') {
+  if ($envTextV515 -match '(?m)^AI_IMGSZ=640[ \t]*\r?$') {
+    $envTextV515 = [regex]::Replace($envTextV515, '(?m)^AI_IMGSZ=640[ \t]*\r?$', 'AI_IMGSZ=960')
+    Write-Host '[Traffic AI] V0.5.15: AI_IMGSZ 640 -> 960 để bắt xe nhỏ/xa rõ hơn.' -ForegroundColor Yellow
+  }
+  $envTextV515 = $envTextV515.TrimEnd("`r", "`n") + "`r`nAI_HYBRID_POLICY_V0515=1`r`n"
+  [System.IO.File]::WriteAllText($envPath, $envTextV515, [System.Text.UTF8Encoding]::new($false))
+}
+Ensure-EnvSetting "AI_HYBRID_RECALL" "1"
+Ensure-EnvSetting "AI_RECALL_MODEL_NAME" "yolo26s.pt"
+Ensure-EnvSetting "AI_IMGSZ" "960"
 Ensure-EnvSetting "AI_STREAM_EVERY_N" "2"
 Ensure-EnvSetting "AI_STREAM_MAX_WIDTH" "960"
 Ensure-EnvSetting "AI_IOU" "0.55"
@@ -204,7 +218,7 @@ if (-not $dashboardOk -or -not $apiOk) {
 }
 
 Write-Host ""
-Write-Host "[OK] Traffic AI V0.5.14 đã khởi động." -ForegroundColor Green
+Write-Host "[OK] Traffic AI V0.5.15 đã khởi động." -ForegroundColor Green
 Write-Host "Dashboard : https://traffic-ai.test:8443"
 Write-Host "API Docs  : https://traffic-ai.test:8444/docs"
 Write-Host "PostgreSQL: 127.0.0.1:5445 / traffic_ai_db"

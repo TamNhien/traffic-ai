@@ -28,6 +28,7 @@ class PipelineState:
     detected_tracks: int = 0
     detections_current_frame: int = 0
     active_tracks: int = 0
+    untracked_detections: int = 0
     road_tracks_current_frame: int = 0
     delivered_events: int = 0
     pending_events: int = 0
@@ -43,6 +44,8 @@ class PipelineState:
     gate_roi: dict | None = None
     overlay_primed: bool = False
     model_name: str | None = None
+    detector_model_name: str | None = None
+    hybrid_mode: bool = False
     refine_model_name: str | None = None
     imgsz: int | None = None
     half_precision: bool = False

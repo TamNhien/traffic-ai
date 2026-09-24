@@ -300,18 +300,18 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.14") { throw "VERSION phải là 0.5.14, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0028_full_detect_v0514.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0028_full_detect_v0514.py." }
+  if ($version -ne "0.5.15") { throw "VERSION phải là 0.5.15, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0029_hybrid_recall_v0515.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0029_hybrid_recall_v0515.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0028_full_detect_v0514"' -or $migrationText -notmatch 'down_revision = "0027_fast_overlay_v0513"' -or $migrationText -notmatch "value='0.5.14'") {
-    throw "Migration 0028_full_detect_v0514 không đúng contract V0.5.14."
+  if ($migrationText -notmatch 'revision = "0029_hybrid_recall_v0515"' -or $migrationText -notmatch 'down_revision = "0028_full_detect_v0514"' -or $migrationText -notmatch "value='0.5.15'") {
+    throw "Migration 0029_hybrid_recall_v0515 không đúng contract V0.5.15."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
 
 function Assert-AlembicRevisionSafetyContract {
-  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.14" -ForegroundColor Cyan
+  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.15" -ForegroundColor Cyan
   $versionsDir = Join-Path $root "backend\alembic\versions"
   $bad = @()
   Get-ChildItem $versionsDir -Filter "*.py" | ForEach-Object {
@@ -335,7 +335,7 @@ function Assert-AlembicRevisionSafetyContract {
   if ($v17 -notmatch 'revision = "0017_ai_test_dep_v053"') {
     throw "Migration V0.5.3 chưa dùng revision ID rút gọn an toàn."
   }
-  Write-Host "[OK] Alembic revision-length safety V0.5.14" -ForegroundColor Green
+  Write-Host "[OK] Alembic revision-length safety V0.5.15" -ForegroundColor Green
 }
 
 
@@ -440,6 +440,43 @@ function Assert-FullFrameDetectStrictRoadCountV0514Contract {
     throw "Thiếu default/migration one-time từ Road ROI sang full-frame detect."
   }
   Write-Host "[OK] Full-frame Detect + Strict Road Count V0.5.14" -ForegroundColor Green
+}
+
+function Assert-HybridRecallTrackRescueV0515Contract {
+  Write-Host "`n[Traffic AI] Hybrid Recall + Track Rescue V0.5.15" -ForegroundColor Cyan
+  $worker = Get-Content (Join-Path $root "ai-service\app\worker.py") -Raw -Encoding UTF8
+  $runtime = Get-Content (Join-Path $root "ai-service\app\runtime.py") -Raw -Encoding UTF8
+  $tracker = Get-Content (Join-Path $root "ai-service\app\bytetrack_traffic.yaml") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  $envExample = Get-Content (Join-Path $root ".env.example") -Raw -Encoding UTF8
+  $startText = Get-Content (Join-Path $PSScriptRoot "start.ps1") -Raw -Encoding UTF8
+  $schema = Get-Content (Join-Path $root "backend\app\schemas\camera.py") -Raw -Encoding UTF8
+
+  if ($worker -notmatch 'AI_HYBRID_RECALL' -or $worker -notmatch 'AI_RECALL_MODEL_NAME' -or $worker -notmatch '_looks_like_custom_model' -or $worker -notmatch 'self\.detector_model_name') {
+    throw "AI worker thiếu hybrid recall: pretrained detector + activated best.pt refiner."
+  }
+  if ($worker -notmatch '_draw_raw_detection' -or $worker -notmatch 'untracked_detections') {
+    throw "AI worker vẫn có thể giấu detection chưa được ByteTrack cấp ID."
+  }
+  if ($runtime -notmatch 'untracked_detections' -or $runtime -notmatch 'detector_model_name' -or $runtime -notmatch 'hybrid_mode') {
+    throw "PipelineState thiếu telemetry hybrid/untracked V0.5.15."
+  }
+  if ($tracker -notmatch 'track_high_thresh: 0\.05' -or $tracker -notmatch 'new_track_thresh: 0\.05' -or $tracker -notmatch 'track_buffer: 150') {
+    throw "ByteTrack chưa dùng high-recall traffic profile V0.5.15."
+  }
+  if ($envExample -notmatch 'AI_IMGSZ=960' -or $envExample -notmatch 'AI_HYBRID_RECALL=1' -or $envExample -notmatch 'AI_RECALL_MODEL_NAME=yolo26s\.pt') {
+    throw ".env.example thiếu imgsz 960 / hybrid recall defaults."
+  }
+  if ($startText -notmatch 'AI_HYBRID_POLICY_V0515' -or $startText -notmatch 'AI_IMGSZ=960') {
+    throw "start.ps1 chưa nâng .env cũ sang high-recall profile V0.5.15."
+  }
+  if ($frontend -notmatch 'YOLO thấy xe nhưng ByteTrack chưa cấp ID' -or $frontend -notmatch 'untracked_detections' -or $frontend -notmatch 'HYBRID detect') {
+    throw "Frontend thiếu telemetry/cảnh báo DET nhưng chưa có track ID."
+  }
+  if ($schema -notmatch 'default=0\.06' -or $schema -notmatch 'ge=0\.02') {
+    throw "Camera confidence chưa hạ baseline để cứu xe nhỏ/nhanh."
+  }
+  Write-Host "[OK] Hybrid Recall + Track Rescue V0.5.15" -ForegroundColor Green
 }
 
 function Assert-SmoothPlaybackContract {
@@ -581,8 +618,22 @@ function Assert-StrictGateV058Contract {
   if ($roi -notmatch 'endpoint_margin_ratio' -or $classify -notmatch 'display_label' -or $classify -notmatch 'strong_bicycle_certainty') {
     throw "V0.5.8 thiếu compact ROI hoặc policy xe máy/xe đạp."
   }
-  if ($tracker -notmatch 'track_high_thresh: 0.10' -or $tracker -notmatch 'new_track_thresh: 0.10' -or $envText -notmatch 'AI_GATE_ENDPOINT_MARGIN=0.035') {
-    throw "V0.5.8 thiếu tracker/ROI tuning cho xe nhanh."
+  # V0.5.8 established the minimum fast-vehicle tracker sensitivity.
+  # Later releases are allowed to make ByteTrack MORE permissive (for example
+  # V0.5.15 uses 0.05/0.05 and buffer 150), so do not pin this historical
+  # contract to the old literal 0.10 values. Verify semantic compatibility.
+  $trackHighMatch = [regex]::Match($tracker, '(?m)^track_high_thresh:\s*([0-9.]+)\s*$')
+  $newTrackMatch = [regex]::Match($tracker, '(?m)^new_track_thresh:\s*([0-9.]+)\s*$')
+  $trackBufferMatch = [regex]::Match($tracker, '(?m)^track_buffer:\s*([0-9]+)\s*$')
+  if (-not $trackHighMatch.Success -or -not $newTrackMatch.Success -or -not $trackBufferMatch.Success) {
+    throw "V0.5.8 thiếu tham số ByteTrack bắt buộc cho xe nhanh."
+  }
+  $invariant = [System.Globalization.CultureInfo]::InvariantCulture
+  $trackHigh = [double]::Parse($trackHighMatch.Groups[1].Value, $invariant)
+  $newTrack = [double]::Parse($newTrackMatch.Groups[1].Value, $invariant)
+  $trackBuffer = [int]::Parse($trackBufferMatch.Groups[1].Value, $invariant)
+  if ($trackHigh -gt 0.10 -or $newTrack -gt 0.10 -or $trackBuffer -lt 120 -or $envText -notmatch 'AI_GATE_ENDPOINT_MARGIN=0.035') {
+    throw "V0.5.8 thiếu tracker/ROI tuning tương thích cho xe nhanh."
   }
   if ($startText -notmatch 'Set-EnvDefaultUpgrade "AI_GATE_ROI_MARGIN" "0.22" "0.16"' -or $startText -notmatch 'Ensure-EnvSetting "AI_GATE_SEGMENT_MARGIN" "0.0"' -or $startText -notmatch 'Ensure-EnvSetting "AI_REFINE_MAX_PER_FRAME" "1"') {
     throw "V0.5.8 thiếu nâng cấp .env runtime từ tuning cũ sang Strict Gate."
@@ -671,6 +722,7 @@ Assert-ReleaseLineEndingHygieneV0512Contract
 Assert-RoadGuardV0512Contract
 Assert-InstantOverlayRoadRoiV0513Contract
 Assert-FullFrameDetectStrictRoadCountV0514Contract
+Assert-HybridRecallTrackRescueV0515Contract
 
 Write-Host "`n[Traffic AI] Road Zone + Frame Browser V0.5.11" -ForegroundColor Cyan
 $frontendV511 = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
@@ -708,8 +760,8 @@ if ($workerText -notmatch 'gate_roi_for_line' -or $workerText -notmatch 'EventDi
 if ($asyncText -notmatch 'queue.Queue' -or $roiText -notmatch 'GateROI') {
   throw "Thiếu bounded async queue hoặc Gate ROI implementation."
 }
-if ($trackerText -notmatch 'track_buffer: 120' -or $smartRoutesText -notmatch 'preview.jpg') {
-  throw "Thiếu ByteTrack V4 profile hoặc endpoint preview để đặt vạch."
+if ($trackerText -notmatch 'track_buffer: 150' -or $smartRoutesText -notmatch 'preview.jpg') {
+  throw "Thiếu ByteTrack high-recall profile hoặc endpoint preview để đặt vạch."
 }
 if ($frontendText -notmatch 'realtime_factor' -or $frontendText -notmatch 'playback_lag_seconds' -or $frontendText -notmatch 'Phát mượt' -or $frontendText -notmatch 'AI Overlay') {
   throw "Frontend thiếu telemetry realtime hoặc chuyển đổi Phát mượt / AI Overlay của Smooth Playback."

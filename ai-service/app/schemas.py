@@ -13,7 +13,7 @@ class PipelineStart(BaseModel):
     model_path: str | None = None
     source_type: str
     source_url: str
-    confidence_threshold: float = Field(default=0.12, ge=0.05, le=0.95)
+    confidence_threshold: float = Field(default=0.06, ge=0.02, le=0.95)
     line_x1: float = Field(default=0.1, ge=0, le=1)
     line_y1: float = Field(default=0.5, ge=0, le=1)
     line_x2: float = Field(default=0.9, ge=0, le=1)
@@ -40,7 +40,7 @@ class DatasetExtractRequest(BaseModel):
 class DatasetAutoLabelRequest(BaseModel):
     slug: str = Field(min_length=2, max_length=80)
     model_path: str = Field(default="yolo26s.pt", min_length=1)
-    confidence: float = Field(default=0.25, ge=0.05, le=0.95)
+    confidence: float = Field(default=0.25, ge=0.02, le=0.95)
 
 
 class DatasetPrepareRequest(BaseModel):

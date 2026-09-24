@@ -49,9 +49,13 @@ class PipelineWorker(threading.Thread):
         self.backend_url = os.getenv("BACKEND_INTERNAL_URL", "http://backend:8000/api/internal")
         self.shared_token = os.getenv("AI_SHARED_TOKEN", "TrafficAI-Local-2026")
         self.model_name = payload.model_path or os.getenv("AI_MODEL_NAME", "yolo26s.pt")
+        self.hybrid_recall = os.getenv("AI_HYBRID_RECALL", "1").strip().lower() not in {"0", "false", "no"}
+        self.recall_model_name = os.getenv("AI_RECALL_MODEL_NAME", "yolo26s.pt")
+        self.detector_model_name = self.model_name
+        self.hybrid_mode = False
         self.device = os.getenv("AI_DEVICE", "auto")
         self.snapshot_root = Path(os.getenv("SNAPSHOT_DIR", "/tmp/traffic-ai-snapshots"))
-        self.imgsz = int(os.getenv("AI_IMGSZ", "640"))
+        self.imgsz = int(os.getenv("AI_IMGSZ", "960"))
         self.process_max_width = int(os.getenv("AI_PROCESS_MAX_WIDTH", "1440"))
         self.jpeg_quality = int(os.getenv("AI_JPEG_QUALITY", "70"))
         self.jpeg_every_n = max(1, int(os.getenv("AI_STREAM_EVERY_N", "2")))
@@ -129,6 +133,11 @@ class PipelineWorker(threading.Thread):
         self._refiner_thread = threading.Thread(target=load_refiner, daemon=True, name=f"refiner-{self.payload.camera_id}")
         self._refiner_thread.start()
 
+    @staticmethod
+    def _looks_like_custom_model(model_name: str) -> bool:
+        name = Path(str(model_name)).name.lower()
+        return name.endswith(".pt") and not name.startswith("yolo26") and not name.startswith("yolo11")
+
     def run(self) -> None:
         cap = None
         loop_started = None
@@ -175,14 +184,25 @@ class PipelineWorker(threading.Thread):
                     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                 self.state.overlay_primed = True
 
-            model = YOLO(self.model_name)
+            # V0.5.15 hybrid recall mode:
+            # - a custom best.pt remains the activated domain model,
+            # - but a robust pretrained detector drives full-frame detection + ByteTrack,
+            # - the custom best.pt is used as the crossing-time class refiner.
+            # This prevents a low-recall fine-tuned detector from making vehicles disappear
+            # completely before the tracker/counting stages can see them.
+            self.hybrid_mode = self.hybrid_recall and self._looks_like_custom_model(self.model_name)
+            self.detector_model_name = self.recall_model_name if self.hybrid_mode else self.model_name
+            if self.hybrid_mode:
+                self.refine_model_name = self.model_name
+
+            model = YOLO(self.detector_model_name)
             class_ids = self._vehicle_class_ids(model.names)
             if not class_ids:
-                raise RuntimeError("YOLO model does not expose supported vehicle classes")
+                raise RuntimeError("YOLO detector does not expose supported vehicle classes")
 
             if self.warmup:
                 dummy = np.zeros((self.imgsz, self.imgsz, 3), dtype=np.uint8)
-                model.predict(dummy, conf=0.15, classes=class_ids, device=device, imgsz=self.imgsz, half=use_half, verbose=False)
+                model.predict(dummy, conf=0.05, classes=class_ids, device=device, imgsz=self.imgsz, half=use_half, verbose=False)
 
             road_zone = RoadZone(
                 self.payload.road_x1, self.payload.road_y1, self.payload.road_x2, self.payload.road_y2,
@@ -202,6 +222,8 @@ class PipelineWorker(threading.Thread):
             self._event_dispatcher.start()
             self.state.status = "running"
             self.state.model_name = self.model_name
+            self.state.detector_model_name = self.detector_model_name
+            self.state.hybrid_mode = self.hybrid_mode
             self.state.refine_model_name = None
             if self.refine_background_warmup:
                 self._start_refiner_background(YOLO, np, device, use_half)
@@ -273,6 +295,7 @@ class PipelineWorker(threading.Thread):
                 boxes = result.boxes
                 self.state.detections_current_frame = int(len(boxes)) if boxes is not None else 0
                 self.state.active_tracks = 0
+                self.state.untracked_detections = 0
                 self.state.road_tracks_current_frame = 0
                 if boxes is not None and boxes.id is not None:
                     xyxy = boxes.xyxy.cpu().tolist()
@@ -362,6 +385,20 @@ class PipelineWorker(threading.Thread):
                             self.state.rescued_crossings = counter.rescued_crossings
                             self.state.rejected_outside_road = counter.rejected_outside_road
                             pending_crossing_events.append((track_id, event_label, direction, event_confidence))
+                elif boxes is not None and len(boxes) > 0:
+                    # Ultralytics can return valid detections before ByteTrack confirms a
+                    # persistent ID. Older builds hid these boxes completely because all
+                    # drawing lived inside `boxes.id is not None`. Draw them now so DET>0
+                    # is visually truthful, while still refusing to COUNT without a track.
+                    xyxy = boxes.xyxy.cpu().tolist()
+                    classes = boxes.cls.int().cpu().tolist()
+                    confs = boxes.conf.cpu().tolist()
+                    self.state.untracked_detections = len(xyxy)
+                    for rect_roi, cls_id, confidence in zip(xyxy, classes, confs):
+                        rx1, ry1, rx2, ry2 = rect_roi
+                        rect = (rx1 + offset_x, ry1 + offset_y, rx2 + offset_x, ry2 + offset_y)
+                        label = str(result.names[int(cls_id)])
+                        self._draw_raw_detection(cv2, frame, rect, label, float(confidence))
 
                 self.state.detected_tracks = len(self._seen_track_ids)
                 self._draw_overlay(cv2, frame, counter)
@@ -478,6 +515,20 @@ class PipelineWorker(threading.Thread):
             return None
 
     @staticmethod
+    def _draw_raw_detection(cv2, frame, rect, label: str, confidence: float) -> None:
+        x1, y1, x2, y2 = [int(v) for v in rect]
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 190, 255), 2)
+        cv2.putText(
+            frame,
+            f"{label} DET {confidence:.2f}",
+            (x1, max(18, y1 - 8)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.52,
+            (0, 190, 255),
+            2,
+        )
+
+    @staticmethod
     def _draw_detection(cv2, frame, rect, track_id: int, label: str, confidence: float, anchor, class_certainty: float, raw_track_id: int | None = None) -> None:
         x1, y1, x2, y2 = [int(v) for v in rect]
         cv2.rectangle(frame, (x1, y1), (x2, y2), (60, 220, 120), 2)
@@ -515,7 +566,7 @@ class PipelineWorker(threading.Thread):
         rt = f"x{self.state.realtime_factor:.2f}" if self.state.source_fps > 0 else "live"
         cv2.putText(
             frame,
-            f"DET {self.state.detections_current_frame} | TRACK {self.state.active_tracks} | ROAD {self.state.road_tracks_current_frame} | TOTAL {self.state.total_count} | IN {counter.in_count} | OUT {counter.out_count} | FPS {self.state.fps:.1f} ({rt}) | {self.state.inference_ms:.0f}ms | ROI {self.detection_roi_mode.upper()} | RESCUE {counter.rescued_crossings} | ROAD-REJECT {counter.rejected_outside_road}",
+            f"DET {self.state.detections_current_frame} | UNTRACKED {self.state.untracked_detections} | TRACK {self.state.active_tracks} | ROAD {self.state.road_tracks_current_frame} | TOTAL {self.state.total_count} | IN {counter.in_count} | OUT {counter.out_count} | FPS {self.state.fps:.1f} ({rt}) | {self.state.inference_ms:.0f}ms | {'HYBRID' if self.hybrid_mode else 'DIRECT'} {Path(self.detector_model_name).name} | ROI {self.detection_roi_mode.upper()} | RESCUE {counter.rescued_crossings} | ROAD-REJECT {counter.rejected_outside_road}",
             (20, 32),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.62,
