@@ -83,3 +83,8 @@ class AnnotationSaveRequest(BaseModel):
     boxes: list[AnnotationBox] = Field(default_factory=list)
     reviewed: bool = True
     difficult: bool = False
+
+
+class BenchmarkTraceDiagnoseRequest(BaseModel):
+    times: list[float] = Field(default_factory=list, max_length=5000)
+    window_seconds: float = Field(default=0.60, ge=0.05, le=2.0)

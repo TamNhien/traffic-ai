@@ -12,7 +12,8 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.db.session import get_db
 from app.geometry import validate_counting_geometry
-from app.models.all_models import AIModel, Camera, CameraStatus, CountingSession, DatasetRecord, Direction, SessionStatus, TrainingRun, VehicleCount, VehicleEvent, VehicleType
+from app.benchmarking import match_crossings
+from app.models.all_models import AIModel, Camera, CameraStatus, CountingBenchmark, CountingSession, DatasetRecord, Direction, GroundTruthCrossing, SessionStatus, TrainingRun, VehicleCount, VehicleEvent, VehicleType
 from app.schemas.camera import CameraCreate, CameraRead, CameraUpdate
 from app.schemas.event import VehicleEventCreate, VehicleEventRead
 
@@ -85,11 +86,59 @@ def _training_payload(row: TrainingRun) -> dict:
     }
 
 
+def _benchmark_payload(row: CountingBenchmark, mark_count: int = 0) -> dict:
+    return {
+        "id": row.id,
+        "camera_id": row.camera_id,
+        "session_id": row.session_id,
+        "name": row.name,
+        "source_url": row.source_url,
+        "source_fps": row.source_fps,
+        "source_duration_seconds": row.source_duration_seconds,
+        "tolerance_seconds": row.tolerance_seconds,
+        "mark_count": mark_count,
+        "created_at": row.created_at,
+        "updated_at": row.updated_at,
+    }
+
+
+def _ground_truth_payload(row: GroundTruthCrossing) -> dict:
+    return {
+        "id": row.id,
+        "benchmark_id": row.benchmark_id,
+        "source_time_seconds": row.source_time_seconds,
+        "source_frame_index": row.source_frame_index,
+        "vehicle_type": row.vehicle_type,
+        "direction": row.direction,
+        "note": row.note,
+        "created_at": row.created_at,
+    }
+
+
 class SessionFinish(BaseModel):
     status: str
     total_vehicles: int = 0
     average_fps: float | None = None
+    source_fps: float | None = None
+    source_duration_seconds: float | None = None
     last_error: str | None = None
+
+
+class BenchmarkCreate(BaseModel):
+    session_id: int
+    name: str | None = None
+    tolerance_seconds: float = 0.75
+
+
+class BenchmarkUpdate(BaseModel):
+    tolerance_seconds: float
+
+
+class GroundTruthMarkCreate(BaseModel):
+    source_time_seconds: float
+    direction: Direction = Direction.unknown
+    vehicle_type: VehicleType = VehicleType.motorcycle
+    note: str | None = None
 
 
 def _assert_ai_token(token: str | None) -> None:
@@ -268,8 +317,15 @@ def camera_preview(camera_id: int, db: Session = Depends(get_db)) -> Response:
 
 
 @router.get("/events", response_model=list[VehicleEventRead])
-def list_events(limit: int = Query(default=50, ge=1, le=500), db: Session = Depends(get_db)) -> list[VehicleEvent]:
-    return list(db.scalars(select(VehicleEvent).order_by(VehicleEvent.detected_at.desc()).limit(limit)).all())
+def list_events(
+    limit: int = Query(default=50, ge=1, le=500),
+    session_id: int | None = Query(default=None, ge=1),
+    db: Session = Depends(get_db),
+) -> list[VehicleEvent]:
+    stmt = select(VehicleEvent)
+    if session_id is not None:
+        stmt = stmt.where(VehicleEvent.session_id == session_id)
+    return list(db.scalars(stmt.order_by(VehicleEvent.detected_at.desc()).limit(limit)).all())
 
 
 @router.post("/events", response_model=VehicleEventRead, status_code=status.HTTP_201_CREATED)
@@ -300,6 +356,7 @@ def list_sessions(limit: int = Query(default=50, ge=1, le=200), db: Session = De
         "id": row.id, "camera_id": row.camera_id, "model_id": row.model_id,
         "started_at": row.started_at, "ended_at": row.ended_at, "status": row.status,
         "total_vehicles": row.total_vehicles, "average_fps": row.average_fps,
+        "source_url": row.source_url, "source_fps": row.source_fps, "source_duration_seconds": row.source_duration_seconds,
     } for row in rows]
 
 
@@ -384,7 +441,7 @@ def start_camera(camera_id: int, db: Session = Depends(get_db)) -> dict:
             raise HTTPException(status_code=422, detail=detail)
 
     model = db.scalar(select(AIModel).where(AIModel.is_active.is_(True)).order_by(AIModel.id.desc()))
-    session = CountingSession(camera_id=camera_id, model_id=model.id if model else None, status=SessionStatus.running)
+    session = CountingSession(camera_id=camera_id, model_id=model.id if model else None, status=SessionStatus.running, source_url=camera.source_url)
     camera.status = CameraStatus.active
     db.add(session)
     db.commit()
@@ -526,6 +583,10 @@ def internal_session_finish(session_id: int, payload: SessionFinish, x_ai_token:
         raise HTTPException(status_code=404, detail="Session not found")
     session.total_vehicles = max(session.total_vehicles, payload.total_vehicles)
     session.average_fps = payload.average_fps
+    if payload.source_fps is not None:
+        session.source_fps = payload.source_fps
+    if payload.source_duration_seconds is not None:
+        session.source_duration_seconds = payload.source_duration_seconds
     session.ended_at = datetime.now(timezone.utc)
     session.status = SessionStatus.error if payload.status == "error" else (SessionStatus.completed if payload.status == "completed" else SessionStatus.stopped)
     camera = db.get(Camera, session.camera_id)
@@ -533,6 +594,191 @@ def internal_session_finish(session_id: int, payload: SessionFinish, x_ai_token:
         camera.status = CameraStatus.error if payload.status == "error" else CameraStatus.inactive
     db.commit()
     return {"status": "ok"}
+
+
+@router.get("/benchmarks")
+def list_benchmarks(
+    camera_id: int | None = Query(default=None, ge=1),
+    limit: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
+) -> list[dict]:
+    stmt = select(CountingBenchmark)
+    if camera_id is not None:
+        stmt = stmt.where(CountingBenchmark.camera_id == camera_id)
+    rows = list(db.scalars(stmt.order_by(CountingBenchmark.id.desc()).limit(limit)).all())
+    result = []
+    for row in rows:
+        count = db.scalar(select(func.count(GroundTruthCrossing.id)).where(GroundTruthCrossing.benchmark_id == row.id)) or 0
+        result.append(_benchmark_payload(row, int(count)))
+    return result
+
+
+@router.post("/benchmarks", status_code=201)
+def create_benchmark(payload: BenchmarkCreate, db: Session = Depends(get_db)) -> dict:
+    session = db.get(CountingSession, payload.session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Không tìm thấy phiên đếm để benchmark.")
+    camera = db.get(Camera, session.camera_id)
+    if camera is None:
+        raise HTTPException(status_code=404, detail="Camera của phiên đếm không còn tồn tại.")
+    source_url = session.source_url or camera.source_url
+    if not source_url:
+        raise HTTPException(status_code=422, detail="Phiên đếm không có nguồn video để tạo ground truth.")
+    tolerance = min(3.0, max(0.05, float(payload.tolerance_seconds)))
+    source_fps = session.source_fps
+    source_duration = session.source_duration_seconds
+    if camera.source_type.value == "video" and (not source_fps or not source_duration):
+        try:
+            response = httpx.post(
+                f"{settings.ai_service_url}/sources/validate",
+                params={"probe": "true"},
+                json={"source_type": "video", "source_url": source_url},
+                timeout=8.0,
+            )
+            if response.is_success:
+                metadata = response.json()
+                source_fps = source_fps or metadata.get("fps")
+                source_duration = source_duration or metadata.get("duration_seconds")
+        except Exception:
+            pass
+    name = (payload.name or f"Benchmark Session #{session.id}").strip()[:180]
+    row = CountingBenchmark(
+        camera_id=session.camera_id,
+        session_id=session.id,
+        name=name,
+        source_url=source_url,
+        source_fps=source_fps,
+        source_duration_seconds=source_duration,
+        tolerance_seconds=tolerance,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _benchmark_payload(row, 0)
+
+
+@router.get("/benchmarks/{benchmark_id}")
+def get_benchmark(benchmark_id: int, db: Session = Depends(get_db)) -> dict:
+    row = db.get(CountingBenchmark, benchmark_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Benchmark not found")
+    marks = list(db.scalars(
+        select(GroundTruthCrossing)
+        .where(GroundTruthCrossing.benchmark_id == benchmark_id)
+        .order_by(GroundTruthCrossing.source_time_seconds, GroundTruthCrossing.id)
+    ).all())
+    payload = _benchmark_payload(row, len(marks))
+    payload["marks"] = [_ground_truth_payload(mark) for mark in marks]
+    return payload
+
+
+@router.patch("/benchmarks/{benchmark_id}")
+def update_benchmark(benchmark_id: int, payload: BenchmarkUpdate, db: Session = Depends(get_db)) -> dict:
+    row = db.get(CountingBenchmark, benchmark_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Benchmark not found")
+    row.tolerance_seconds = min(3.0, max(0.05, float(payload.tolerance_seconds)))
+    db.commit()
+    db.refresh(row)
+    count = db.scalar(select(func.count(GroundTruthCrossing.id)).where(GroundTruthCrossing.benchmark_id == row.id)) or 0
+    return _benchmark_payload(row, int(count))
+
+
+@router.delete("/benchmarks/{benchmark_id}")
+def delete_benchmark(benchmark_id: int, db: Session = Depends(get_db)) -> dict:
+    row = db.get(CountingBenchmark, benchmark_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Benchmark not found")
+    db.delete(row)
+    db.commit()
+    return {"status": "deleted", "benchmark_id": benchmark_id}
+
+
+@router.post("/benchmarks/{benchmark_id}/marks", status_code=201)
+def create_ground_truth_mark(benchmark_id: int, payload: GroundTruthMarkCreate, db: Session = Depends(get_db)) -> dict:
+    benchmark = db.get(CountingBenchmark, benchmark_id)
+    if benchmark is None:
+        raise HTTPException(status_code=404, detail="Benchmark not found")
+    time_seconds = max(0.0, float(payload.source_time_seconds))
+    frame_index = None
+    if benchmark.source_fps and benchmark.source_fps > 0:
+        frame_index = max(1, int(round(time_seconds * benchmark.source_fps)) + 1)
+    mark = GroundTruthCrossing(
+        benchmark_id=benchmark_id,
+        source_time_seconds=time_seconds,
+        source_frame_index=frame_index,
+        vehicle_type=payload.vehicle_type.value,
+        direction=payload.direction.value,
+        note=(payload.note or "").strip()[:255] or None,
+    )
+    db.add(mark)
+    db.commit()
+    db.refresh(mark)
+    return _ground_truth_payload(mark)
+
+
+@router.delete("/benchmarks/{benchmark_id}/marks/{mark_id}")
+def delete_ground_truth_mark(benchmark_id: int, mark_id: int, db: Session = Depends(get_db)) -> dict:
+    mark = db.get(GroundTruthCrossing, mark_id)
+    if mark is None or mark.benchmark_id != benchmark_id:
+        raise HTTPException(status_code=404, detail="Ground-truth mark not found")
+    db.delete(mark)
+    db.commit()
+    return {"status": "deleted", "mark_id": mark_id}
+
+
+@router.get("/benchmarks/{benchmark_id}/report")
+def benchmark_report(benchmark_id: int, db: Session = Depends(get_db)) -> dict:
+    benchmark = db.get(CountingBenchmark, benchmark_id)
+    if benchmark is None:
+        raise HTTPException(status_code=404, detail="Benchmark not found")
+    marks = list(db.scalars(
+        select(GroundTruthCrossing)
+        .where(GroundTruthCrossing.benchmark_id == benchmark_id)
+        .order_by(GroundTruthCrossing.source_time_seconds, GroundTruthCrossing.id)
+    ).all())
+    all_events = list(db.scalars(
+        select(VehicleEvent)
+        .where(VehicleEvent.session_id == benchmark.session_id)
+        .order_by(VehicleEvent.id)
+    ).all())
+    timed_events = [event for event in all_events if event.source_time_seconds is not None]
+    report = match_crossings(marks, timed_events, benchmark.tolerance_seconds)
+    trace_available = False
+    if report["missed_items"]:
+        try:
+            response = httpx.post(
+                f"{settings.ai_service_url}/benchmark-traces/{benchmark.session_id}/diagnose",
+                json={
+                    "times": [item["time"] for item in report["missed_items"]],
+                    "window_seconds": min(1.0, max(0.35, benchmark.tolerance_seconds)),
+                },
+                timeout=8.0,
+            )
+            if response.is_success:
+                trace = response.json()
+                trace_available = bool(trace.get("available"))
+                for item, diagnosis in zip(report["missed_items"], trace.get("items", [])):
+                    item["diagnosis"] = diagnosis
+        except Exception:
+            trace_available = False
+    miss_reason_counts: dict[str, int] = {}
+    for item in report["missed_items"]:
+        reason = (item.get("diagnosis") or {}).get("reason")
+        if reason:
+            miss_reason_counts[reason] = miss_reason_counts.get(reason, 0) + 1
+    dominant_miss_reason = max(miss_reason_counts, key=miss_reason_counts.get) if miss_reason_counts else None
+    report.update({
+        "benchmark": _benchmark_payload(benchmark, len(marks)),
+        "session_id": benchmark.session_id,
+        "timed_ai_events": len(timed_events),
+        "legacy_ai_events_without_source_time": len(all_events) - len(timed_events),
+        "trace_available": trace_available,
+        "miss_reason_counts": miss_reason_counts,
+        "dominant_miss_reason": dominant_miss_reason,
+        "ready": bool(marks) and len(timed_events) > 0,
+    })
+    return report
 
 
 @router.get("/meta/vehicle-types")

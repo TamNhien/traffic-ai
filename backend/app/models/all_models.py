@@ -123,6 +123,9 @@ class CountingSession(Base):
     )
     total_vehicles: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     average_fps: Mapped[float | None] = mapped_column(Float)
+    source_url: Mapped[str | None] = mapped_column(Text)
+    source_fps: Mapped[float | None] = mapped_column(Float)
+    source_duration_seconds: Mapped[float | None] = mapped_column(Float)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
@@ -143,6 +146,37 @@ class VehicleEvent(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now(), index=True
     )
     snapshot_path: Mapped[str | None] = mapped_column(Text)
+    source_frame_index: Mapped[int | None] = mapped_column(Integer, index=True)
+    source_time_seconds: Mapped[float | None] = mapped_column(Float, index=True)
+    crossing_method: Mapped[str | None] = mapped_column(String(24))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class CountingBenchmark(Base):
+    __tablename__ = "counting_benchmarks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    camera_id: Mapped[int] = mapped_column(ForeignKey("cameras.id", ondelete="CASCADE"), nullable=False, index=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey("counting_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(180), nullable=False)
+    source_url: Mapped[str] = mapped_column(Text, nullable=False)
+    source_fps: Mapped[float | None] = mapped_column(Float)
+    source_duration_seconds: Mapped[float | None] = mapped_column(Float)
+    tolerance_seconds: Mapped[float] = mapped_column(Float, nullable=False, server_default="0.75")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+
+class GroundTruthCrossing(Base):
+    __tablename__ = "ground_truth_crossings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    benchmark_id: Mapped[int] = mapped_column(ForeignKey("counting_benchmarks.id", ondelete="CASCADE"), nullable=False, index=True)
+    source_time_seconds: Mapped[float] = mapped_column(Float, nullable=False, index=True)
+    source_frame_index: Mapped[int | None] = mapped_column(Integer)
+    vehicle_type: Mapped[str] = mapped_column(String(24), nullable=False, server_default="motorcycle")
+    direction: Mapped[str] = mapped_column(String(16), nullable=False, server_default="unknown")
+    note: Mapped[str | None] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 

@@ -150,6 +150,7 @@ Ensure-EnvSetting "AI_WARMUP" "1"
 
 Ensure-EnvSetting "AI_VIDEO_PACE" "1"
 Ensure-EnvSetting "AI_NATIVE_VIDEO_PREVIEW" "1"
+Ensure-EnvSetting "AI_BENCHMARK_TRACE" "1"
 Ensure-EnvSetting "AI_MJPEG_WAIT_TIMEOUT" "2.0"
 
 # V0.5.2 Dataset & Fine-tune Studio
@@ -223,7 +224,7 @@ if (-not $dashboardOk -or -not $apiOk) {
 }
 
 Write-Host ""
-Write-Host "[OK] Traffic AI V0.5.18 đã khởi động." -ForegroundColor Green
+Write-Host "[OK] Traffic AI V0.5.19 đã khởi động." -ForegroundColor Green
 Write-Host "Dashboard : https://traffic-ai.test:8443"
 Write-Host "API Docs  : https://traffic-ai.test:8444/docs"
 Write-Host "PostgreSQL: 127.0.0.1:5445 / traffic_ai_db"

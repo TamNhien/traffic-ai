@@ -15,6 +15,9 @@ class VehicleEventCreate(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
     detected_at: datetime | None = None
     snapshot_path: str | None = None
+    source_frame_index: int | None = Field(default=None, ge=0)
+    source_time_seconds: float | None = Field(default=None, ge=0.0)
+    crossing_method: str | None = None
 
 
 class VehicleEventRead(BaseModel):
@@ -28,5 +31,8 @@ class VehicleEventRead(BaseModel):
     confidence: float
     detected_at: datetime
     snapshot_path: str | None
+    source_frame_index: int | None
+    source_time_seconds: float | None
+    crossing_method: str | None
 
     model_config = ConfigDict(from_attributes=True)

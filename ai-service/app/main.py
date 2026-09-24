@@ -10,12 +10,13 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.runtime import registry
-from app.schemas import AnnotationBulkAcceptRequest, AnnotationSaveRequest, DatasetAutoLabelRequest, DatasetExtractRequest, DatasetPrepareRequest, DatasetPurgeRequest, PipelineStart, SourceValidationRequest, TrainingStartRequest
+from app.benchmark_trace import diagnose_trace
+from app.schemas import AnnotationBulkAcceptRequest, AnnotationSaveRequest, BenchmarkTraceDiagnoseRequest, DatasetAutoLabelRequest, DatasetExtractRequest, DatasetPrepareRequest, DatasetPurgeRequest, PipelineStart, SourceValidationRequest, TrainingStartRequest
 from app.sources import inspect_source, list_video_sources, read_source_preview, resolve_video_path
 from app.training import auto_label, dataset_stats, extract_frames, prepare_dataset, purge_dataset, reset_dataset_labels, training_registry
 from app.annotation import accept_safe_annotations, get_annotation, get_annotation_image, list_annotations, save_annotation
 
-APP_VERSION = '0.5.18'
+APP_VERSION = '0.5.19'
 app = FastAPI(title='Traffic AI Service', version=APP_VERSION)
 SNAPSHOT_DIR = Path(os.getenv('SNAPSHOT_DIR', '/tmp/traffic-ai-snapshots'))
 SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
@@ -67,6 +68,7 @@ def health() -> dict:
             'native_video_playback': os.getenv('AI_NATIVE_VIDEO_PREVIEW', '1'),
             'video_pacing': os.getenv('AI_VIDEO_PACE', '1'),
             'mjpeg_new_frames_only': True,
+            'benchmark_trace': os.getenv('AI_BENCHMARK_TRACE', '1'),
             'flow_calibration_history_frames': int(os.getenv('AI_FLOW_CALIBRATION_HISTORY_FRAMES', '1200')),
             'flow_calibration_points_per_track': int(os.getenv('AI_FLOW_CALIBRATION_POINTS_PER_TRACK', '180')),
         },
@@ -82,6 +84,11 @@ def health() -> dict:
         },
         'timestamp': datetime.now(timezone.utc).isoformat(),
     }
+
+
+@app.post('/benchmark-traces/{session_id}/diagnose')
+def benchmark_trace_diagnose(session_id: int, payload: BenchmarkTraceDiagnoseRequest) -> dict:
+    return diagnose_trace(session_id, payload.times, payload.window_seconds)
 
 
 @app.get('/sources/videos')

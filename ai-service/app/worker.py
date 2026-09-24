@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import threading
 import time
 from datetime import datetime, timezone
@@ -10,6 +11,7 @@ from typing import Callable
 import httpx2 as httpx
 
 from app.async_tasks import EventDispatcher, LatestFrameEncoder
+from app.benchmark_trace import trace_path
 from app.classification import TrackLabelSmoother, VehicleClassPolicy
 from app.counting import CountingLine, LineCrossingCounter, RoadZone
 from app.dedup import single_heavy_vehicle_plan
@@ -86,6 +88,7 @@ class PipelineWorker(threading.Thread):
         self.tracker_config = str(Path(__file__).with_name("bytetrack_traffic.yaml"))
         self._event_dispatcher = EventDispatcher(self.backend_url, self.shared_token, self.state)
         self._jpeg_encoder = LatestFrameEncoder(self._set_latest_jpeg, self.state, self.jpeg_quality, self.jpeg_max_width)
+        self.benchmark_trace_enabled = os.getenv("AI_BENCHMARK_TRACE", "1").strip().lower() not in {"0", "false", "no"}
 
     @property
     def latest_jpeg(self) -> bytes | None:
@@ -155,6 +158,7 @@ class PipelineWorker(threading.Thread):
     def run(self) -> None:
         cap = None
         loop_started = None
+        trace_file = None
         try:
             import cv2
             import numpy as np
@@ -184,6 +188,10 @@ class PipelineWorker(threading.Thread):
             if source_fps > 0 and source_frame_count > 0:
                 self.state.source_duration_seconds = round(source_frame_count / source_fps, 3)
             self.state.frame_policy = "all-frames" if self.payload.source_type == "video" else "live-latest"
+            if self.payload.source_type == "video" and self.benchmark_trace_enabled:
+                path = trace_path(self.payload.session_id)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                trace_file = path.open("w", encoding="utf-8", buffering=1)
             self.state.status = "warming"
 
             # Prime MJPEG immediately with a raw source frame so switching to
@@ -306,7 +314,7 @@ class PipelineWorker(threading.Thread):
                 result = results[0]
 
                 crossing_this_frame = False
-                pending_crossing_events: list[tuple[int, str, str, float]] = []
+                pending_crossing_events: list[tuple[int, str, str, float, int, float | None, str | None]] = []
                 refines_used_this_frame = 0
                 boxes = result.boxes
                 self.state.detections_current_frame = int(len(boxes)) if boxes is not None else 0
@@ -418,7 +426,9 @@ class PipelineWorker(threading.Thread):
                             self.state.interpolated_crossings = counter.interpolated_crossings
                             self.state.rescued_crossings = counter.rescued_crossings
                             self.state.rejected_outside_road = counter.rejected_outside_road
-                            pending_crossing_events.append((track_id, event_label, direction, event_confidence))
+                            source_time_seconds = ((frame_index - 1) / self.state.source_fps) if self.state.source_fps > 0 else None
+                            crossing_method = counter.crossing_mode_for(track_id)
+                            pending_crossing_events.append((track_id, event_label, direction, event_confidence, frame_index, source_time_seconds, crossing_method))
                 elif boxes is not None and len(boxes) > 0:
                     # Ultralytics can return valid detections before ByteTrack confirms a
                     # persistent ID. Older builds hid these boxes completely because all
@@ -450,11 +460,28 @@ class PipelineWorker(threading.Thread):
                         pass
                 self.state.detected_tracks = len(self._seen_track_ids)
                 self._draw_overlay(cv2, frame, counter)
+                if trace_file is not None:
+                    source_time = ((frame_index - 1) / self.state.source_fps) if self.state.source_fps > 0 else 0.0
+                    trace_file.write(json.dumps({
+                        "frame_index": frame_index,
+                        "source_time_seconds": round(source_time, 4),
+                        "detections": self.state.detections_current_frame,
+                        "tracks": self.state.active_tracks,
+                        "road_tracks": self.state.road_tracks_current_frame,
+                        "untracked": self.state.untracked_detections,
+                        "total_count": self.state.total_count,
+                        "crossing_events": len(pending_crossing_events),
+                        "rejected_outside_road": counter.rejected_outside_road,
+                        "rejected_outside_segment": counter.rejected_outside_segment,
+                    }, separators=(",", ":")) + "\n")
                 if pending_crossing_events:
                     snapshot = self._save_crossing_snapshot(cv2, frame, frame_index)
-                    for event_track_id, event_label, event_direction, event_confidence in pending_crossing_events:
+                    for event_track_id, event_label, event_direction, event_confidence, event_frame_index, event_source_time, event_method in pending_crossing_events:
                         self._event_dispatcher.submit(
-                            self._event_payload(event_track_id, event_label, event_direction, event_confidence, snapshot)
+                            self._event_payload(
+                                event_track_id, event_label, event_direction, event_confidence, snapshot,
+                                event_frame_index, event_source_time, event_method,
+                            )
                         )
                 self.state.processed_frames += 1
                 if crossing_this_frame or self.state.processed_frames % self.jpeg_every_n == 0:
@@ -486,6 +513,11 @@ class PipelineWorker(threading.Thread):
             self.state.status = "error"
             self.state.last_error = str(exc)
         finally:
+            if trace_file is not None:
+                try:
+                    trace_file.close()
+                except Exception:
+                    pass
             if cap is not None:
                 cap.release()
             try:
@@ -636,7 +668,7 @@ class PipelineWorker(threading.Thread):
         except Exception:
             return None
 
-    def _event_payload(self, track_id: int, label: str, direction: str, confidence: float, snapshot: str | None) -> dict:
+    def _event_payload(self, track_id: int, label: str, direction: str, confidence: float, snapshot: str | None, source_frame_index: int | None = None, source_time_seconds: float | None = None, crossing_method: str | None = None) -> dict:
         return {
             "camera_id": self.payload.camera_id,
             "session_id": self.payload.session_id,
@@ -646,6 +678,9 @@ class PipelineWorker(threading.Thread):
             "direction": direction,
             "confidence": confidence,
             "snapshot_path": snapshot,
+            "source_frame_index": source_frame_index,
+            "source_time_seconds": round(float(source_time_seconds), 4) if source_time_seconds is not None else None,
+            "crossing_method": crossing_method,
         }
 
     def _notify_finished(self) -> None:
@@ -653,6 +688,8 @@ class PipelineWorker(threading.Thread):
             "status": self.state.status,
             "total_vehicles": self.state.total_count,
             "average_fps": self.state.fps,
+            "source_fps": self.state.source_fps or None,
+            "source_duration_seconds": self.state.source_duration_seconds or None,
             "last_error": self.state.last_error,
         }
         for attempt in range(1, 7):

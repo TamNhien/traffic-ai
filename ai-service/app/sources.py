@@ -92,8 +92,13 @@ def inspect_source(source_type: str, source_url: str, *, probe: bool = False) ->
                     if not ok or frame is None:
                         raise ValueError('Không đọc được frame đầu tiên của video.')
                     height, width = frame.shape[:2]
+                    fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+                    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
                     result['width'] = int(width)
                     result['height'] = int(height)
+                    result['fps'] = round(fps, 4) if fps > 0 else None
+                    result['frame_count'] = frame_count
+                    result['duration_seconds'] = round(frame_count / fps, 4) if fps > 0 and frame_count > 0 else None
                 finally:
                     cap.release()
             except Exception as exc:
