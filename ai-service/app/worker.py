@@ -12,7 +12,7 @@ import httpx2 as httpx
 from app.async_tasks import EventDispatcher, LatestFrameEncoder
 from app.classification import TrackLabelSmoother, VehicleClassPolicy
 from app.counting import CountingLine, LineCrossingCounter, RoadZone
-from app.gate_roi import gate_roi_for_line
+from app.gate_roi import gate_roi_for_line, road_zone_roi
 from app.schemas import PipelineStart
 from app.tracking import TrackContinuityResolver, motion_leading_anchor
 
@@ -40,6 +40,8 @@ class PipelineWorker(threading.Thread):
             strong_bicycle_hits=int(os.getenv("AI_BICYCLE_STRONG_HITS", "8")),
         )
         self._refiner_model = None
+        self._refine_ids: list[int] = []
+        self._refiner_thread: threading.Thread | None = None
         self._continuity = TrackContinuityResolver(
             max_gap_frames=int(os.getenv("AI_STITCH_MAX_GAP", "30")),
             max_distance_ratio=float(os.getenv("AI_STITCH_DISTANCE_RATIO", "0.14")),
@@ -55,6 +57,8 @@ class PipelineWorker(threading.Thread):
         self.jpeg_every_n = max(1, int(os.getenv("AI_STREAM_EVERY_N", "2")))
         self.jpeg_max_width = int(os.getenv("AI_STREAM_MAX_WIDTH", "960"))
         self.gate_roi_enabled = os.getenv("AI_GATE_ROI", "1").strip().lower() not in {"0", "false", "no"}
+        self.detection_roi_mode = os.getenv("AI_DETECTION_ROI", "road").strip().lower()
+        self.road_roi_margin = float(os.getenv("AI_ROAD_ROI_MARGIN", "0.02"))
         self.gate_roi_margin = float(os.getenv("AI_GATE_ROI_MARGIN", "0.16"))
         self.gate_roi_min_span = float(os.getenv("AI_GATE_ROI_MIN_SPAN", "0.52"))
         self.gate_endpoint_margin = float(os.getenv("AI_GATE_ENDPOINT_MARGIN", "0.035"))
@@ -63,6 +67,7 @@ class PipelineWorker(threading.Thread):
         self.refine_imgsz = int(os.getenv("AI_REFINE_IMGSZ", "640"))
         self.refine_max_per_frame = max(0, int(os.getenv("AI_REFINE_MAX_PER_FRAME", "1")))
         self.refine_max_lag = max(0.0, float(os.getenv("AI_REFINE_MAX_LAG", "0.35")))
+        self.refine_background_warmup = os.getenv("AI_REFINE_BACKGROUND_WARMUP", "1").strip().lower() not in {"0", "false", "no"}
         self.warmup = os.getenv("AI_WARMUP", "1").strip().lower() not in {"0", "false", "no"}
         self.video_pace = os.getenv("AI_VIDEO_PACE", "1").strip().lower() not in {"0", "false", "no"}
         self.iou = float(os.getenv("AI_IOU", "0.55"))
@@ -91,6 +96,38 @@ class PipelineWorker(threading.Thread):
 
     def stop(self) -> None:
         self._stop_event.set()
+
+    def _start_refiner_background(self, YOLO, np, device, use_half: bool) -> None:
+        if not self.refine_at_crossing or self._refiner_thread is not None:
+            return
+
+        def load_refiner() -> None:
+            try:
+                model = YOLO(self.refine_model_name)
+                ids = self._named_class_ids(model.names, REFINE_VEHICLE_CLASSES)
+                if self.warmup and ids and not self._stop_event.is_set():
+                    dummy = np.zeros((min(self.refine_imgsz, self.imgsz), min(self.refine_imgsz, self.imgsz), 3), dtype=np.uint8)
+                    model.predict(
+                        dummy,
+                        conf=0.10,
+                        classes=ids,
+                        device=device,
+                        imgsz=min(self.refine_imgsz, self.imgsz),
+                        half=use_half,
+                        verbose=False,
+                    )
+                if not self._stop_event.is_set():
+                    self._refiner_model = model
+                    self._refine_ids = ids
+                    self.state.refine_model_name = self.refine_model_name if ids else None
+            except Exception:
+                # Refiner is optional. Main detector/tracker/counting must keep
+                # running even if the secondary classifier cannot warm up.
+                self._refiner_model = None
+                self._refine_ids = []
+
+        self._refiner_thread = threading.Thread(target=load_refiner, daemon=True, name=f"refiner-{self.payload.camera_id}")
+        self._refiner_thread.start()
 
     def run(self) -> None:
         cap = None
@@ -126,38 +163,34 @@ class PipelineWorker(threading.Thread):
             self.state.frame_policy = "all-frames" if self.payload.source_type == "video" else "live-latest"
             self.state.status = "warming"
 
+            # Prime MJPEG immediately with a raw source frame so switching to
+            # AI Overlay never shows a black panel while YOLO/CUDA warm up.
+            self._jpeg_encoder.start()
+            preview_ok, preview_frame = cap.read()
+            if preview_ok:
+                preview_frame = self._resize_for_processing(cv2, preview_frame)
+                cv2.putText(preview_frame, "AI warming up...", (20, 34), cv2.FONT_HERSHEY_SIMPLEX, 0.72, (0, 200, 255), 2)
+                self._jpeg_encoder.submit(preview_frame)
+                if self.payload.source_type == "video":
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                self.state.overlay_primed = True
+
             model = YOLO(self.model_name)
             class_ids = self._vehicle_class_ids(model.names)
             if not class_ids:
                 raise RuntimeError("YOLO model does not expose supported vehicle classes")
 
-            refine_ids: list[int] = []
-            if self.refine_at_crossing:
-                # Load the secondary model before playback. The old runtime loaded
-                # it on the first crossing, which visibly froze the clip.
-                self._refiner_model = YOLO(self.refine_model_name)
-                refine_ids = self._named_class_ids(self._refiner_model.names, REFINE_VEHICLE_CLASSES)
-
             if self.warmup:
                 dummy = np.zeros((self.imgsz, self.imgsz, 3), dtype=np.uint8)
                 model.predict(dummy, conf=0.15, classes=class_ids, device=device, imgsz=self.imgsz, half=use_half, verbose=False)
-                if self._refiner_model is not None and refine_ids:
-                    self._refiner_model.predict(
-                        dummy,
-                        conf=0.10,
-                        classes=refine_ids,
-                        device=device,
-                        imgsz=min(self.refine_imgsz, self.imgsz),
-                        half=use_half,
-                        verbose=False,
-                    )
 
+            road_zone = RoadZone(
+                self.payload.road_x1, self.payload.road_y1, self.payload.road_x2, self.payload.road_y2,
+                self.payload.road_x3, self.payload.road_y3, self.payload.road_x4, self.payload.road_y4,
+            )
             counter = LineCrossingCounter(
                 CountingLine(self.payload.line_x1, self.payload.line_y1, self.payload.line_x2, self.payload.line_y2),
-                road_zone=RoadZone(
-                    self.payload.road_x1, self.payload.road_y1, self.payload.road_x2, self.payload.road_y2,
-                    self.payload.road_x3, self.payload.road_y3, self.payload.road_x4, self.payload.road_y4,
-                ),
+                road_zone=road_zone,
                 segment_margin=float(os.getenv("AI_GATE_SEGMENT_MARGIN", "0.0")),
                 dead_band_ratio=float(os.getenv("AI_GATE_DEAD_BAND_RATIO", "0.006")),
                 rearm_distance_ratio=float(os.getenv("AI_GATE_REARM_DISTANCE_RATIO", "0.028")),
@@ -167,13 +200,20 @@ class PipelineWorker(threading.Thread):
             )
 
             self._event_dispatcher.start()
-            self._jpeg_encoder.start()
             self.state.status = "running"
             self.state.model_name = self.model_name
-            self.state.refine_model_name = self.refine_model_name if self._refiner_model is not None else None
+            self.state.refine_model_name = None
+            if self.refine_background_warmup:
+                self._start_refiner_background(YOLO, np, device, use_half)
+            elif self.refine_at_crossing:
+                self._refiner_model = YOLO(self.refine_model_name)
+                self._refine_ids = self._named_class_ids(self._refiner_model.names, REFINE_VEHICLE_CLASSES)
+                self.state.refine_model_name = self.refine_model_name if self._refine_ids else None
             self.state.imgsz = self.imgsz
             self.state.half_precision = use_half
+            self.state.device = "cuda" if device != "cpu" and use_half else "cpu"
             self.state.gate_roi_enabled = self.gate_roi_enabled
+            self.state.detection_roi_mode = self.detection_roi_mode
             loop_started = time.perf_counter()
 
             while not self._stop_event.is_set():
@@ -188,14 +228,19 @@ class PipelineWorker(threading.Thread):
                 self.state.frame_height = height
                 frame_index = self.state.processed_frames + 1
 
-                roi = gate_roi_for_line(
-                    counter.line,
-                    width,
-                    height,
-                    margin_ratio=self.gate_roi_margin,
-                    min_span_ratio=self.gate_roi_min_span,
-                    endpoint_margin_ratio=self.gate_endpoint_margin,
-                ) if self.gate_roi_enabled else None
+                roi = None
+                if self.gate_roi_enabled:
+                    if self.detection_roi_mode == "road" and counter.road_zone is not None:
+                        roi = road_zone_roi(counter.road_zone, width, height, margin_ratio=self.road_roi_margin)
+                    else:
+                        roi = gate_roi_for_line(
+                            counter.line,
+                            width,
+                            height,
+                            margin_ratio=self.gate_roi_margin,
+                            min_span_ratio=self.gate_roi_min_span,
+                            endpoint_margin_ratio=self.gate_endpoint_margin,
+                        )
                 infer_frame = roi.crop(frame) if roi is not None else frame
                 offset_x = roi.x1 if roi is not None else 0
                 offset_y = roi.y1 if roi is not None else 0
@@ -286,7 +331,7 @@ class PipelineWorker(threading.Thread):
                                 and (display_label in {"bicycle", "motorcycle", "bus", "truck"} or class_certainty < 0.82 or class_hits < 4)
                             )
                             if needs_refine:
-                                refined = self._refine_crossing_label(frame, rect, device, use_half, refine_ids)
+                                refined = self._refine_crossing_label(frame, rect, device, use_half, self._refine_ids)
                                 refines_used_this_frame += 1
 
                             event_label, policy_conf = self._class_policy.final_label(

@@ -36,11 +36,14 @@ class PipelineState:
     stream_frames_dropped: int = 0
     frame_policy: str = "all-frames"
     gate_roi_enabled: bool = False
+    detection_roi_mode: str = "road"
     gate_roi: dict | None = None
+    overlay_primed: bool = False
     model_name: str | None = None
     refine_model_name: str | None = None
     imgsz: int | None = None
     half_precision: bool = False
+    device: str = "unknown"
     frame_width: int | None = None
     frame_height: int | None = None
     last_error: str | None = None

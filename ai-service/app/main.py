@@ -15,7 +15,7 @@ from app.sources import inspect_source, list_video_sources, read_source_preview,
 from app.training import auto_label, dataset_stats, extract_frames, prepare_dataset, purge_dataset, reset_dataset_labels, training_registry
 from app.annotation import accept_safe_annotations, get_annotation, get_annotation_image, list_annotations, save_annotation
 
-APP_VERSION = '0.5.12'
+APP_VERSION = '0.5.13'
 app = FastAPI(title='Traffic AI Service', version=APP_VERSION)
 SNAPSHOT_DIR = Path(os.getenv('SNAPSHOT_DIR', '/tmp/traffic-ai-snapshots'))
 SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
@@ -44,7 +44,7 @@ def health() -> dict:
         'status': 'ready',
         'service': 'ai-service',
         'version': APP_VERSION,
-        'pipeline': 'yolo26s-bytetrack-road-zone-v5.11',
+        'pipeline': 'yolo26s-bytetrack-road-roi-v5.13',
         'model': os.getenv('AI_MODEL_NAME', 'yolo26s.pt'),
         'device': os.getenv('AI_DEVICE', 'auto'),
         'performance': {
@@ -53,8 +53,11 @@ def health() -> dict:
             'stream_every_n': int(os.getenv('AI_STREAM_EVERY_N', '2')),
             'refine_at_crossing': os.getenv('AI_REFINE_AT_CROSSING', '1'),
             'refine_model': os.getenv('AI_REFINE_MODEL_NAME', 'yolo26m.pt'),
+            'refine_background_warmup': os.getenv('AI_REFINE_BACKGROUND_WARMUP', '1'),
             'track_stitch_max_gap': int(os.getenv('AI_STITCH_MAX_GAP', '30')),
             'gate_roi': os.getenv('AI_GATE_ROI', '1'),
+            'detection_roi': os.getenv('AI_DETECTION_ROI', 'road'),
+            'road_roi_margin': float(os.getenv('AI_ROAD_ROI_MARGIN', '0.02')),
             'gate_roi_margin': float(os.getenv('AI_GATE_ROI_MARGIN', '0.16')),
             'gate_segment_margin': float(os.getenv('AI_GATE_SEGMENT_MARGIN', '0.0')),
             'gate_history_gap': int(os.getenv('AI_GATE_HISTORY_GAP', '45')),
@@ -311,4 +314,12 @@ def stream(camera_id: int):
         registry.get(camera_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail='Pipeline not found') from exc
-    return StreamingResponse(mjpeg_frames(camera_id), media_type='multipart/x-mixed-replace; boundary=frame')
+    return StreamingResponse(
+        mjpeg_frames(camera_id),
+        media_type='multipart/x-mixed-replace; boundary=frame',
+        headers={
+            'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+            'Pragma': 'no-cache',
+            'X-Accel-Buffering': 'no',
+        },
+    )

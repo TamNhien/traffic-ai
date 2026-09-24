@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import hypot
 
-from app.counting import CountingLine
+from app.counting import CountingLine, RoadZone
 
 
 @dataclass(slots=True)
@@ -97,6 +97,33 @@ def gate_roi_for_line(
                     y2 = min(float(height), required)
                 else:
                     y1 = max(0.0, float(height) - required)
+
+    ix1 = max(0, min(width - 2, int(round(x1))))
+    iy1 = max(0, min(height - 2, int(round(y1))))
+    ix2 = max(ix1 + 2, min(width, int(round(x2))))
+    iy2 = max(iy1 + 2, min(height, int(round(y2))))
+    return GateROI(ix1, iy1, ix2, iy2)
+
+
+def road_zone_roi(
+    road_zone: RoadZone,
+    width: int,
+    height: int,
+    margin_ratio: float = 0.02,
+) -> GateROI:
+    """Return a tight rectangular inference ROI around the drivable polygon.
+
+    V0.5.13 tracks vehicles across the roadway instead of waiting until they
+    enter the narrow counting-line strip.  This gives ByteTrack several frames
+    of history before/after the gate while still excluding most sidewalk area.
+    """
+    margin_ratio = max(0.0, min(0.20, float(margin_ratio)))
+    points = road_zone.denormalize(width, height)
+    pad = max(2.0, min(width, height) * margin_ratio)
+    x1 = max(0.0, min(x for x, _ in points) - pad)
+    y1 = max(0.0, min(y for _, y in points) - pad)
+    x2 = min(float(width), max(x for x, _ in points) + pad)
+    y2 = min(float(height), max(y for _, y in points) + pad)
 
     ix1 = max(0, min(width - 2, int(round(x1))))
     iy1 = max(0, min(height - 2, int(round(y1))))

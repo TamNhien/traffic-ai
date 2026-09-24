@@ -16,3 +16,17 @@ def test_gate_roi_does_not_expand_far_beyond_line_endpoints() -> None:
     assert roi.x1 >= 250
     assert roi.x2 <= 910
     assert roi.width < 700
+
+
+def test_road_zone_roi_tracks_whole_drivable_area_without_full_frame() -> None:
+    from app.counting import RoadZone
+    from app.gate_roi import road_zone_roi
+
+    zone = RoadZone(0.20, 0.15, 0.80, 0.15, 0.92, 0.95, 0.08, 0.95)
+    roi = road_zone_roi(zone, 1000, 600, margin_ratio=0.02)
+    assert roi.x1 <= 80
+    assert roi.x2 >= 920
+    assert roi.y1 <= 90
+    assert roi.y2 >= 570
+    assert roi.width < 1000
+    assert roi.height < 600

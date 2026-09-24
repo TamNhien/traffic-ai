@@ -300,18 +300,18 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.12") { throw "VERSION phải là 0.5.12, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0026_road_guard_v0512.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0026_road_guard_v0512.py." }
+  if ($version -ne "0.5.13") { throw "VERSION phải là 0.5.13, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0027_fast_overlay_v0513.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0027_fast_overlay_v0513.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0026_road_guard_v0512"' -or $migrationText -notmatch 'down_revision = "0025_road_zone_v0511"' -or $migrationText -notmatch "value='0.5.12'") {
-    throw "Migration 0026_road_guard_v0512 không đúng contract V0.5.12."
+  if ($migrationText -notmatch 'revision = "0027_fast_overlay_v0513"' -or $migrationText -notmatch 'down_revision = "0026_road_guard_v0512"' -or $migrationText -notmatch "value='0.5.13'") {
+    throw "Migration 0027_fast_overlay_v0513 không đúng contract V0.5.13."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
 
 function Assert-AlembicRevisionSafetyContract {
-  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.12" -ForegroundColor Cyan
+  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.13" -ForegroundColor Cyan
   $versionsDir = Join-Path $root "backend\alembic\versions"
   $bad = @()
   Get-ChildItem $versionsDir -Filter "*.py" | ForEach-Object {
@@ -335,7 +335,7 @@ function Assert-AlembicRevisionSafetyContract {
   if ($v17 -notmatch 'revision = "0017_ai_test_dep_v053"') {
     throw "Migration V0.5.3 chưa dùng revision ID rút gọn an toàn."
   }
-  Write-Host "[OK] Alembic revision-length safety V0.5.12" -ForegroundColor Green
+  Write-Host "[OK] Alembic revision-length safety V0.5.13" -ForegroundColor Green
 }
 
 
@@ -378,6 +378,41 @@ function Assert-RoadGuardV0512Contract {
     throw ".env.example thiếu Road Zone probe ratio V0.5.12."
   }
   Write-Host "[OK] Road Guard 2.0 V0.5.12" -ForegroundColor Green
+}
+
+
+function Assert-InstantOverlayRoadRoiV0513Contract {
+  Write-Host "`n[Traffic AI] Instant Overlay + Road ROI V0.5.13" -ForegroundColor Cyan
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  $css = Get-Content (Join-Path $root "frontend\src\styles.css") -Raw -Encoding UTF8
+  $worker = Get-Content (Join-Path $root "ai-service\app\worker.py") -Raw -Encoding UTF8
+  $roi = Get-Content (Join-Path $root "ai-service\app\gate_roi.py") -Raw -Encoding UTF8
+  $aiMain = Get-Content (Join-Path $root "ai-service\app\main.py") -Raw -Encoding UTF8
+  $envExample = Get-Content (Join-Path $root ".env.example") -Raw -Encoding UTF8
+  $startText = Get-Content (Join-Path $PSScriptRoot "start.ps1") -Raw -Encoding UTF8
+
+  if ($frontend -notmatch 'overlayReady' -or $frontend -notmatch 'overlay-loading-badge' -or $frontend -notmatch 'native-preview') {
+    throw "Frontend thiếu native-video fallback khi AI Overlay đang chờ frame đầu tiên."
+  }
+  if ($css -notmatch 'dual-preview-stage' -or $css -notmatch 'overlay-preview') {
+    throw "CSS thiếu dual-layer preview cho chuyển AI Overlay không màn hình đen."
+  }
+  if ($worker -notmatch 'AI warming up' -or $worker -notmatch 'AI_DETECTION_ROI' -or $worker -notmatch 'road_zone_roi' -or $worker -notmatch 'AI_REFINE_BACKGROUND_WARMUP') {
+    throw "AI worker thiếu prime JPEG, Road ROI tracking hoặc background refiner warmup V0.5.13."
+  }
+  if ($roi -notmatch 'def road_zone_roi') {
+    throw "Thiếu road_zone_roi để detect/track xe xuyên suốt phần lòng đường."
+  }
+  if ($aiMain -notmatch 'X-Accel-Buffering' -or $aiMain -notmatch 'no-store, no-cache') {
+    throw "MJPEG stream thiếu header chống proxy/browser buffering."
+  }
+  if ($envExample -notmatch 'AI_DETECTION_ROI=road' -or $envExample -notmatch 'AI_ROAD_ROI_MARGIN=0\.02' -or $envExample -notmatch 'AI_REFINE_BACKGROUND_WARMUP=1') {
+    throw ".env.example thiếu tuning Instant Overlay/Road ROI V0.5.13."
+  }
+  if ($startText -notmatch 'AI_DETECTION_ROI.*road' -or $startText -notmatch 'AI_REFINE_BACKGROUND_WARMUP.*1') {
+    throw "start.ps1 chưa tự bổ sung tuning V0.5.13 vào .env cũ."
+  }
+  Write-Host "[OK] Instant Overlay + Road ROI V0.5.13" -ForegroundColor Green
 }
 
 
@@ -608,6 +643,7 @@ Assert-CleanRetrainV059Contract
 Assert-DatasetControlsVisibilityV0510R1Contract
 Assert-ReleaseLineEndingHygieneV0512Contract
 Assert-RoadGuardV0512Contract
+Assert-InstantOverlayRoadRoiV0513Contract
 
 Write-Host "`n[Traffic AI] Road Zone + Frame Browser V0.5.11" -ForegroundColor Cyan
 $frontendV511 = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
