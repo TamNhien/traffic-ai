@@ -9,7 +9,7 @@ def test_health() -> None:
     payload = response.json()
     assert payload["status"] == "ready"
     assert payload["pipeline"] == "yolo26s-bytetrack-hybrid-crossing-v6"
-    assert payload["version"] == "0.5.19"
+    assert payload["version"] == "0.5.20"
     assert "runtime" in payload
 
 

@@ -20,7 +20,7 @@ def test_root_metadata() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["name"] == "Traffic AI"
-    assert payload["version"] == "0.5.19"
+    assert payload["version"] == "0.5.20"
     assert payload["docs"] == "/docs"
     assert payload["health"] == "/api/health"
 
@@ -89,3 +89,30 @@ def test_counting_geometry_rejects_self_crossing_road_zone() -> None:
     error = validate_counting_geometry(payload)
     assert error is not None
     assert "bắt chéo" in error
+
+
+def test_benchmark_payload_contains_gate_snapshot() -> None:
+    from app.api.routes import _benchmark_payload
+    from app.models.all_models import CountingBenchmark
+
+    row = CountingBenchmark(
+        id=9,
+        camera_id=1,
+        session_id=8,
+        name="Benchmark Session #8",
+        source_url="/data/videos/demo.mp4",
+        source_fps=25.0,
+        source_duration_seconds=60.0,
+        line_x1=0.31, line_y1=0.81,
+        line_x2=0.84, line_y2=0.55,
+        road_x1=0.20, road_y1=0.16,
+        road_x2=0.80, road_y2=0.16,
+        road_x3=0.96, road_y3=0.98,
+        road_x4=0.04, road_y4=0.98,
+        tolerance_seconds=0.75,
+    )
+    payload = _benchmark_payload(row, 3)
+    assert payload["geometry"]["line_x1"] == 0.31
+    assert payload["geometry"]["line_y2"] == 0.55
+    assert payload["geometry"]["road_x4"] == 0.04
+    assert payload["mark_count"] == 3

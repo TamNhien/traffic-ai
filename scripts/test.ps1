@@ -300,18 +300,18 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.19") { throw "VERSION phải là 0.5.19, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0033_ground_truth_v0519.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0033_ground_truth_v0519.py." }
+  if ($version -ne "0.5.20") { throw "VERSION phải là 0.5.20, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0034_benchmark_overlay_v0520.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0034_benchmark_overlay_v0520.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0033_ground_truth_v0519"' -or $migrationText -notmatch 'down_revision = "0032_crossing_engine_v0518"' -or $migrationText -notmatch "value='0.5.19'") {
-    throw "Migration 0033_ground_truth_v0519 không đúng contract V0.5.19."
+  if ($migrationText -notmatch 'revision = "0034_benchmark_overlay_v0520"' -or $migrationText -notmatch 'down_revision = "0033_ground_truth_v0519"' -or $migrationText -notmatch "value='0.5.20'") {
+    throw "Migration 0034_benchmark_overlay_v0520 không đúng contract V0.5.20."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
 
 function Assert-AlembicRevisionSafetyContract {
-  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.19" -ForegroundColor Cyan
+  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.20" -ForegroundColor Cyan
   $versionsDir = Join-Path $root "backend\alembic\versions"
   $bad = @()
   Get-ChildItem $versionsDir -Filter "*.py" | ForEach-Object {
@@ -335,7 +335,7 @@ function Assert-AlembicRevisionSafetyContract {
   if ($v17 -notmatch 'revision = "0017_ai_test_dep_v053"') {
     throw "Migration V0.5.3 chưa dùng revision ID rút gọn an toàn."
   }
-  Write-Host "[OK] Alembic revision-length safety V0.5.19" -ForegroundColor Green
+  Write-Host "[OK] Alembic revision-length safety V0.5.20" -ForegroundColor Green
 }
 
 
@@ -593,8 +593,40 @@ function Assert-GroundTruthBenchmarkV0519Contract {
   if ($css -notmatch '\.benchmark-layout' -or $css -notmatch '\.benchmark-diff-list') {
     throw "CSS thiếu Benchmark Studio V0.5.19."
   }
+  if ($css -notmatch '\.benchmark-panel,\.benchmark-report-panel\{min-width:0;overflow:hidden\}' -or $css -notmatch '\.benchmark-create-row>label:last-child\{grid-column:1/-1\}' -or $css -notmatch 'max-width:100%;box-sizing:border-box') {
+    throw "Benchmark V0.5.19-R1 chưa chống tràn control sang Benchmark Report."
+  }
   Write-Host "[OK] Ground-truth Counting Benchmark V0.5.19" -ForegroundColor Green
 }
+
+function Assert-BenchmarkGateOverlayV0520Contract {
+  Write-Host "`n[Traffic AI] Benchmark gate overlay + IN/OUT V0.5.20" -ForegroundColor Cyan
+  $models = Get-Content (Join-Path $root "backend\app\models\all_models.py") -Raw -Encoding UTF8
+  $routes = Get-Content (Join-Path $root "backend\app\api\routes.py") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  $css = Get-Content (Join-Path $root "frontend\src\styles.css") -Raw -Encoding UTF8
+  $migration = Get-Content (Join-Path $root "backend\alembic\versions\0034_benchmark_overlay_v0520.py") -Raw -Encoding UTF8
+  if ($models -notmatch 'class CountingBenchmark' -or $models -notmatch 'line_x1' -or $models -notmatch 'road_x4') {
+    throw "Benchmark V0.5.20 chưa lưu snapshot vạch/Road Zone."
+  }
+  if ($routes -notmatch '"geometry"' -or $routes -notmatch 'line_x1=camera\.line_x1' -or $routes -notmatch 'road_x4=camera\.road_x4') {
+    throw "Backend benchmark chưa trả/lưu geometry snapshot V0.5.20."
+  }
+  if ($migration -notmatch 'UPDATE counting_benchmarks AS b' -or $migration -notmatch 'FROM cameras AS c') {
+    throw "Migration V0.5.20 chưa backfill geometry cho benchmark V0.5.19 hiện có."
+  }
+  if ($frontend -notmatch 'function BenchmarkGateOverlay' -or $frontend -notmatch 'VẠCH ĐẾM' -or $frontend -notmatch '>IN<' -or $frontend -notmatch '>OUT<') {
+    throw "Frontend benchmark chưa vẽ vạch và nhãn IN/OUT."
+  }
+  if ($frontend -notmatch 'signed_side\(\)' -or $frontend -notmatch 'negative -> positive') {
+    throw "Overlay IN/OUT chưa bám cùng quy ước signed-side với Counting Engine."
+  }
+  if ($css -notmatch '\.benchmark-gate-overlay' -or $css -notmatch '\.benchmark-count-line' -or $css -notmatch '\.benchmark-road-zone') {
+    throw "CSS thiếu lớp overlay vạch/Road Zone cho Benchmark V0.5.20."
+  }
+  Write-Host "[OK] Benchmark gate overlay + IN/OUT V0.5.20" -ForegroundColor Green
+}
+
 
 function Assert-SmoothPlaybackContract {
   Write-Host "`n[Traffic AI] Smooth Playback 4.1 contract" -ForegroundColor Cyan
@@ -844,6 +876,7 @@ Assert-AutoRoadZoneV0516Contract
 Assert-SingleVehicleGuardV0517Contract
 Assert-CrossingEngineV0518Contract
 Assert-GroundTruthBenchmarkV0519Contract
+Assert-BenchmarkGateOverlayV0520Contract
 
 Write-Host "`n[Traffic AI] Road Zone + Frame Browser V0.5.11" -ForegroundColor Cyan
 $frontendV511 = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8

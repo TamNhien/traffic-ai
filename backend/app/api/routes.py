@@ -95,6 +95,14 @@ def _benchmark_payload(row: CountingBenchmark, mark_count: int = 0) -> dict:
         "source_url": row.source_url,
         "source_fps": row.source_fps,
         "source_duration_seconds": row.source_duration_seconds,
+        "geometry": {
+            "line_x1": row.line_x1, "line_y1": row.line_y1,
+            "line_x2": row.line_x2, "line_y2": row.line_y2,
+            "road_x1": row.road_x1, "road_y1": row.road_y1,
+            "road_x2": row.road_x2, "road_y2": row.road_y2,
+            "road_x3": row.road_x3, "road_y3": row.road_y3,
+            "road_x4": row.road_x4, "road_y4": row.road_y4,
+        },
         "tolerance_seconds": row.tolerance_seconds,
         "mark_count": mark_count,
         "created_at": row.created_at,
@@ -649,6 +657,12 @@ def create_benchmark(payload: BenchmarkCreate, db: Session = Depends(get_db)) ->
         source_url=source_url,
         source_fps=source_fps,
         source_duration_seconds=source_duration,
+        line_x1=camera.line_x1, line_y1=camera.line_y1,
+        line_x2=camera.line_x2, line_y2=camera.line_y2,
+        road_x1=camera.road_x1, road_y1=camera.road_y1,
+        road_x2=camera.road_x2, road_y2=camera.road_y2,
+        road_x3=camera.road_x3, road_y3=camera.road_y3,
+        road_x4=camera.road_x4, road_y4=camera.road_y4,
         tolerance_seconds=tolerance,
     )
     db.add(row)

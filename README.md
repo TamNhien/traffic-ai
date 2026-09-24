@@ -1,4 +1,34 @@
-# Traffic AI V0.5.19 — Ground-truth Counting Benchmark 🎯🚗
+# Traffic AI V0.5.20 — Benchmark Gate Overlay + IN/OUT 🎯🛣️
+
+V0.5.20 sửa blocker của Ground-truth Benchmark: **video benchmark phải hiển thị đúng vạch đếm, Road Zone và hướng IN/OUT**, nếu không người dùng không thể biết lúc nào xe thực sự cắt vạch để đánh dấu GT.
+
+Điểm mới:
+
+- benchmark lưu snapshot `line_x1/y1/x2/y2` và 4 điểm Road Zone khi tạo;
+- benchmark cũ V0.5.19 được backfill geometry từ camera hiện tại khi migrate;
+- video benchmark vẽ trực tiếp **Road Zone xanh + vạch vàng + mũi tên IN/OUT**;
+- hướng IN/OUT dùng đúng cùng quy ước `signed_side()` của Counting Engine, không phải mũi tên minh họa đoán tay;
+- geometry đã snapshot không đổi nếu sau này bạn chỉnh camera;
+- video không còn ép khung 16:9 để overlay lệch trên nguồn khác tỉ lệ.
+
+```text
+          IN
+          ↓
+   ┌───────────────┐
+   │   ROAD ZONE   │
+   │               │
+   │ ===== VẠCH ===│
+   │               │
+   └───────────────┘
+          ↑
+         OUT
+```
+
+Khi benchmark, chỉ bấm `I` hoặc `O` lúc **tâm/quỹ đạo xe thật sự cắt đúng vạch vàng đang hiển thị trên video**.
+
+---
+
+## Nền tảng từ V0.5.19
 
 V0.5.19 tiếp tục từ V0.5.18 và tập trung vào vấn đề còn lại: **AI vẫn lọt một số xe không đếm được nhưng nhìn tổng cuối clip không biết xe nào bị lọt và bị lọt ở tầng nào**.
 
@@ -331,7 +361,7 @@ Hãy chạy lại clip một lần trên V0.5.19 rồi benchmark session mới.
 
 # Cập nhật trên máy
 
-Chép full source V0.5.19 đè vào:
+Chép full source V0.5.20 đè vào:
 
 ```text
 D:\LienThongDH\DoAn\traffic-ai
@@ -373,6 +403,9 @@ Mong muốn có:
 ```text
 [Traffic AI] Ground-truth Counting Benchmark V0.5.19
 [OK] Ground-truth Counting Benchmark V0.5.19
+
+[Traffic AI] Benchmark gate overlay + IN/OUT V0.5.20
+[OK] Benchmark gate overlay + IN/OUT V0.5.20
 ```
 
 Nếu PASS:
@@ -390,8 +423,8 @@ Database:
 mong muốn:
 
 ```text
-0033_ground_truth_v0519
-schema_version = 0.5.19
+0034_benchmark_overlay_v0520
+schema_version = 0.5.20
 ```
 
 Trình duyệt:
@@ -472,7 +505,25 @@ Sau khi chạy ổn:
 → test
 → build
 → push GitHub
-→ tag v0.5.19
+→ tag v0.5.20
 → GitHub Actions
 → Release
 ```
+
+
+## V0.5.19-R1 — Benchmark responsive UI hotfix
+
+- Sửa hàng `Phiên AI / Tạo benchmark / Benchmark` bị tràn sang panel `Benchmark Report` khi card bên trái hẹp hoặc trình duyệt đang zoom.
+- `Benchmark` selector tự xuống một hàng riêng trên desktop hẹp; ở viewport nhỏ toàn bộ control xếp dọc.
+- `select` dùng `min-width: 0`, `max-width: 100%` và `box-sizing: border-box` để không vượt chiều rộng card.
+- Hai panel benchmark dùng `overflow: hidden` như lớp bảo vệ cuối, nhưng control vẫn được bố trí lại thay vì chỉ cắt phần tràn.
+- Không đổi database, migration, AI, dataset, `best.pt` hay logic benchmark. Runtime vẫn là `0.5.19`.
+
+
+## V0.5.20 — Benchmark Gate Overlay
+
+- Lưu snapshot vạch đếm + Road Zone vào `counting_benchmarks`.
+- Migration `0034_benchmark_overlay_v0520` backfill benchmark đã tạo trước đó bằng geometry camera hiện tại.
+- Video Benchmark vẽ vạch vàng, vùng xanh và mũi tên `IN` / `OUT`.
+- `IN` là hướng từ phía signed-side âm sang signed-side dương của vạch; `OUT` là chiều ngược lại, đúng cùng logic với `ai-service/app/counting.py`.
+- Dùng `I` / `O` để đánh GT sau khi nhìn xe cắt đúng vạch hiển thị.
