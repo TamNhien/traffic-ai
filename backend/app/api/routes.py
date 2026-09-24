@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db.session import get_db
+from app.geometry import validate_counting_geometry
 from app.models.all_models import AIModel, Camera, CameraStatus, CountingSession, DatasetRecord, Direction, SessionStatus, TrainingRun, VehicleCount, VehicleEvent, VehicleType
 from app.schemas.camera import CameraCreate, CameraRead, CameraUpdate
 from app.schemas.event import VehicleEventCreate, VehicleEventRead
@@ -160,7 +161,11 @@ def list_cameras(db: Session = Depends(get_db)) -> list[Camera]:
 
 @router.post("/cameras", response_model=CameraRead, status_code=status.HTTP_201_CREATED)
 def create_camera(payload: CameraCreate, db: Session = Depends(get_db)) -> Camera:
-    camera = Camera(**payload.model_dump())
+    camera_values = payload.model_dump()
+    geometry_error = validate_counting_geometry(camera_values)
+    if geometry_error:
+        raise HTTPException(status_code=422, detail=geometry_error)
+    camera = Camera(**camera_values)
     db.add(camera)
     try:
         db.commit()
@@ -192,6 +197,16 @@ def update_camera(camera_id: int, payload: CameraUpdate, db: Session = Depends(g
     }
     if running and runtime_keys.intersection(changes):
         raise HTTPException(status_code=409, detail="Hãy dừng AI trước khi đổi nguồn hoặc vùng đếm.")
+
+    geometry_keys = {
+        "line_x1", "line_y1", "line_x2", "line_y2",
+        "road_x1", "road_y1", "road_x2", "road_y2", "road_x3", "road_y3", "road_x4", "road_y4",
+    }
+    if geometry_keys.intersection(changes):
+        candidate_geometry = {key: changes.get(key, getattr(camera, key)) for key in geometry_keys}
+        geometry_error = validate_counting_geometry(candidate_geometry)
+        if geometry_error:
+            raise HTTPException(status_code=422, detail=geometry_error)
 
     source_changed = bool({"source_type", "source_url"}.intersection(changes))
     for key, value in changes.items():
@@ -293,6 +308,15 @@ def start_camera(camera_id: int, db: Session = Depends(get_db)) -> dict:
     camera = db.get(Camera, camera_id)
     if camera is None:
         raise HTTPException(status_code=404, detail="Camera not found")
+    geometry_values = {
+        key: getattr(camera, key) for key in (
+            "line_x1", "line_y1", "line_x2", "line_y2",
+            "road_x1", "road_y1", "road_x2", "road_y2", "road_x3", "road_y3", "road_x4", "road_y4",
+        )
+    }
+    geometry_error = validate_counting_geometry(geometry_values)
+    if geometry_error:
+        raise HTTPException(status_code=422, detail=f"Cấu hình vùng đếm chưa hợp lệ: {geometry_error}")
     running = db.scalar(select(CountingSession).where(CountingSession.camera_id == camera_id, CountingSession.status == SessionStatus.running).order_by(CountingSession.id.desc()))
     if running:
         # Reconcile stale DB state with the real AI registry. This makes replaying

@@ -101,6 +101,11 @@ $pkg = Get-Content $packageJson -Raw -Encoding utf8 | ConvertFrom-Json
 $pkg.version = $Version
 $pkg | ConvertTo-Json -Depth 20 | Set-Content -Path $packageJson -Encoding utf8
 
+# Chuẩn hóa line endings trước git add để release copy đè trên Windows không
+# phát sinh warning LF/CRLF. .gitattributes vẫn là nguồn sự thật cho Git.
+& "$PSScriptRoot\normalize-line-endings.ps1"
+if ($LASTEXITCODE -ne 0) { throw "Chuẩn hóa line endings thất bại." }
+
 # Không bao giờ phát hành .env hoặc khóa riêng TLS.
 git ls-files --error-unmatch .env 1>$null 2>$null
 if ($LASTEXITCODE -eq 0) {

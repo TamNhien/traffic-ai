@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './styles.css'
 
-const APP_VERSION = '0.5.11'
+const APP_VERSION = '0.5.12'
 const vehicleLabels = {
   motorcycle: 'Xe máy', bicycle: 'Xe đạp', car: 'Ô tô', bus: 'Xe buýt', truck: 'Xe tải', other: 'Khác'
 }
@@ -14,6 +14,47 @@ const roadZonePoints = zone => [
   [clamp01(zone?.road_x3 ?? 0.96), clamp01(zone?.road_y3 ?? 0.98)],
   [clamp01(zone?.road_x4 ?? 0.04), clamp01(zone?.road_y4 ?? 0.98)],
 ]
+
+const pointOnSegment = (point, a, b, eps=1e-8) => {
+  const cross=(point[0]-a[0])*(b[1]-a[1])-(point[1]-a[1])*(b[0]-a[0])
+  if (Math.abs(cross)>eps) return false
+  return point[0]>=Math.min(a[0],b[0])-eps && point[0]<=Math.max(a[0],b[0])+eps && point[1]>=Math.min(a[1],b[1])-eps && point[1]<=Math.max(a[1],b[1])+eps
+}
+const pointInPolygon = (point, polygon) => {
+  let inside=false
+  for (let i=0,j=polygon.length-1;i<polygon.length;j=i++) {
+    const a=polygon[j], b=polygon[i]
+    if (pointOnSegment(point,a,b)) return true
+    if ((b[1]>point[1]) !== (a[1]>point[1])) {
+      const x=(a[0]-b[0])*(point[1]-b[1])/(a[1]-b[1])+b[0]
+      if (point[0]<x) inside=!inside
+    }
+  }
+  return inside
+}
+const orientation = (a,b,c,eps=1e-8) => {
+  const v=(b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0])
+  return Math.abs(v)<=eps ? 0 : (v>0 ? 1 : -1)
+}
+const segmentsIntersect = (a,b,c,d) => {
+  const o1=orientation(a,b,c), o2=orientation(a,b,d), o3=orientation(c,d,a), o4=orientation(c,d,b)
+  if (o1!==o2 && o3!==o4) return true
+  if (o1===0 && pointOnSegment(c,a,b)) return true
+  if (o2===0 && pointOnSegment(d,a,b)) return true
+  if (o3===0 && pointOnSegment(a,c,d)) return true
+  if (o4===0 && pointOnSegment(b,c,d)) return true
+  return false
+}
+const polygonArea = polygon => Math.abs(polygon.reduce((sum,p,i)=>{ const q=polygon[(i+1)%polygon.length]; return sum+p[0]*q[1]-q[0]*p[1] },0))/2
+const validateCountingGeometry = geometry => {
+  const zone=roadZonePoints(geometry)
+  if (segmentsIntersect(zone[0],zone[1],zone[2],zone[3]) || segmentsIntersect(zone[1],zone[2],zone[3],zone[0])) return {valid:false,message:'Vùng lòng đường đang bị bắt chéo. Sắp 4 điểm xanh theo vòng quanh mặt đường.'}
+  if (polygonArea(zone)<0.02) return {valid:false,message:'Vùng lòng đường quá nhỏ. Kéo 4 điểm xanh bao đủ phần mặt đường cần đếm.'}
+  const a=[clamp01(geometry.line_x1),clamp01(geometry.line_y1)], b=[clamp01(geometry.line_x2),clamp01(geometry.line_y2)]
+  if (Math.hypot(b[0]-a[0],b[1]-a[1])<0.05) return {valid:false,message:'Vạch đếm quá ngắn.'}
+  if (!pointInPolygon(a,zone) || !pointInPolygon(b,zone)) return {valid:false,message:'Hai đầu vạch vàng phải nằm trong vùng LÒNG ĐƯỜNG; không kéo vạch ra lề/vỉa hè.'}
+  return {valid:true,message:'Vạch đếm nằm hoàn toàn trong vùng lòng đường.'}
+}
 
 function RoadZoneOverlay({ zone }) {
   const points = roadZonePoints(zone).map(([x,y])=>`${x*100},${y*100}`).join(' ')
@@ -254,7 +295,7 @@ function AnnotationEditor({ dataset, onChanged }) {
   const currentIndex = Math.max(0, items.findIndex(i=>i.image_name===currentName))
   const imageUrl = currentName ? `/api/datasets/${dataset.id}/images/${encodeURIComponent(currentName)}?v=${encodeURIComponent(dataset.updated_at || '')}` : ''
   return <section className="panel annotation-panel" id="annotation">
-    <div className="panel-head"><div><span className="panel-kicker">ANNOTATION STUDIO · SMART REVIEW</span><h2>3. Chỉ rà soát ảnh cần thiết trước khi train lại</h2></div><span className="lock-state">V0.5.11</span></div>
+    <div className="panel-head"><div><span className="panel-kicker">ANNOTATION STUDIO · SMART REVIEW</span><h2>3. Chỉ rà soát ảnh cần thiết trước khi train lại</h2></div><span className="lock-state">V0.5.12</span></div>
     <p className="hint"><strong>Không cần sửa tay cả 1.200 ảnh.</strong> Chế độ mặc định đưa ảnh xe máy/xe đạp, confidence thấp, ảnh đông xe hoặc ảnh không detection lên trước. Ảnh ô tô/bus/truck rõ và confidence cao có thể duyệt nhanh sau khi bạn spot-check.</p>
     <div className="annotation-summary"><span>Tổng ảnh: <strong>{indexData?.total ?? 0}</strong></span><span>Đang hiện: <strong>{indexData?.filtered_total ?? 0}</strong></span><span>Cần ưu tiên: <strong>{indexData?.priority_images ?? 0}</strong></span><span>Có thể duyệt nhanh: <strong>{indexData?.safe_auto_accept_images ?? 0}</strong></span><span>Đã duyệt: <strong>{indexData?.reviewed_images ?? dataset.reviewed_images ?? 0}</strong></span><span>Ảnh khó: <strong>{indexData?.difficult_images ?? dataset.difficult_images ?? 0}</strong></span><span>Mất cân bằng: <strong>{indexData?.imbalance_ratio ? `x${indexData.imbalance_ratio}` : '—'}</strong></span></div>
     <div className="smart-review-bar"><label>Lọc ảnh<select value={reviewMode} onChange={e=>setReviewMode(e.target.value)}><option value="priority">🔥 Ưu tiên cần kiểm tra</option><option value="unreviewed">Chưa duyệt</option><option value="difficult">Ảnh khó</option><option value="all">Tất cả ảnh</option></select></label><button className="secondary" disabled={bulkBusy || !(indexData?.safe_auto_accept_images>0)} onClick={acceptSafe}>{bulkBusy?'Đang duyệt...':'Duyệt nhanh ảnh tin cậy'}</button></div>
@@ -307,6 +348,7 @@ function App() {
   const [datasetForm, setDatasetForm] = useState({name:'Dataset giao thông Việt Nam', every_n_frames:15, max_images:600, smart_dedupe:true, min_change_ratio:0.008})
   const [selectedDatasetId, setSelectedDatasetId] = useState(null)
   const [trainingForm, setTrainingForm] = useState({epochs:80, imgsz:640, batch:8, base_model:'yolo26s.pt'})
+  const countingGeometryState = useMemo(() => validateCountingGeometry(lineForm), [lineForm])
 
   const readApiBody = async (response) => {
     const text = await response.text()
@@ -455,8 +497,8 @@ function App() {
   const applyPreset = preset => {
     if (activePipeline) return
     if (preset === 'road-horizontal') setLineForm({...lineForm, line_x1:0.32,line_y1:0.59,line_x2:0.84,line_y2:0.59})
-    if (preset === 'horizontal') setLineForm({...lineForm, line_x1:0.12,line_y1:0.55,line_x2:0.88,line_y2:0.55})
-    if (preset === 'vertical') setLineForm({...lineForm, line_x1:0.52,line_y1:0.12,line_x2:0.52,line_y2:0.90})
+    if (preset === 'horizontal') setLineForm({...lineForm, line_x1:0.16,line_y1:0.55,line_x2:0.84,line_y2:0.55})
+    if (preset === 'vertical') setLineForm({...lineForm, line_x1:0.52,line_y1:0.22,line_x2:0.52,line_y2:0.90})
   }
 
   const applyRoadZonePreset = preset => {
@@ -483,6 +525,7 @@ function App() {
 
   const saveCountingLine = async () => {
     if (!selected || activePipeline) return
+    if (!countingGeometryState.valid) { setError(countingGeometryState.message); return }
     setBusy(true); setError(''); setNotice('')
     try {
       const body = Object.fromEntries(Object.entries(lineForm).map(([k,v]) => [k, Number(v)]))
@@ -601,8 +644,9 @@ const activateTraining = async run => {
           <div className="road-zone-toolbar"><span>Vùng lòng đường:</span><button className="secondary" disabled={busy || !!activePipeline} onClick={()=>applyRoadZonePreset('roadway')}>Trapezoid đường</button><button className="secondary" disabled={busy || !!activePipeline} onClick={()=>applyRoadZonePreset('narrow')}>Hẹp hơn</button><button className="secondary" disabled={busy || !!activePipeline} onClick={()=>applyRoadZonePreset('full')}>Toàn khung</button></div>
           <div className="nudge-grid"><button disabled={!!activePipeline} onClick={()=>moveLine(0,-0.02)}>↑ Lên</button><button disabled={!!activePipeline} onClick={()=>moveLine(0,0.02)}>↓ Xuống</button><button disabled={!!activePipeline} onClick={()=>moveLine(-0.02,0)}>← Trái</button><button disabled={!!activePipeline} onClick={()=>moveLine(0.02,0)}>→ Phải</button><button disabled={!!activePipeline} onClick={()=>resizeLine(1.12)}>Dài hơn</button><button disabled={!!activePipeline} onClick={()=>resizeLine(0.88)}>Ngắn hơn</button></div>
           <div className="line-grid">{lineField('line_x1','X1')}{lineField('line_y1','Y1')}{lineField('line_x2','X2')}{lineField('line_y2','Y2')}{lineField('confidence_threshold','Confidence')}</div>
-          <button disabled={!selected || busy || !!activePipeline} onClick={saveCountingLine}>Lưu vạch + vùng lòng đường</button>
-          <p className="hint"><strong>Vùng xanh = lòng đường được phép đếm.</strong> Kéo 4 nút xanh để ôm sát phần xe chạy, loại vỉa hè/lề đường ra ngoài. Một xe chỉ được tính khi quỹ đạo cắt đúng đoạn vạch vàng <strong>và</strong> điểm cắt nằm bên trong vùng xanh. Xe trên lề có thể vẫn được nhận diện/hiện box nhưng không tăng bộ đếm.</p>
+          <div className={`geometry-status ${countingGeometryState.valid ? 'ok' : 'bad'}`}><strong>{countingGeometryState.valid ? '✓ ROAD GUARD hợp lệ' : '⚠ Chưa thể lưu'}</strong><span>{countingGeometryState.message}</span></div>
+          <button disabled={!selected || busy || !!activePipeline || !countingGeometryState.valid} onClick={saveCountingLine}>Lưu vạch + vùng lòng đường</button>
+          <p className="hint"><strong>Vùng xanh = lòng đường được phép đếm.</strong> V0.5.12 khóa cứng hai đầu vạch vàng ở bên trong vùng xanh và từ chối polygon bị bắt chéo. Khi đếm, cả điểm track trước và sau lúc crossing cũng phải nằm trong lòng đường; xe trên lề/vỉa hè không được cộng IN/OUT.</p>
         </article>
 
         <article className="panel"><div className="panel-head"><div><span className="panel-kicker">CAMERA SOURCE</span><h2>{editingId ? `Sửa Camera #${editingId}` : 'Tạo camera mới'}</h2></div><button className="secondary" type="button" disabled={busy || !!activePipeline} onClick={beginNewCamera}>Camera mới</button></div><form className="camera-form" onSubmit={saveCamera}>
@@ -615,8 +659,8 @@ const activateTraining = async run => {
       </section>
 
       <section className="training-layout" id="training">
-        <article className="panel training-panel"><div className="panel-head"><div><span className="panel-kicker">DATASET STUDIO · CLEAN RETRAIN</span><h2>Dataset giao thông Việt Nam</h2></div><span className="lock-state">V0.5.11</span></div>
-          <p className="hint"><strong>Train lại từ đầu</strong> nên tạo dataset mới sạch từ video gốc. V0.5.11 mặc định lấy mỗi 15 frame, tối đa 600 ảnh và tự loại frame gần trùng; vì vậy bạn không còn phải mặc định xử lý 1.200 ảnh gần giống nhau.</p>
+        <article className="panel training-panel"><div className="panel-head"><div><span className="panel-kicker">DATASET STUDIO · CLEAN RETRAIN</span><h2>Dataset giao thông Việt Nam</h2></div><span className="lock-state">V0.5.12</span></div>
+          <p className="hint"><strong>Train lại từ đầu</strong> nên tạo dataset mới sạch từ video gốc. V0.5.12 mặc định lấy mỗi 15 frame, tối đa 600 ảnh và tự loại frame gần trùng; vì vậy bạn không còn phải mặc định xử lý 1.200 ảnh gần giống nhau.</p>
           <div className="dataset-form">
             <label className="dataset-name-field">Tên dataset<input value={datasetForm.name} onChange={e=>setDatasetForm({...datasetForm,name:e.target.value})} placeholder="traffic-vietnam-clean-01" /></label>
             <label>Mỗi N frame<input type="number" min="1" value={datasetForm.every_n_frames} onChange={e=>setDatasetForm({...datasetForm,every_n_frames:e.target.value})}/></label>
@@ -636,7 +680,7 @@ const activateTraining = async run => {
           <div className="train-form"><label>Base model<select value={trainingForm.base_model} onChange={e=>setTrainingForm({...trainingForm,base_model:e.target.value})}><option value="yolo26s.pt">YOLO26s</option><option value="yolo26m.pt">YOLO26m</option></select></label><label>Epochs<input type="number" min="1" value={trainingForm.epochs} onChange={e=>setTrainingForm({...trainingForm,epochs:e.target.value})}/></label><label>Image size<input type="number" min="320" step="32" value={trainingForm.imgsz} onChange={e=>setTrainingForm({...trainingForm,imgsz:e.target.value})}/></label><label>Batch<input type="number" min="1" value={trainingForm.batch} onChange={e=>setTrainingForm({...trainingForm,batch:e.target.value})}/></label></div>
           <p className="hint"><strong>Train mới từ đầu trong Traffic AI</strong> = tạo một Training Run mới từ base model pretrained bạn chọn (khuyến nghị YOLO26s), <strong>không tiếp tục học từ best.pt cũ</strong>. Đây là fine-tune mới, không phải random-weight training.</p><button disabled={!selectedDataset || selectedDataset?.status !== 'ready' || busy || trainingRuns.some(r=>r.status==='running')} onClick={startTraining}>5. Bắt đầu fine-tune mới RTX 3060</button>
           <div className="event-list training-runs">{trainingRuns.length ? trainingRuns.map(run=><div className="event-row training-row" key={run.id}><span>Run #{run.id} · Dataset #{run.dataset_id} · {run.base_model}</span><strong>{String(run.status).toUpperCase()} · {Number(run.progress || 0).toFixed(1)}%</strong><small>Epoch {run.current_epoch}/{run.epochs} · P {run.precision?.toFixed?.(3) ?? '-'} · R {run.recall?.toFixed?.(3) ?? '-'} · mAP50 {run.map50?.toFixed?.(3) ?? '-'} · mAP50-95 {run.map50_95?.toFixed?.(3) ?? '-'}</small>{run.status==='completed' && (run.is_active_model ? <span className="active-model-badge">✓ ĐANG DÙNG best.pt</span> : <button className="inline-action" disabled={busy} onClick={()=>activateTraining(run)}>6. Kích hoạt best.pt</button>)}{run.last_error && <small className="bad-text">{run.last_error}</small>}</div>) : <div className="empty">Chưa có training run.</div>}</div>
-          <p className="hint">Sau khi kích hoạt <code>best.pt</code>, các phiên AI mới sẽ dùng model tùy biến. Không có model nào bảo đảm 100% trong mọi cảnh; V0.5.11 giữ Strict Gate V0.5.8 và Clean Retrain + Smart Review để giảm công sửa nhãn thủ công. Annotation Studio vẫn dùng để sửa pseudo-label thành ground truth trước khi train lại.</p>
+          <p className="hint">Sau khi kích hoạt <code>best.pt</code>, các phiên AI mới sẽ dùng model tùy biến. Không có model nào bảo đảm 100% trong mọi cảnh; V0.5.12 giữ Strict Gate V0.5.8 và Clean Retrain + Smart Review để giảm công sửa nhãn thủ công. Annotation Studio vẫn dùng để sửa pseudo-label thành ground truth trước khi train lại.</p>
         </article>
       </section>
 

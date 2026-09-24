@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import deque
+import os
 from dataclasses import dataclass, field
 from math import hypot
 
@@ -31,16 +32,42 @@ class RoadZone:
     x4: float = 0.04
     y4: float = 0.98
 
-    def denormalize(self, width: int, height: int) -> list[Point]:
+    def normalized_points(self) -> list[Point]:
         return [
-            (self.x1 * width, self.y1 * height),
-            (self.x2 * width, self.y2 * height),
-            (self.x3 * width, self.y3 * height),
-            (self.x4 * width, self.y4 * height),
+            (self.x1, self.y1),
+            (self.x2, self.y2),
+            (self.x3, self.y3),
+            (self.x4, self.y4),
         ]
+
+    def denormalize(self, width: int, height: int) -> list[Point]:
+        return [(x * width, y * height) for x, y in self.normalized_points()]
 
     def contains(self, point: Point, width: int, height: int) -> bool:
         return point_in_polygon(point, self.denormalize(width, height))
+
+    @property
+    def area_ratio(self) -> float:
+        points = self.normalized_points()
+        twice = 0.0
+        for index, point in enumerate(points):
+            nxt = points[(index + 1) % len(points)]
+            twice += point[0] * nxt[1] - nxt[0] * point[1]
+        return abs(twice) * 0.5
+
+    @property
+    def is_simple(self) -> bool:
+        points = self.normalized_points()
+        return not (
+            segments_intersect(points[0], points[1], points[2], points[3])
+            or segments_intersect(points[1], points[2], points[3], points[0])
+        )
+
+    def validate(self, min_area_ratio: float = 0.02) -> None:
+        if not self.is_simple:
+            raise ValueError("Road zone polygon is self-intersecting")
+        if self.area_ratio < min_area_ratio:
+            raise ValueError("Road zone is too small")
 
 
 def _point_on_segment(point: Point, a: Point, b: Point, eps: float = 1e-6) -> bool:
@@ -167,6 +194,8 @@ class LineCrossingCounter:
     ) -> None:
         self.line = line
         self.road_zone = road_zone
+        if self.road_zone is not None:
+            self.road_zone.validate()
         self.segment_margin = max(0.0, float(segment_margin))
         self.dead_band_ratio = max(0.0, float(dead_band_ratio))
         self.rearm_distance_ratio = max(self.dead_band_ratio, float(rearm_distance_ratio))
@@ -243,11 +272,18 @@ class LineCrossingCounter:
             move_y_zone = anchor[1] - previous.point[1]
             move_len_zone = max(hypot(move_x_zone, move_y_zone), 1e-6)
             ux, uy = move_x_zone / move_len_zone, move_y_zone / move_len_zone
-            zone_probe = max(3.0, min(frame_width, frame_height) * 0.01)
+            zone_probe_ratio = max(0.0, float(os.getenv("AI_ROAD_ZONE_PROBE_RATIO", "0.018")))
+            zone_probe = max(3.0, min(frame_width, frame_height) * zone_probe_ratio)
             before = (crossing[0] - ux * zone_probe, crossing[1] - uy * zone_probe)
             after = (crossing[0] + ux * zone_probe, crossing[1] + uy * zone_probe)
+            # V0.5.12 hard guard: both observed anchors must themselves be in the
+            # drivable polygon. A long diagonal jump from sidewalk to sidewalk is
+            # therefore never accepted merely because its segment passes through
+            # the green polygon around the yellow gate.
             if not (
-                self.road_zone.contains(crossing, frame_width, frame_height)
+                self.road_zone.contains(previous.point, frame_width, frame_height)
+                and self.road_zone.contains(anchor, frame_width, frame_height)
+                and self.road_zone.contains(crossing, frame_width, frame_height)
                 and self.road_zone.contains(before, frame_width, frame_height)
                 and self.road_zone.contains(after, frame_width, frame_height)
             ):

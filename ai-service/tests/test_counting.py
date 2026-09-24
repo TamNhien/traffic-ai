@@ -1,3 +1,5 @@
+import pytest
+
 from app.counting import CountingLine, LineCrossingCounter, RoadZone
 
 
@@ -128,3 +130,20 @@ def test_fast_crossing_still_counts_when_road_zone_is_valid() -> None:
     assert counter.update(303, (50, 8), 100, 100, 2) is None
     assert counter.update(303, (52, 92), 100, 100, 22) == "in"
     assert counter.rescued_crossings == 1
+
+
+def test_diagonal_sidewalk_jump_through_road_zone_is_rejected() -> None:
+    zone = RoadZone(0.30, 0.0, 0.70, 0.0, 0.70, 1.0, 0.30, 1.0)
+    counter = LineCrossingCounter(CountingLine(0.0, 0.5, 1.0, 0.5), road_zone=zone)
+    # The segment intersects the yellow line inside the road polygon, but both
+    # observations are outside the drivable polygon. V0.5.12 must fail closed.
+    assert counter.update(304, (10, 20), 100, 100, 1) is None
+    assert counter.update(304, (90, 80), 100, 100, 2) is None
+    assert counter.total_crossings == 0
+    assert counter.rejected_outside_road == 1
+
+
+def test_self_crossing_road_zone_is_rejected_at_counter_creation() -> None:
+    bad_zone = RoadZone(0.20, 0.20, 0.80, 0.80, 0.80, 0.20, 0.20, 0.80)
+    with pytest.raises(ValueError, match="self-intersecting"):
+        LineCrossingCounter(CountingLine(0.3, 0.5, 0.7, 0.5), road_zone=bad_zone)

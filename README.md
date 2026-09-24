@@ -1,3 +1,44 @@
+# Traffic AI V0.5.12 — Road Guard 2.0 + Release Hygiene 🚗🛡️
+
+> **V0.5.12:** dọn sạch warning LF/CRLF khi `publish.ps1`, thêm validation vùng lòng đường/vạch đếm fail-closed, và siết điều kiện Road Zone để cả điểm track trước/sau crossing đều phải nằm trong lòng đường. Vạch vàng không còn được phép lưu nếu đầu vạch nằm ra lề/vỉa hè hoặc polygon xanh bị bắt chéo.
+
+## V0.5.12 nâng cấp gì
+
+- **Release hygiene:** thêm `scripts/normalize-line-endings.ps1`, `.gitattributes` chốt `*.ps1 = CRLF`, source/config = `LF`; `publish.ps1` tự normalize trước `git add -A`, loại warning kiểu `LF will be replaced by CRLF` / `CRLF will be replaced by LF`.
+- **Road Guard 2.0:** frontend hiển thị trạng thái `✓ ROAD GUARD hợp lệ` hoặc chặn lưu khi geometry sai.
+- **Backend validation:** từ chối Road Zone quá nhỏ, polygon 4 điểm tự bắt chéo, vạch quá ngắn hoặc đầu vạch nằm ngoài vùng Lòng đường.
+- **AI fail-closed:** lúc crossing, `previous anchor + crossing + probe trước/sau + current anchor` đều phải nằm trong Road Zone mới được tăng IN/OUT.
+- **Biên an toàn mới:** `AI_ROAD_ZONE_PROBE_RATIO=0.018` (1,8% cạnh ngắn frame) để crossing sát lề khó lọt hơn.
+- **Default gate an toàn:** camera còn dùng vạch factory cũ `0.10/0.50 → 0.90/0.50` được migration đổi sang `0.32/0.59 → 0.84/0.59`; vạch tùy chỉnh của người dùng không bị sửa.
+
+## Cập nhật
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+.\scripts\test.ps1
+.\scripts\start.ps1
+.\scripts\verify-database.ps1
+```
+
+Mong muốn:
+
+```text
+0026_road_guard_v0512
+schema_version = 0.5.12
+```
+
+Sau khi chạy ổn, phát hành vẫn chỉ một lệnh:
+
+```powershell
+.\scripts\publish.ps1
+```
+
+```text
+→ test → normalize line endings → build → push GitHub → tag v0.5.12 → GitHub Actions → Release
+```
+
+---
+
 # Traffic AI V0.5.11 — Road Zone Counting + Frame Browser 🚗🛣️
 
 > **V0.5.11:** thêm vùng đa giác **Lòng đường** 4 điểm kéo trực tiếp trên ảnh. Một phương tiện chỉ tăng IN/OUT khi quỹ đạo cắt đúng đoạn vạch vàng **và** vùng nhỏ quanh điểm cắt nằm trong vùng xanh Lòng đường. Xe trên lề/vỉa hè có thể vẫn được nhận diện để quan sát nhưng không được đếm. Annotation Studio bỏ `<select size>` cũ và dùng Frame Browser dạng card cuộn dễ đọc.
@@ -1066,7 +1107,7 @@ https://github.com/TamNhien/traffic-ai
 
 ## 13. Lộ trình tiếp theo
 
-### V0.5.9 — Ground-truth Benchmark
+### V0.5.13 — Ground-truth Benchmark
 
 - benchmark cùng một clip với pretrained và `best.pt`;
 - nhập/đối chiếu ground-truth theo từng loại và IN/OUT;

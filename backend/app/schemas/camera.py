@@ -20,10 +20,10 @@ class CameraCreate(_CameraSourceBase):
     location: str | None = None
     description: str | None = None
     confidence_threshold: float = Field(default=0.12, ge=0.05, le=0.95)
-    line_x1: float = Field(default=0.1, ge=0, le=1)
-    line_y1: float = Field(default=0.5, ge=0, le=1)
-    line_x2: float = Field(default=0.9, ge=0, le=1)
-    line_y2: float = Field(default=0.5, ge=0, le=1)
+    line_x1: float = Field(default=0.32, ge=0, le=1)
+    line_y1: float = Field(default=0.59, ge=0, le=1)
+    line_x2: float = Field(default=0.84, ge=0, le=1)
+    line_y2: float = Field(default=0.59, ge=0, le=1)
     road_x1: float = Field(default=0.20, ge=0, le=1)
     road_y1: float = Field(default=0.16, ge=0, le=1)
     road_x2: float = Field(default=0.80, ge=0, le=1)

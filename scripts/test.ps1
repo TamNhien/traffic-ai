@@ -300,18 +300,18 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.11") { throw "VERSION phải là 0.5.11, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0025_road_zone_v0511.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0025_road_zone_v0511.py." }
+  if ($version -ne "0.5.12") { throw "VERSION phải là 0.5.12, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0026_road_guard_v0512.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0026_road_guard_v0512.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0025_road_zone_v0511"' -or $migrationText -notmatch 'down_revision = "0024_ci_node_v0510"' -or $migrationText -notmatch "value='0.5.11'") {
-    throw "Migration 0025_road_zone_v0511 không đúng contract V0.5.11."
+  if ($migrationText -notmatch 'revision = "0026_road_guard_v0512"' -or $migrationText -notmatch 'down_revision = "0025_road_zone_v0511"' -or $migrationText -notmatch "value='0.5.12'") {
+    throw "Migration 0026_road_guard_v0512 không đúng contract V0.5.12."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
 
 function Assert-AlembicRevisionSafetyContract {
-  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.11" -ForegroundColor Cyan
+  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.12" -ForegroundColor Cyan
   $versionsDir = Join-Path $root "backend\alembic\versions"
   $bad = @()
   Get-ChildItem $versionsDir -Filter "*.py" | ForEach-Object {
@@ -335,7 +335,49 @@ function Assert-AlembicRevisionSafetyContract {
   if ($v17 -notmatch 'revision = "0017_ai_test_dep_v053"') {
     throw "Migration V0.5.3 chưa dùng revision ID rút gọn an toàn."
   }
-  Write-Host "[OK] Alembic revision-length safety V0.5.11" -ForegroundColor Green
+  Write-Host "[OK] Alembic revision-length safety V0.5.12" -ForegroundColor Green
+}
+
+
+function Assert-ReleaseLineEndingHygieneV0512Contract {
+  Write-Host "`n[Traffic AI] Release line-ending hygiene V0.5.12" -ForegroundColor Cyan
+  $attributes = Get-Content (Join-Path $root ".gitattributes") -Raw -Encoding UTF8
+  $publish = Get-Content (Join-Path $PSScriptRoot "publish.ps1") -Raw -Encoding UTF8
+  $normalizerPath = Join-Path $PSScriptRoot "normalize-line-endings.ps1"
+  if (-not (Test-Path $normalizerPath)) { throw "Thiếu normalize-line-endings.ps1." }
+  $normalizer = Get-Content $normalizerPath -Raw -Encoding UTF8
+  if ($attributes -notmatch '\*\.ps1 text eol=crlf' -or $attributes -notmatch '\*\.json text eol=lf' -or $attributes -notmatch '\*\.py text eol=lf') {
+    throw ".gitattributes chưa chốt CRLF cho PowerShell và LF cho source/config."
+  }
+  if ($publish -notmatch 'normalize-line-endings\.ps1' -or $publish -notmatch 'git add -A') {
+    throw "publish.ps1 chưa normalize line endings trước khi git add."
+  }
+  if ($normalizer -notmatch 'UTF8Encoding' -or $normalizer -notmatch '"crlf"' -or $normalizer -notmatch '"lf"') {
+    throw "Line-ending normalizer thiếu UTF-8 no-BOM hoặc hai mode LF/CRLF."
+  }
+  Write-Host "[OK] Release line-ending hygiene V0.5.12" -ForegroundColor Green
+}
+
+function Assert-RoadGuardV0512Contract {
+  Write-Host "`n[Traffic AI] Road Guard 2.0 V0.5.12" -ForegroundColor Cyan
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  $routes = Get-Content (Join-Path $root "backend\app\api\routes.py") -Raw -Encoding UTF8
+  $geometry = Get-Content (Join-Path $root "backend\app\geometry.py") -Raw -Encoding UTF8
+  $counting = Get-Content (Join-Path $root "ai-service\app\counting.py") -Raw -Encoding UTF8
+  $envExample = Get-Content (Join-Path $root ".env.example") -Raw -Encoding UTF8
+  if ($frontend -notmatch 'validateCountingGeometry' -or $frontend -notmatch 'ROAD GUARD hợp lệ' -or $frontend -notmatch '!countingGeometryState\.valid') {
+    throw "Frontend thiếu Road Guard validation/fail-closed save."
+  }
+  if ($routes -notmatch 'validate_counting_geometry' -or $geometry -notmatch 'Hai đầu vạch đếm phải nằm trong vùng Lòng đường') {
+    throw "Backend thiếu validation polygon/vạch Road Guard."
+  }
+  if ($counting -notmatch 'self\.road_zone\.contains\(previous\.point' -or $counting -notmatch 'AI_ROAD_ZONE_PROBE_RATIO') {
+    throw "AI counter chưa yêu cầu anchor trước/sau nằm trong Road Zone hoặc thiếu probe ratio."
+  }
+  if ($envExample -notmatch 'AI_ROAD_ZONE_PROBE_RATIO=0\.018') {
+    throw ".env.example thiếu Road Zone probe ratio V0.5.12."
+  }
+  Write-Host "[OK] Road Guard 2.0 V0.5.12" -ForegroundColor Green
 }
 
 
@@ -564,6 +606,8 @@ Assert-AnnotationUxClarityContract
 Assert-StrictGateV058Contract
 Assert-CleanRetrainV059Contract
 Assert-DatasetControlsVisibilityV0510R1Contract
+Assert-ReleaseLineEndingHygieneV0512Contract
+Assert-RoadGuardV0512Contract
 
 Write-Host "`n[Traffic AI] Road Zone + Frame Browser V0.5.11" -ForegroundColor Cyan
 $frontendV511 = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
