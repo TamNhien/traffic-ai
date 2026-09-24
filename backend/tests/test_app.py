@@ -20,7 +20,7 @@ def test_root_metadata() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["name"] == "Traffic AI"
-    assert payload["version"] == "0.5.13"
+    assert payload["version"] == "0.5.14"
     assert payload["docs"] == "/docs"
     assert payload["health"] == "/api/health"
 

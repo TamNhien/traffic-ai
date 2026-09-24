@@ -57,7 +57,7 @@ class PipelineWorker(threading.Thread):
         self.jpeg_every_n = max(1, int(os.getenv("AI_STREAM_EVERY_N", "2")))
         self.jpeg_max_width = int(os.getenv("AI_STREAM_MAX_WIDTH", "960"))
         self.gate_roi_enabled = os.getenv("AI_GATE_ROI", "1").strip().lower() not in {"0", "false", "no"}
-        self.detection_roi_mode = os.getenv("AI_DETECTION_ROI", "road").strip().lower()
+        self.detection_roi_mode = os.getenv("AI_DETECTION_ROI", "full").strip().lower()
         self.road_roi_margin = float(os.getenv("AI_ROAD_ROI_MARGIN", "0.02"))
         self.gate_roi_margin = float(os.getenv("AI_GATE_ROI_MARGIN", "0.16"))
         self.gate_roi_min_span = float(os.getenv("AI_GATE_ROI_MIN_SPAN", "0.52"))
@@ -229,18 +229,22 @@ class PipelineWorker(threading.Thread):
                 frame_index = self.state.processed_frames + 1
 
                 roi = None
-                if self.gate_roi_enabled:
-                    if self.detection_roi_mode == "road" and counter.road_zone is not None:
-                        roi = road_zone_roi(counter.road_zone, width, height, margin_ratio=self.road_roi_margin)
-                    else:
-                        roi = gate_roi_for_line(
-                            counter.line,
-                            width,
-                            height,
-                            margin_ratio=self.gate_roi_margin,
-                            min_span_ratio=self.gate_roi_min_span,
-                            endpoint_margin_ratio=self.gate_endpoint_margin,
-                        )
+                # V0.5.14 decouples detection from counting geometry. The default
+                # detector sees the full frame so a too-tight/misplaced Road Zone
+                # cannot hide vehicles from YOLO/ByteTrack. Road Zone remains a
+                # strict COUNTING guard only. Optional road/gate modes are kept
+                # for low-power deployments.
+                if self.detection_roi_mode == "road" and counter.road_zone is not None:
+                    roi = road_zone_roi(counter.road_zone, width, height, margin_ratio=self.road_roi_margin)
+                elif self.detection_roi_mode == "gate" and self.gate_roi_enabled:
+                    roi = gate_roi_for_line(
+                        counter.line,
+                        width,
+                        height,
+                        margin_ratio=self.gate_roi_margin,
+                        min_span_ratio=self.gate_roi_min_span,
+                        endpoint_margin_ratio=self.gate_endpoint_margin,
+                    )
                 infer_frame = roi.crop(frame) if roi is not None else frame
                 offset_x = roi.x1 if roi is not None else 0
                 offset_y = roi.y1 if roi is not None else 0
@@ -267,6 +271,9 @@ class PipelineWorker(threading.Thread):
                 pending_crossing_events: list[tuple[int, str, str, float]] = []
                 refines_used_this_frame = 0
                 boxes = result.boxes
+                self.state.detections_current_frame = int(len(boxes)) if boxes is not None else 0
+                self.state.active_tracks = 0
+                self.state.road_tracks_current_frame = 0
                 if boxes is not None and boxes.id is not None:
                     xyxy = boxes.xyxy.cpu().tolist()
                     ids = boxes.id.int().cpu().tolist()
@@ -297,6 +304,9 @@ class PipelineWorker(threading.Thread):
 
                         velocity = self._continuity.velocity_for(track_id)
                         anchor = motion_leading_anchor(rect, velocity)
+                        self.state.active_tracks += 1
+                        if counter.road_zone is not None and counter.road_zone.contains(anchor, width, height):
+                            self.state.road_tracks_current_frame += 1
                         self._seen_track_ids.add(track_id)
                         self._labels.update(track_id, current_label, confidence_f)
                         stable_label, class_certainty, class_hits = self._labels.stable_label(track_id, current_label)
@@ -505,7 +515,7 @@ class PipelineWorker(threading.Thread):
         rt = f"x{self.state.realtime_factor:.2f}" if self.state.source_fps > 0 else "live"
         cv2.putText(
             frame,
-            f"TOTAL {self.state.total_count} | IN {counter.in_count} | OUT {counter.out_count} | FPS {self.state.fps:.1f} ({rt}) | {self.state.inference_ms:.0f}ms | RESCUE {counter.rescued_crossings} | ROAD-REJECT {counter.rejected_outside_road}",
+            f"DET {self.state.detections_current_frame} | TRACK {self.state.active_tracks} | ROAD {self.state.road_tracks_current_frame} | TOTAL {self.state.total_count} | IN {counter.in_count} | OUT {counter.out_count} | FPS {self.state.fps:.1f} ({rt}) | {self.state.inference_ms:.0f}ms | ROI {self.detection_roi_mode.upper()} | RESCUE {counter.rescued_crossings} | ROAD-REJECT {counter.rejected_outside_road}",
             (20, 32),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.62,

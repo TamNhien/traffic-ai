@@ -1,168 +1,65 @@
-# Traffic AI V0.5.13 — Instant Overlay + Road ROI Tracking 🚗⚡
+# Traffic AI V0.5.14 — Full-frame Detect + Strict Road Count 🚗🎯
 
-> V0.5.13 tập trung vào đúng hai hiện tượng thực tế: chuyển sang **AI Overlay bị đen một lúc**, và xe chạy nhiều nhưng **box/track xuất hiện trễ, đếm chậm**. Bản này giữ Road Guard 2.0 để không đếm xe trên lề, nhưng cho detector/ByteTrack quan sát **toàn vùng lòng đường** sớm hơn thay vì chỉ chờ xe đi sát vạch.
+V0.5.14 sửa lỗi thực tế quan sát trong clip: nhiều xe đi qua khung hình nhưng không có box/track và gần như không đếm. Nguyên nhân chính của V0.5.13 là detector mặc định bị crop theo **Road Zone**; nếu polygon xanh đặt hẹp hoặc lệch luồng xe thì YOLO không hề nhìn thấy các xe bên ngoài vùng đó.
 
-## Vì sao AI Overlay trước đây có thể đen lúc mới chuyển
-
-V0.5.12 chỉ phát MJPEG sau khi worker đã mở video, tải YOLO, warm-up CUDA và tải/warm-up thêm model refiner `yolo26m.pt`. Trong thời gian đó thẻ `<img>` của AI Overlay chưa nhận được frame nên vùng preview có thể đen.
-
-V0.5.13 xử lý theo ba lớp:
-
-1. Worker mở encoder sớm và gửi ngay một frame nguồn có dòng `AI warming up...` trước khi warm-up YOLO.
-2. Frontend giữ video native ở phía dưới cho đến khi MJPEG thực sự có frame (`overlayReady`). Không còn đổi sang một `<img>` rỗng rồi chờ.
-3. Model refiner được warm-up nền sau khi main detector đã chạy; refiner không còn chặn frame AI đầu tiên.
-
-MJPEG cũng trả thêm:
+## Kiến trúc mới
 
 ```text
-Cache-Control: no-store, no-cache
-Pragma: no-cache
-X-Accel-Buffering: no
+TOÀN KHUNG HÌNH
+   ↓
+YOLO26 / best.pt       ← detect toàn frame
+   ↓
+ByteTrack              ← track xe từ sớm
+   ↓
+Road Guard + vạch vàng
+   ↓
+chỉ crossing nằm trong vùng xanh mới COUNT
 ```
 
-để tránh browser/proxy gom frame trước khi hiển thị.
+Có thể thấy bounding box của xe trên lề để chẩn đoán detector, nhưng xe đó **không được cộng IN/OUT** nếu crossing không thỏa Road Zone.
 
-## Vì sao V0.5.12 có thể thấy ít box dù xe chạy nhiều
+### Runtime mặc định
 
-V0.5.12 mặc định dùng **Gate ROI** khá hẹp quanh vạch đếm. Điều này giảm tải và chặn phần lớn lề đường, nhưng có nhược điểm: YOLO/ByteTrack chỉ bắt đầu thấy xe khi xe đã vào dải gần vạch. Xe nhanh hoặc bị che có thể không đủ lịch sử track ở cả hai phía vạch.
-
-V0.5.13 mặc định dùng:
-
-```text
-AI_DETECTION_ROI=road
+```env
+AI_DETECTION_ROI=full
 AI_ROAD_ROI_MARGIN=0.02
 ```
 
-Luồng mới:
-
-```text
-Video
-  ↓
-Vùng LÒNG ĐƯỜNG xanh
-  ↓
-Bounding ROI quanh toàn vùng đường
-  ↓
-YOLO26 / best.pt
-  ↓
-ByteTrack theo dõi xe từ sớm
-  ↓
-Road Guard + vạch vàng
-  ↓
-chỉ crossing trong lòng đường mới đếm
-```
-
-Xe trên lề vẫn không được cộng IN/OUT vì Road Guard 2.0 của V0.5.12 được giữ nguyên.
+`start.ps1` migrate đúng một lần cấu hình mặc định V0.5.13 `road -> full` bằng marker `AI_DETECTION_POLICY_V0514=1`. Sau lần migrate, người dùng vẫn có thể tự chọn lại `road` hoặc `gate` nếu cần tối ưu GPU.
 
 ## Telemetry mới
 
-Dòng trạng thái khi chạy AI giờ có thêm:
-
 ```text
-CUDA/CPU
-track N
-ROI road
+DET  = số detection frame hiện tại
+track = track đang hoạt động frame hiện tại
+road = track có anchor nằm trong Road Zone
+seen = tổng track từng quan sát trong phiên
+DETECT FULL = detector đang quét toàn khung
 ```
 
-Ví dụ:
+Chẩn đoán nhanh:
 
-```text
-INFERENCE · best.pt · AI 23% · FPS 31/30 · RT x1.03 · lag 0.0s · 19 ms · CUDA · track 48 · ROI road · Tổng 17 ...
-```
+- `DET=0` khi xe hiện rõ: detector/model/confidence có vấn đề.
+- `DET>0`, `track>0`, `road=0`: Road Zone không phủ luồng xe; chỉnh polygon xanh.
+- `road>0` nhưng `Tổng` không tăng khi cắt vạch: kiểm tra vị trí vạch/Road Guard.
 
-Cách đọc nhanh:
+## Vùng đếm
 
-- `CUDA`: đang dùng GPU. Nếu thấy `CPU`, inference sẽ chậm đáng kể.
-- `RT x >= 1`: AI theo kịp tốc độ video.
-- `RT x < 1` và `lag` tăng: AI đang xử lý chậm hơn video.
-- `track` tăng mà `Tổng` không tăng: detector/tracker thấy xe nhưng xe chưa thỏa điều kiện crossing/Road Guard.
-- `track` gần 0 dù xe rõ trong vùng xanh: vấn đề nằm ở model/confidence/ROI, không phải bộ đếm.
-
-## Việc bạn đang sửa label để train lại
-
-Các label bạn đang sửa **chưa làm model đang chạy thông minh hơn ngay lập tức**. Phiên AI hiện tại vẫn dùng model đang được kích hoạt trước đó.
-
-Quy trình đúng sau khi sửa label:
-
-```text
-Sửa box/class trong Annotation Studio
-        ↓
-Lưu nhãn + đánh dấu đã rà soát
-        ↓
-4. Chia lại train / val / test
-        ↓
-5. Fine-tune mới từ YOLO26s pretrained
-        ↓
-training run COMPLETED
-        ↓
-6. Kích hoạt best.pt mới
-        ↓
-Dừng phiên AI cũ / Chạy AI lại
-        ↓
-Inference dùng best.pt mới
-```
-
-Nếu bạn đổi `bicycle → motorcycle`, thay đổi đó chỉ đi vào training run mới sau bước chia dataset lại. Không cần xóa `best.pt` cũ trước khi train.
-
-## Tuning mặc định mới
-
-```text
-AI_DETECTION_ROI=road
-AI_ROAD_ROI_MARGIN=0.02
-AI_REFINE_BACKGROUND_WARMUP=1
-```
-
-Các tuning cũ vẫn giữ, gồm:
-
-```text
-AI_IMGSZ=640
-AI_GATE_SEGMENT_MARGIN=0.0
-AI_ROAD_ZONE_PROBE_RATIO=0.018
-AI_STREAM_EVERY_N=2
-AI_REFINE_MAX_PER_FRAME=1
-AI_REFINE_MAX_LAG=0.35
-```
+Vùng xanh vẫn chỉ là **vùng được phép đếm**, không còn là vùng giới hạn YOLO. Hãy kéo 4 điểm xanh bao toàn bộ phần lòng đường mà xe thực sự di chuyển, loại lề/vỉa hè. Vạch vàng đặt bên trong vùng xanh và cắt ngang hướng xe chạy.
 
 ## Database
 
-Migration mới:
-
 ```text
-0026_road_guard_v0512
-        ↓
 0027_fast_overlay_v0513
+  ↓
+0028_full_detect_v0514
 ```
 
-Migration V0.5.13 chỉ nâng:
-
-```text
-schema_version = 0.5.13
-```
-
-Không xóa camera, dataset, ảnh, training run, model, `best.pt`, event hoặc session.
+Migration chỉ nâng `schema_version=0.5.14`, không xóa dataset, training run, best.pt hay lịch sử đếm.
 
 ## Cập nhật
 
-Chép source đè vào:
-
-```text
-D:\LienThongDH\DoAn\traffic-ai
-```
-
-Giữ nguyên:
-
-```text
-.env
-gateway\certs\
-videos\
-models\
-snapshots\
-datasets\
-training-runs\
-```
-
-Không dùng `docker compose down -v`.
-
-Chạy:
+Giữ `.env`, `gateway/certs`, `videos`, `models`, `snapshots`, `datasets`, `training-runs`; chép source mới đè vào `D:\LienThongDH\DoAn\traffic-ai`. Không dùng `docker compose down -v`.
 
 ```powershell
 cd D:\LienThongDH\DoAn\traffic-ai
@@ -174,16 +71,16 @@ cd D:\LienThongDH\DoAn\traffic-ai
 Mong muốn:
 
 ```text
-0027_fast_overlay_v0513
-schema_version = 0.5.13
+0028_full_detect_v0514
+schema_version = 0.5.14
 ```
 
-Sau khi chạy ổn, phát hành vẫn một lệnh:
+Sau khi chạy ổn, phát hành một lệnh:
 
 ```powershell
 .\scripts\publish.ps1
 ```
 
 ```text
-→ test → build → push GitHub → tag v0.5.13 → GitHub Actions → Release
+→ test → build → push GitHub → tag v0.5.14 → GitHub Actions → Release
 ```

@@ -300,18 +300,18 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.13") { throw "VERSION phải là 0.5.13, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0027_fast_overlay_v0513.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0027_fast_overlay_v0513.py." }
+  if ($version -ne "0.5.14") { throw "VERSION phải là 0.5.14, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0028_full_detect_v0514.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0028_full_detect_v0514.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0027_fast_overlay_v0513"' -or $migrationText -notmatch 'down_revision = "0026_road_guard_v0512"' -or $migrationText -notmatch "value='0.5.13'") {
-    throw "Migration 0027_fast_overlay_v0513 không đúng contract V0.5.13."
+  if ($migrationText -notmatch 'revision = "0028_full_detect_v0514"' -or $migrationText -notmatch 'down_revision = "0027_fast_overlay_v0513"' -or $migrationText -notmatch "value='0.5.14'") {
+    throw "Migration 0028_full_detect_v0514 không đúng contract V0.5.14."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
 
 function Assert-AlembicRevisionSafetyContract {
-  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.13" -ForegroundColor Cyan
+  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.14" -ForegroundColor Cyan
   $versionsDir = Join-Path $root "backend\alembic\versions"
   $bad = @()
   Get-ChildItem $versionsDir -Filter "*.py" | ForEach-Object {
@@ -335,7 +335,7 @@ function Assert-AlembicRevisionSafetyContract {
   if ($v17 -notmatch 'revision = "0017_ai_test_dep_v053"') {
     throw "Migration V0.5.3 chưa dùng revision ID rút gọn an toàn."
   }
-  Write-Host "[OK] Alembic revision-length safety V0.5.13" -ForegroundColor Green
+  Write-Host "[OK] Alembic revision-length safety V0.5.14" -ForegroundColor Green
 }
 
 
@@ -406,15 +406,41 @@ function Assert-InstantOverlayRoadRoiV0513Contract {
   if ($aiMain -notmatch 'X-Accel-Buffering' -or $aiMain -notmatch 'no-store, no-cache') {
     throw "MJPEG stream thiếu header chống proxy/browser buffering."
   }
-  if ($envExample -notmatch 'AI_DETECTION_ROI=road' -or $envExample -notmatch 'AI_ROAD_ROI_MARGIN=0\.02' -or $envExample -notmatch 'AI_REFINE_BACKGROUND_WARMUP=1') {
+  if ($envExample -notmatch 'AI_DETECTION_ROI=full' -or $envExample -notmatch 'AI_ROAD_ROI_MARGIN=0\.02' -or $envExample -notmatch 'AI_REFINE_BACKGROUND_WARMUP=1') {
     throw ".env.example thiếu tuning Instant Overlay/Road ROI V0.5.13."
   }
-  if ($startText -notmatch 'AI_DETECTION_ROI.*road' -or $startText -notmatch 'AI_REFINE_BACKGROUND_WARMUP.*1') {
+  if ($startText -notmatch 'AI_DETECTION_ROI.*full' -or $startText -notmatch 'AI_REFINE_BACKGROUND_WARMUP.*1') {
     throw "start.ps1 chưa tự bổ sung tuning V0.5.13 vào .env cũ."
   }
   Write-Host "[OK] Instant Overlay + Road ROI V0.5.13" -ForegroundColor Green
 }
 
+
+
+function Assert-FullFrameDetectStrictRoadCountV0514Contract {
+  Write-Host "`n[Traffic AI] Full-frame Detect + Strict Road Count V0.5.14" -ForegroundColor Cyan
+  $worker = Get-Content (Join-Path $root "ai-service\app\worker.py") -Raw -Encoding UTF8
+  $runtime = Get-Content (Join-Path $root "ai-service\app\runtime.py") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  $envExample = Get-Content (Join-Path $root ".env.example") -Raw -Encoding UTF8
+  $startText = Get-Content (Join-Path $PSScriptRoot "start.ps1") -Raw -Encoding UTF8
+  if ($worker -notmatch 'AI_DETECTION_ROI.*, "full"' -or $worker -notmatch 'self\.detection_roi_mode == "gate"' -or $worker -notmatch 'detections_current_frame' -or $worker -notmatch 'road_tracks_current_frame') {
+    throw "AI worker chưa tách full-frame detection khỏi Road Zone counting hoặc thiếu telemetry DET/ROAD."
+  }
+  if ($runtime -notmatch 'active_tracks' -or $runtime -notmatch 'road_tracks_current_frame' -or $runtime -notmatch 'detection_roi_mode: str = "full"') {
+    throw "PipelineState thiếu telemetry realtime hoặc default full detection V0.5.14."
+  }
+  if ($frontend -notmatch 'DETECT.*TOUPPER' -and $frontend -notmatch 'DETECT.*toUpperCase') {
+    throw "Frontend thiếu telemetry mode quét detector V0.5.14."
+  }
+  if ($frontend -notmatch 'detections_current_frame' -or $frontend -notmatch 'active_tracks' -or $frontend -notmatch 'road_tracks_current_frame') {
+    throw "Frontend thiếu DET/track/road telemetry để chẩn đoán bỏ sót."
+  }
+  if ($envExample -notmatch 'AI_DETECTION_ROI=full' -or $startText -notmatch 'AI_DETECTION_POLICY_V0514' -or $startText -notmatch 'road -> full') {
+    throw "Thiếu default/migration one-time từ Road ROI sang full-frame detect."
+  }
+  Write-Host "[OK] Full-frame Detect + Strict Road Count V0.5.14" -ForegroundColor Green
+}
 
 function Assert-SmoothPlaybackContract {
   Write-Host "`n[Traffic AI] Smooth Playback 4.1 contract" -ForegroundColor Cyan
@@ -644,6 +670,7 @@ Assert-DatasetControlsVisibilityV0510R1Contract
 Assert-ReleaseLineEndingHygieneV0512Contract
 Assert-RoadGuardV0512Contract
 Assert-InstantOverlayRoadRoiV0513Contract
+Assert-FullFrameDetectStrictRoadCountV0514Contract
 
 Write-Host "`n[Traffic AI] Road Zone + Frame Browser V0.5.11" -ForegroundColor Cyan
 $frontendV511 = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8

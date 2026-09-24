@@ -26,6 +26,9 @@ class PipelineState:
     in_count: int = 0
     out_count: int = 0
     detected_tracks: int = 0
+    detections_current_frame: int = 0
+    active_tracks: int = 0
+    road_tracks_current_frame: int = 0
     delivered_events: int = 0
     pending_events: int = 0
     delivery_failures: int = 0
@@ -36,7 +39,7 @@ class PipelineState:
     stream_frames_dropped: int = 0
     frame_policy: str = "all-frames"
     gate_roi_enabled: bool = False
-    detection_roi_mode: str = "road"
+    detection_roi_mode: str = "full"
     gate_roi: dict | None = None
     overlay_primed: bool = False
     model_name: str | None = None

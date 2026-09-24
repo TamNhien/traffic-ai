@@ -87,6 +87,18 @@ Set-EnvDefaultUpgrade "AI_GATE_MIN_NORMAL_RATIO" "0.12" "0.10"
 Set-EnvDefaultUpgrade "AI_GATE_ROI_MARGIN" "0.22" "0.16"
 Set-EnvDefaultUpgrade "AI_BICYCLE_CERTAINTY" "0.76" "0.80"
 Set-EnvDefaultUpgrade "AI_BICYCLE_MIN_HITS" "4" "5"
+
+# V0.5.14: detector quét toàn khung; Road Zone chỉ còn nhiệm vụ quyết định ĐẾM.
+# Chỉ migrate đúng một lần để người dùng vẫn có thể chủ động chuyển lại road/gate sau đó.
+$envTextV514 = Get-Content $envPath -Raw
+if ($envTextV514 -notmatch '(?m)^AI_DETECTION_POLICY_V0514=1[ \t]*\r?$') {
+  if ($envTextV514 -match '(?m)^AI_DETECTION_ROI=road[ \t]*\r?$') {
+    $envTextV514 = [regex]::Replace($envTextV514, '(?m)^AI_DETECTION_ROI=road[ \t]*\r?$', 'AI_DETECTION_ROI=full')
+    Write-Host '[Traffic AI] V0.5.14: AI_DETECTION_ROI road -> full (detect toàn khung, Road Zone chỉ lọc đếm).' -ForegroundColor Yellow
+  }
+  $envTextV514 = $envTextV514.TrimEnd("`r", "`n") + "`r`nAI_DETECTION_POLICY_V0514=1`r`n"
+  [System.IO.File]::WriteAllText($envPath, $envTextV514, [System.Text.UTF8Encoding]::new($false))
+}
 Ensure-EnvSetting "AI_STREAM_EVERY_N" "2"
 Ensure-EnvSetting "AI_STREAM_MAX_WIDTH" "960"
 Ensure-EnvSetting "AI_IOU" "0.55"
@@ -97,7 +109,7 @@ Ensure-EnvSetting "AI_GATE_DEAD_BAND_RATIO" "0.006"
 Ensure-EnvSetting "AI_GATE_REARM_DISTANCE_RATIO" "0.028"
 Ensure-EnvSetting "AI_GATE_MIN_MOTION_RATIO" "0.004"
 Ensure-EnvSetting "AI_GATE_ROI" "1"
-Ensure-EnvSetting "AI_DETECTION_ROI" "road"
+Ensure-EnvSetting "AI_DETECTION_ROI" "full"
 Ensure-EnvSetting "AI_ROAD_ROI_MARGIN" "0.02"
 Ensure-EnvSetting "AI_GATE_ROI_MARGIN" "0.16"
 Ensure-EnvSetting "AI_GATE_ROI_MIN_SPAN" "0.52"
@@ -192,7 +204,7 @@ if (-not $dashboardOk -or -not $apiOk) {
 }
 
 Write-Host ""
-Write-Host "[OK] Traffic AI V0.5.13 đã khởi động." -ForegroundColor Green
+Write-Host "[OK] Traffic AI V0.5.14 đã khởi động." -ForegroundColor Green
 Write-Host "Dashboard : https://traffic-ai.test:8443"
 Write-Host "API Docs  : https://traffic-ai.test:8444/docs"
 Write-Host "PostgreSQL: 127.0.0.1:5445 / traffic_ai_db"
