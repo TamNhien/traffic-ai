@@ -15,7 +15,7 @@ from app.sources import inspect_source, list_video_sources, read_source_preview,
 from app.training import auto_label, dataset_stats, extract_frames, prepare_dataset, purge_dataset, reset_dataset_labels, training_registry
 from app.annotation import accept_safe_annotations, get_annotation, get_annotation_image, list_annotations, save_annotation
 
-APP_VERSION = '0.5.15'
+APP_VERSION = '0.5.16'
 app = FastAPI(title='Traffic AI Service', version=APP_VERSION)
 SNAPSHOT_DIR = Path(os.getenv('SNAPSHOT_DIR', '/tmp/traffic-ai-snapshots'))
 SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
@@ -44,11 +44,11 @@ def health() -> dict:
         'status': 'ready',
         'service': 'ai-service',
         'version': APP_VERSION,
-        'pipeline': 'yolo26s-bytetrack-full-detect-road-count-v5.14',
+        'pipeline': 'yolo26s-bytetrack-hybrid-auto-road-v5.16',
         'model': os.getenv('AI_MODEL_NAME', 'yolo26s.pt'),
         'device': os.getenv('AI_DEVICE', 'auto'),
         'performance': {
-            'imgsz': int(os.getenv('AI_IMGSZ', '640')),
+            'imgsz': int(os.getenv('AI_IMGSZ', '960')),
             'process_max_width': int(os.getenv('AI_PROCESS_MAX_WIDTH', '1440')),
             'stream_every_n': int(os.getenv('AI_STREAM_EVERY_N', '2')),
             'refine_at_crossing': os.getenv('AI_REFINE_AT_CROSSING', '1'),
@@ -66,6 +66,8 @@ def health() -> dict:
             'native_video_playback': os.getenv('AI_NATIVE_VIDEO_PREVIEW', '1'),
             'video_pacing': os.getenv('AI_VIDEO_PACE', '1'),
             'mjpeg_new_frames_only': True,
+            'flow_calibration_history_frames': int(os.getenv('AI_FLOW_CALIBRATION_HISTORY_FRAMES', '1200')),
+            'flow_calibration_points_per_track': int(os.getenv('AI_FLOW_CALIBRATION_POINTS_PER_TRACK', '180')),
         },
         'gpu': gpu,
         'active_pipelines': len([p for p in registry.list() if p['status'] in {'starting', 'warming', 'running'}]),
@@ -278,6 +280,16 @@ def pipeline_status(camera_id: int) -> dict:
         return registry.get(camera_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail='Pipeline not found') from exc
+
+
+@app.get('/pipelines/{camera_id}/road-proposal')
+def pipeline_road_proposal(camera_id: int) -> dict:
+    try:
+        return registry.calibration_proposal(camera_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail='Pipeline not found') from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.post('/pipelines/{camera_id}/stop')

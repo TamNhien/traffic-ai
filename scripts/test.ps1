@@ -300,18 +300,18 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.15") { throw "VERSION phải là 0.5.15, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0029_hybrid_recall_v0515.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0029_hybrid_recall_v0515.py." }
+  if ($version -ne "0.5.16") { throw "VERSION phải là 0.5.16, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0030_auto_road_v0516.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0030_auto_road_v0516.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0029_hybrid_recall_v0515"' -or $migrationText -notmatch 'down_revision = "0028_full_detect_v0514"' -or $migrationText -notmatch "value='0.5.15'") {
-    throw "Migration 0029_hybrid_recall_v0515 không đúng contract V0.5.15."
+  if ($migrationText -notmatch 'revision = "0030_auto_road_v0516"' -or $migrationText -notmatch 'down_revision = "0029_hybrid_recall_v0515"' -or $migrationText -notmatch "value='0.5.16'") {
+    throw "Migration 0030_auto_road_v0516 không đúng contract V0.5.16."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
 
 function Assert-AlembicRevisionSafetyContract {
-  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.15" -ForegroundColor Cyan
+  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.16" -ForegroundColor Cyan
   $versionsDir = Join-Path $root "backend\alembic\versions"
   $bad = @()
   Get-ChildItem $versionsDir -Filter "*.py" | ForEach-Object {
@@ -335,7 +335,7 @@ function Assert-AlembicRevisionSafetyContract {
   if ($v17 -notmatch 'revision = "0017_ai_test_dep_v053"') {
     throw "Migration V0.5.3 chưa dùng revision ID rút gọn an toàn."
   }
-  Write-Host "[OK] Alembic revision-length safety V0.5.15" -ForegroundColor Green
+  Write-Host "[OK] Alembic revision-length safety V0.5.16" -ForegroundColor Green
 }
 
 
@@ -477,6 +477,38 @@ function Assert-HybridRecallTrackRescueV0515Contract {
     throw "Camera confidence chưa hạ baseline để cứu xe nhỏ/nhanh."
   }
   Write-Host "[OK] Hybrid Recall + Track Rescue V0.5.15" -ForegroundColor Green
+}
+
+function Assert-AutoRoadZoneV0516Contract {
+  Write-Host "`n[Traffic AI] Auto Road-Zone Calibration V0.5.16" -ForegroundColor Cyan
+  $flow = Get-Content (Join-Path $root "ai-service\app\flow_calibration.py") -Raw -Encoding UTF8
+  $worker = Get-Content (Join-Path $root "ai-service\app\worker.py") -Raw -Encoding UTF8
+  $runtime = Get-Content (Join-Path $root "ai-service\app\runtime.py") -Raw -Encoding UTF8
+  $aiMain = Get-Content (Join-Path $root "ai-service\app\main.py") -Raw -Encoding UTF8
+  $routes = Get-Content (Join-Path $root "backend\app\api\routes.py") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  $css = Get-Content (Join-Path $root "frontend\src\styles.css") -Raw -Encoding UTF8
+  $envExample = Get-Content (Join-Path $root ".env.example") -Raw -Encoding UTF8
+  $startText = Get-Content (Join-Path $PSScriptRoot "start.ps1") -Raw -Encoding UTF8
+  if ($flow -notmatch 'class FlowCalibrator' -or $flow -notmatch 'dominant_direction' -or $flow -notmatch 'moving_track_count') {
+    throw "Thiếu thuật toán học luồng xe / đề xuất Road Zone V0.5.16."
+  }
+  if ($worker -notmatch '_flow_calibrator\.add' -or $worker -notmatch 'calibration_proposal' -or $runtime -notmatch 'calibration_ready') {
+    throw "AI runtime chưa thu thập quỹ đạo hoặc thiếu telemetry calibration."
+  }
+  if ($aiMain -notmatch "road-proposal" -or $routes -notmatch 'road-proposal') {
+    throw "Thiếu endpoint AI/Backend cho Auto Road-Zone."
+  }
+  if ($frontend -notmatch 'AI đề xuất theo luồng xe' -or $frontend -notmatch 'Dừng AI \+ áp dụng đề xuất' -or $frontend -notmatch 'calibration_moving_tracks') {
+    throw "Frontend thiếu workflow đề xuất/áp dụng Auto Road-Zone."
+  }
+  if ($css -notmatch '\.auto-road-toolbar' -or $css -notmatch '\.proposal-status') {
+    throw "CSS thiếu Auto Road-Zone UI."
+  }
+  if ($envExample -notmatch 'AI_FLOW_CALIBRATION_HISTORY_FRAMES=1200' -or $startText -notmatch 'AI_FLOW_CALIBRATION_HISTORY_FRAMES') {
+    throw "Thiếu cấu hình runtime Auto Road-Zone V0.5.16."
+  }
+  Write-Host "[OK] Auto Road-Zone Calibration V0.5.16" -ForegroundColor Green
 }
 
 function Assert-SmoothPlaybackContract {
@@ -723,6 +755,7 @@ Assert-RoadGuardV0512Contract
 Assert-InstantOverlayRoadRoiV0513Contract
 Assert-FullFrameDetectStrictRoadCountV0514Contract
 Assert-HybridRecallTrackRescueV0515Contract
+Assert-AutoRoadZoneV0516Contract
 
 Write-Host "`n[Traffic AI] Road Zone + Frame Browser V0.5.11" -ForegroundColor Cyan
 $frontendV511 = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8

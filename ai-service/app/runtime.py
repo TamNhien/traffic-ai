@@ -30,6 +30,12 @@ class PipelineState:
     active_tracks: int = 0
     untracked_detections: int = 0
     road_tracks_current_frame: int = 0
+    calibration_samples: int = 0
+    calibration_tracks: int = 0
+    calibration_moving_tracks: int = 0
+    calibration_ready: bool = False
+    calibration_quality: float = 0.0
+    calibration_proposal: dict | None = None
     delivered_events: int = 0
     pending_events: int = 0
     delivery_failures: int = 0
@@ -96,6 +102,22 @@ class PipelineRegistry:
             if state is None:
                 raise KeyError(camera_id)
             return asdict(state)
+
+    def calibration_proposal(self, camera_id: int) -> dict:
+        with self._lock:
+            worker = self._workers.get(camera_id)
+            state = self._states.get(camera_id)
+        if worker is not None:
+            proposal = worker.calibration_proposal()
+            if state is not None:
+                state.calibration_proposal = proposal
+                state.calibration_quality = float(proposal.get("quality", 0.0))
+            return proposal
+        if state is not None and state.calibration_proposal is not None:
+            return dict(state.calibration_proposal)
+        if state is None:
+            raise KeyError(camera_id)
+        raise ValueError("Phiên AI chưa thu đủ dữ liệu luồng xe để tạo đề xuất Road Zone.")
 
     def latest_jpeg(self, camera_id: int) -> bytes | None:
         with self._lock:

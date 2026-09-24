@@ -12,6 +12,7 @@ import httpx2 as httpx
 from app.async_tasks import EventDispatcher, LatestFrameEncoder
 from app.classification import TrackLabelSmoother, VehicleClassPolicy
 from app.counting import CountingLine, LineCrossingCounter, RoadZone
+from app.flow_calibration import FlowCalibrator
 from app.gate_roi import gate_roi_for_line, road_zone_roi
 from app.schemas import PipelineStart
 from app.tracking import TrackContinuityResolver, motion_leading_anchor
@@ -42,6 +43,10 @@ class PipelineWorker(threading.Thread):
         self._refiner_model = None
         self._refine_ids: list[int] = []
         self._refiner_thread: threading.Thread | None = None
+        self._flow_calibrator = FlowCalibrator(
+            history_frames=int(os.getenv("AI_FLOW_CALIBRATION_HISTORY_FRAMES", "1200")),
+            per_track_points=int(os.getenv("AI_FLOW_CALIBRATION_POINTS_PER_TRACK", "180")),
+        )
         self._continuity = TrackContinuityResolver(
             max_gap_frames=int(os.getenv("AI_STITCH_MAX_GAP", "30")),
             max_distance_ratio=float(os.getenv("AI_STITCH_DISTANCE_RATIO", "0.14")),
@@ -100,6 +105,12 @@ class PipelineWorker(threading.Thread):
 
     def stop(self) -> None:
         self._stop_event.set()
+
+    def calibration_proposal(self) -> dict:
+        result = self._flow_calibrator.proposal()
+        result["camera_id"] = self.payload.camera_id
+        result["session_id"] = self.payload.session_id
+        return result
 
     def _start_refiner_background(self, YOLO, np, device, use_half: bool) -> None:
         if not self.refine_at_crossing or self._refiner_thread is not None:
@@ -331,6 +342,7 @@ class PipelineWorker(threading.Thread):
                         if counter.road_zone is not None and counter.road_zone.contains(anchor, width, height):
                             self.state.road_tracks_current_frame += 1
                         self._seen_track_ids.add(track_id)
+                        self._flow_calibrator.add(track_id, anchor, width, height, frame_index)
                         self._labels.update(track_id, current_label, confidence_f)
                         stable_label, class_certainty, class_hits = self._labels.stable_label(track_id, current_label)
 
@@ -400,6 +412,20 @@ class PipelineWorker(threading.Thread):
                         label = str(result.names[int(cls_id)])
                         self._draw_raw_detection(cv2, frame, rect, label, float(confidence))
 
+                calibration_stats = self._flow_calibrator.stats()
+                self.state.calibration_samples = calibration_stats["sample_count"]
+                self.state.calibration_tracks = calibration_stats["track_count"]
+                self.state.calibration_moving_tracks = calibration_stats["moving_track_count"]
+                self.state.calibration_ready = calibration_stats["ready"]
+                if self.state.calibration_ready and (frame_index % 30 == 0 or self.state.calibration_proposal is None):
+                    try:
+                        cached_proposal = self._flow_calibrator.proposal()
+                        cached_proposal["camera_id"] = self.payload.camera_id
+                        cached_proposal["session_id"] = self.payload.session_id
+                        self.state.calibration_proposal = cached_proposal
+                        self.state.calibration_quality = float(cached_proposal.get("quality", 0.0))
+                    except ValueError:
+                        pass
                 self.state.detected_tracks = len(self._seen_track_ids)
                 self._draw_overlay(cv2, frame, counter)
                 if pending_crossing_events:

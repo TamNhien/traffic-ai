@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './styles.css'
 
-const APP_VERSION = '0.5.15'
+const APP_VERSION = '0.5.16'
 const vehicleLabels = {
   motorcycle: 'Xe máy', bicycle: 'Xe đạp', car: 'Ô tô', bus: 'Xe buýt', truck: 'Xe tải', other: 'Khác'
 }
@@ -295,7 +295,7 @@ function AnnotationEditor({ dataset, onChanged }) {
   const currentIndex = Math.max(0, items.findIndex(i=>i.image_name===currentName))
   const imageUrl = currentName ? `/api/datasets/${dataset.id}/images/${encodeURIComponent(currentName)}?v=${encodeURIComponent(dataset.updated_at || '')}` : ''
   return <section className="panel annotation-panel" id="annotation">
-    <div className="panel-head"><div><span className="panel-kicker">ANNOTATION STUDIO · SMART REVIEW</span><h2>3. Chỉ rà soát ảnh cần thiết trước khi train lại</h2></div><span className="lock-state">V0.5.15</span></div>
+    <div className="panel-head"><div><span className="panel-kicker">ANNOTATION STUDIO · SMART REVIEW</span><h2>3. Chỉ rà soát ảnh cần thiết trước khi train lại</h2></div><span className="lock-state">V0.5.16</span></div>
     <p className="hint"><strong>Không cần sửa tay cả 1.200 ảnh.</strong> Chế độ mặc định đưa ảnh xe máy/xe đạp, confidence thấp, ảnh đông xe hoặc ảnh không detection lên trước. Ảnh ô tô/bus/truck rõ và confidence cao có thể duyệt nhanh sau khi bạn spot-check.</p>
     <div className="annotation-summary"><span>Tổng ảnh: <strong>{indexData?.total ?? 0}</strong></span><span>Đang hiện: <strong>{indexData?.filtered_total ?? 0}</strong></span><span>Cần ưu tiên: <strong>{indexData?.priority_images ?? 0}</strong></span><span>Có thể duyệt nhanh: <strong>{indexData?.safe_auto_accept_images ?? 0}</strong></span><span>Đã duyệt: <strong>{indexData?.reviewed_images ?? dataset.reviewed_images ?? 0}</strong></span><span>Ảnh khó: <strong>{indexData?.difficult_images ?? dataset.difficult_images ?? 0}</strong></span><span>Mất cân bằng: <strong>{indexData?.imbalance_ratio ? `x${indexData.imbalance_ratio}` : '—'}</strong></span></div>
     <div className="smart-review-bar"><label>Lọc ảnh<select value={reviewMode} onChange={e=>setReviewMode(e.target.value)}><option value="priority">🔥 Ưu tiên cần kiểm tra</option><option value="unreviewed">Chưa duyệt</option><option value="difficult">Ảnh khó</option><option value="all">Tất cả ảnh</option></select></label><button className="secondary" disabled={bulkBusy || !(indexData?.safe_auto_accept_images>0)} onClick={acceptSafe}>{bulkBusy?'Đang duyệt...':'Duyệt nhanh ảnh tin cậy'}</button></div>
@@ -344,6 +344,7 @@ function App() {
   const [busy, setBusy] = useState(false)
   const [form, setForm] = useState(defaultCameraForm())
   const [lineForm, setLineForm] = useState({confidence_threshold:0.06,line_x1:0.32,line_y1:0.59,line_x2:0.84,line_y2:0.59,road_x1:0.20,road_y1:0.16,road_x2:0.80,road_y2:0.16,road_x3:0.96,road_y3:0.98,road_x4:0.04,road_y4:0.98})
+  const [roadProposal, setRoadProposal] = useState(null)
   const [datasets, setDatasets] = useState([])
   const [trainingRuns, setTrainingRuns] = useState([])
   const [datasetForm, setDatasetForm] = useState({name:'Dataset giao thông Việt Nam', every_n_frames:15, max_images:600, smart_dedupe:true, min_change_ratio:0.008})
@@ -430,6 +431,7 @@ function App() {
 
   useEffect(() => {
     setOverlayReady(false)
+    setRoadProposal(null)
   }, [selectedId, activePipeline?.session_id])
 
   useEffect(() => {
@@ -543,6 +545,39 @@ function App() {
     } catch (err) { setError(err.message) } finally { setBusy(false) }
   }
 
+  const requestRoadProposal = async () => {
+    if (!selected || !sessionPipeline?.calibration_ready) return
+    setBusy(true); setError(''); setNotice('')
+    try {
+      const response = await fetch(`/api/cameras/${selected.id}/road-proposal`, {cache:'no-store'})
+      const body = await readApiBody(response)
+      if (!response.ok) throw new Error(body.detail || 'Chưa tạo được đề xuất vùng lòng đường')
+      const geometry = body.geometry || {}
+      setRoadProposal(body)
+      setLineForm(prev => ({...prev, ...geometry}))
+      setNotice(`AI đã đề xuất vùng lòng đường từ ${body.moving_track_count} track / ${body.sample_count} điểm chuyển động · chất lượng ${Math.round((body.quality || 0)*100)}%. Xem vùng xanh/vạch vàng rồi bấm “Dừng AI + áp dụng đề xuất”.`)
+    } catch (err) { setError(err.message) } finally { setBusy(false) }
+  }
+
+  const applyRoadProposal = async () => {
+    if (!selected || !roadProposal?.geometry) return
+    setBusy(true); setError(''); setNotice('')
+    try {
+      if (activePipeline) {
+        const stopResponse = await fetch(`/api/cameras/${selected.id}/stop`, {method:'POST'})
+        const stopBody = await readApiBody(stopResponse)
+        if (!stopResponse.ok) throw new Error(stopBody.detail || 'Không dừng được AI để áp dụng đề xuất')
+      }
+      const body = {...roadProposal.geometry, confidence_threshold:Number(lineForm.confidence_threshold)}
+      const response = await fetch(`/api/cameras/${selected.id}`, {method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)})
+      const result = await readApiBody(response)
+      if (!response.ok) throw new Error(result.detail || 'Không lưu được đề xuất Road Zone')
+      setRoadProposal(null)
+      setNotice('Đã dừng AI và lưu đề xuất Road Zone + vạch đếm. Bấm Chạy AI để kiểm thử cấu hình mới.')
+      await load()
+    } catch (err) { setError(err.message) } finally { setBusy(false) }
+  }
+
   const applySuggestedSource = () => {
     if (!selected || !sourceStatus?.suggested_source_url) return
     setEditingId(selected.id); setForm(prev => ({...prev, source_type:'video', source_url:sourceStatus.suggested_source_url}))
@@ -639,13 +674,13 @@ const activateTraining = async run => {
             {activePipeline && selected?.source_type === 'video' ? <>
               <video key={`${selected.id}-${activePipeline.session_id}`} className={`preview-layer native-preview ${previewMode === 'smooth' || !overlayReady ? 'visible' : ''}`} src={nativeVideoUrl} autoPlay muted controls={previewMode === 'smooth'} playsInline preload="auto" />
               {previewMode === 'overlay' && <img className={`preview-layer overlay-preview ${overlayReady ? 'visible' : ''}`} src={overlayStreamUrl} alt="Live AI stream" onLoad={()=>setOverlayReady(true)} />}
-              {(previewMode === 'smooth' || !overlayReady) && <><RoadZoneOverlay zone={lineForm} /><CountingLineOverlay line={lineForm} /></>}
+              {(previewMode === 'smooth' || !overlayReady || roadProposal) && <><RoadZoneOverlay zone={lineForm} /><CountingLineOverlay line={lineForm} /></>}
               {previewMode === 'smooth' && <span className="smooth-badge">Phát mượt · AI xử lý nền</span>}
-              {previewMode === 'overlay' && !overlayReady && <span className="overlay-loading-badge">Đang nối AI Overlay · video vẫn phát trong lúc chờ frame AI đầu tiên</span>}
+              {previewMode === 'overlay' && !overlayReady && <span className="overlay-loading-badge">Đang nối AI Overlay · video vẫn phát trong lúc chờ frame AI đầu tiên</span>}{roadProposal && <span className="proposal-badge">ĐỀ XUẤT AI · chưa áp dụng</span>}
             </> : activePipeline ? <img src={overlayStreamUrl} alt="Live AI stream" /> : <img src={previewUrl} alt="Preview camera" onLoad={e=>{e.currentTarget.style.visibility='visible'}} onError={e=>{e.currentTarget.style.visibility='hidden'}} />}
           </div>
-          <div className="camera-select"><label>Camera</label><select value={selectedId || ''} onChange={e => setSelectedId(Number(e.target.value))}><option value="">-- Chọn camera --</option>{cameras.map(c => <option key={c.id} value={c.id}>{c.code} · {c.name}</option>)}</select><span>{activePipeline ? `INFERENCE · ${activePipeline.model_name || 'model đang kích hoạt'} · ${activePipeline.hybrid_mode ? `HYBRID detect ${activePipeline.detector_model_name || 'pretrained'} + refine best.pt` : `DIRECT ${activePipeline.detector_model_name || activePipeline.model_name || ''}`} · AI ${activePipeline.processing_progress ?? 0}% · FPS ${activePipeline.fps}/${activePipeline.source_fps || '-'} · RT x${activePipeline.realtime_factor ?? 0} · lag ${activePipeline.playback_lag_seconds ?? 0}s · ${activePipeline.inference_ms ?? 0} ms · ${String(activePipeline.device || '?').toUpperCase()} · DET ${activePipeline.detections_current_frame ?? 0} · chưa ID ${activePipeline.untracked_detections ?? 0} · track ${activePipeline.active_tracks ?? 0} · road ${activePipeline.road_tracks_current_frame ?? 0} · seen ${activePipeline.detected_tracks ?? 0} · DETECT ${(activePipeline.detection_roi_mode || 'full').toUpperCase()} · Tổng ${activePipeline.total_count} · IN ${activePipeline.in_count ?? 0} · OUT ${activePipeline.out_count ?? 0} · cứu ${activePipeline.rescued_crossings ?? 0} · loại ngoài lòng đường ${activePipeline.rejected_outside_road ?? 0}` : selected?.source_url || 'Chưa có camera'}</span></div>
-          {activePipeline && (activePipeline.detections_current_frame ?? 0) > 0 && (activePipeline.active_tracks ?? 0) === 0 && <div className="source-status bad"><strong>⚠ YOLO thấy xe nhưng ByteTrack chưa cấp ID</strong><span>V0.5.15 vẫn vẽ box DET màu vàng cho detection chưa có ID. Bộ đếm chỉ tăng khi track ổn định; profile ByteTrack high-recall sẽ cố bám các xe nhỏ/nhanh ở những frame tiếp theo.</span></div>}
+          <div className="camera-select"><label>Camera</label><select value={selectedId || ''} onChange={e => setSelectedId(Number(e.target.value))}><option value="">-- Chọn camera --</option>{cameras.map(c => <option key={c.id} value={c.id}>{c.code} · {c.name}</option>)}</select><span>{activePipeline ? `INFERENCE · ${activePipeline.model_name || 'model đang kích hoạt'} · ${activePipeline.hybrid_mode ? `HYBRID detect ${activePipeline.detector_model_name || 'pretrained'} + refine best.pt` : `DIRECT ${activePipeline.detector_model_name || activePipeline.model_name || ''}`} · AI ${activePipeline.processing_progress ?? 0}% · FPS ${activePipeline.fps}/${activePipeline.source_fps || '-'} · RT x${activePipeline.realtime_factor ?? 0} · lag ${activePipeline.playback_lag_seconds ?? 0}s · ${activePipeline.inference_ms ?? 0} ms · ${String(activePipeline.device || '?').toUpperCase()} · DET ${activePipeline.detections_current_frame ?? 0} · chưa ID ${activePipeline.untracked_detections ?? 0} · track ${activePipeline.active_tracks ?? 0} · road ${activePipeline.road_tracks_current_frame ?? 0} · seen ${activePipeline.detected_tracks ?? 0} · calib ${activePipeline.calibration_moving_tracks ?? 0}T/${activePipeline.calibration_samples ?? 0}P · DETECT ${(activePipeline.detection_roi_mode || 'full').toUpperCase()} · Tổng ${activePipeline.total_count} · IN ${activePipeline.in_count ?? 0} · OUT ${activePipeline.out_count ?? 0} · cứu ${activePipeline.rescued_crossings ?? 0} · loại ngoài lòng đường ${activePipeline.rejected_outside_road ?? 0}` : selected?.source_url || 'Chưa có camera'}</span></div>
+          {activePipeline && (activePipeline.detections_current_frame ?? 0) > 0 && (activePipeline.active_tracks ?? 0) === 0 && <div className="source-status bad"><strong>⚠ YOLO thấy xe nhưng ByteTrack chưa cấp ID</strong><span>V0.5.16 vẫn vẽ box DET màu vàng cho detection chưa có ID. Bộ đếm chỉ tăng khi track ổn định; profile ByteTrack high-recall sẽ cố bám các xe nhỏ/nhanh ở những frame tiếp theo.</span></div>}
           {activePipeline && (activePipeline.active_tracks ?? 0) > 0 && (activePipeline.road_tracks_current_frame ?? 0) === 0 && <div className="source-status bad"><strong>⚠ Có track nhưng Road Zone chưa phủ luồng xe</strong><span>Dừng AI rồi kéo vùng xanh bao phần lòng đường mà xe thực sự chạy; chỉ vùng xanh mới được phép đếm.</span></div>}
           {selected && !activePipeline && <div className={`source-status ${sourceStatus?.valid ? 'ok' : 'bad'}`}><strong>{sourceStatus?.valid ? '✓ Nguồn sẵn sàng' : '⚠ Nguồn chưa sẵn sàng'}</strong><span>{sourceStatus?.message || 'Đang kiểm tra nguồn...'}</span>{sourceStatus?.suggested_source_url && <><small>Gợi ý: {sourceStatus.suggested_source_url}</small><button type="button" className="inline-action" onClick={applySuggestedSource}>Dùng nguồn gợi ý</button></>}</div>}
           {latestPipeline && !activePipeline && <div className="pipeline-result">Lần chạy gần nhất: <strong>{latestPipeline.status}</strong> · {latestPipeline.processed_frames} frame · {latestPipeline.total_count} lượt cắt vạch · đã ghi {latestPipeline.delivered_events ?? 0} sự kiện{latestPipeline.last_error ? ` · ${latestPipeline.last_error}` : ''}</div>}
@@ -658,11 +693,13 @@ const activateTraining = async run => {
           <CountingLineEditor previewUrl={previewUrl} line={lineForm} onChange={setLineForm} disabled={!!activePipeline} />
           <div className="preset-row"><button disabled={busy || !!activePipeline} onClick={()=>applyPreset('road-horizontal')}>Gợi ý cho clip hiện tại</button><button disabled={busy || !!activePipeline} onClick={()=>applyPreset('horizontal')}>Đường ngang</button><button disabled={busy || !!activePipeline} onClick={()=>applyPreset('vertical')}>Đường dọc</button></div>
           <div className="road-zone-toolbar"><span>Vùng lòng đường:</span><button className="secondary" disabled={busy || !!activePipeline} onClick={()=>applyRoadZonePreset('roadway')}>Trapezoid đường</button><button className="secondary" disabled={busy || !!activePipeline} onClick={()=>applyRoadZonePreset('narrow')}>Hẹp hơn</button><button className="secondary" disabled={busy || !!activePipeline} onClick={()=>applyRoadZonePreset('full')}>Toàn khung</button></div>
+          <div className="auto-road-toolbar"><button type="button" disabled={!sessionPipeline || busy || !sessionPipeline?.calibration_ready} onClick={requestRoadProposal}>{!sessionPipeline ? 'Chạy AI để học luồng xe' : sessionPipeline?.calibration_ready ? `✨ AI đề xuất theo luồng xe · ${sessionPipeline.calibration_moving_tracks ?? 0} track` : `Đang học luồng xe · ${sessionPipeline?.calibration_moving_tracks ?? 0} track / ${sessionPipeline?.calibration_samples ?? 0} điểm`}</button>{roadProposal && <button type="button" className="success" disabled={busy || !countingGeometryState.valid} onClick={applyRoadProposal}>{activePipeline ? '✓ Dừng AI + áp dụng đề xuất' : '✓ Áp dụng đề xuất'}</button>}</div>
+          {roadProposal && <div className="proposal-status"><strong>✨ Auto Road-Zone · chất lượng {Math.round((roadProposal.quality || 0)*100)}%</strong><span>{roadProposal.moving_track_count} track chuyển động · {roadProposal.sample_count} điểm · xe đứng/đỗ đã bị bỏ khỏi dữ liệu học vùng đường.</span></div>}
           <div className="nudge-grid"><button disabled={!!activePipeline} onClick={()=>moveLine(0,-0.02)}>↑ Lên</button><button disabled={!!activePipeline} onClick={()=>moveLine(0,0.02)}>↓ Xuống</button><button disabled={!!activePipeline} onClick={()=>moveLine(-0.02,0)}>← Trái</button><button disabled={!!activePipeline} onClick={()=>moveLine(0.02,0)}>→ Phải</button><button disabled={!!activePipeline} onClick={()=>resizeLine(1.12)}>Dài hơn</button><button disabled={!!activePipeline} onClick={()=>resizeLine(0.88)}>Ngắn hơn</button></div>
           <div className="line-grid">{lineField('line_x1','X1')}{lineField('line_y1','Y1')}{lineField('line_x2','X2')}{lineField('line_y2','Y2')}{lineField('confidence_threshold','Confidence')}</div>
           <div className={`geometry-status ${countingGeometryState.valid ? 'ok' : 'bad'}`}><strong>{countingGeometryState.valid ? '✓ ROAD GUARD hợp lệ' : '⚠ Chưa thể lưu'}</strong><span>{countingGeometryState.message}</span></div>
           <button disabled={!selected || busy || !!activePipeline || !countingGeometryState.valid} onClick={saveCountingLine}>Lưu vạch + vùng lòng đường</button>
-          <p className="hint"><strong>Vùng xanh = lòng đường được phép đếm.</strong> V0.5.15 dùng chế độ <strong>Hybrid Recall</strong>: YOLO26 pretrained quét toàn khung để tạo track ổn định, còn best.pt tùy biến kiểm tra lại class tại crossing. Detection chưa có ID vẫn hiện box vàng; chỉ track cắt vạch vàng hợp lệ trong vùng xanh mới được cộng IN/OUT.</p>
+          <p className="hint"><strong>Vùng xanh = lòng đường được phép đếm.</strong> V0.5.16 giữ <strong>Hybrid Recall</strong> và thêm <strong>Auto Road-Zone</strong>: khi AI chạy đủ track chuyển động, bấm “AI đề xuất theo luồng xe” để hệ thống tự khoanh phần đường xe thật sự đi qua và đặt vạch gần vuông góc luồng xe. Hybrid Recall: YOLO26 pretrained quét toàn khung để tạo track ổn định, còn best.pt tùy biến kiểm tra lại class tại crossing. Detection chưa có ID vẫn hiện box vàng; chỉ track cắt vạch vàng hợp lệ trong vùng xanh mới được cộng IN/OUT.</p>
         </article>
 
         <article className="panel"><div className="panel-head"><div><span className="panel-kicker">CAMERA SOURCE</span><h2>{editingId ? `Sửa Camera #${editingId}` : 'Tạo camera mới'}</h2></div><button className="secondary" type="button" disabled={busy || !!activePipeline} onClick={beginNewCamera}>Camera mới</button></div><form className="camera-form" onSubmit={saveCamera}>
@@ -675,8 +712,8 @@ const activateTraining = async run => {
       </section>
 
       <section className="training-layout" id="training">
-        <article className="panel training-panel"><div className="panel-head"><div><span className="panel-kicker">DATASET STUDIO · CLEAN RETRAIN</span><h2>Dataset giao thông Việt Nam</h2></div><span className="lock-state">V0.5.15</span></div>
-          <p className="hint"><strong>Train lại từ đầu</strong> nên tạo dataset mới sạch từ video gốc. V0.5.15 mặc định lấy mỗi 15 frame, tối đa 600 ảnh và tự loại frame gần trùng; vì vậy bạn không còn phải mặc định xử lý 1.200 ảnh gần giống nhau.</p>
+        <article className="panel training-panel"><div className="panel-head"><div><span className="panel-kicker">DATASET STUDIO · CLEAN RETRAIN</span><h2>Dataset giao thông Việt Nam</h2></div><span className="lock-state">V0.5.16</span></div>
+          <p className="hint"><strong>Train lại từ đầu</strong> nên tạo dataset mới sạch từ video gốc. V0.5.16 mặc định lấy mỗi 15 frame, tối đa 600 ảnh và tự loại frame gần trùng; vì vậy bạn không còn phải mặc định xử lý 1.200 ảnh gần giống nhau.</p>
           <div className="dataset-form">
             <label className="dataset-name-field">Tên dataset<input value={datasetForm.name} onChange={e=>setDatasetForm({...datasetForm,name:e.target.value})} placeholder="traffic-vietnam-clean-01" /></label>
             <label>Mỗi N frame<input type="number" min="1" value={datasetForm.every_n_frames} onChange={e=>setDatasetForm({...datasetForm,every_n_frames:e.target.value})}/></label>
@@ -696,7 +733,7 @@ const activateTraining = async run => {
           <div className="train-form"><label>Base model<select value={trainingForm.base_model} onChange={e=>setTrainingForm({...trainingForm,base_model:e.target.value})}><option value="yolo26s.pt">YOLO26s</option><option value="yolo26m.pt">YOLO26m</option></select></label><label>Epochs<input type="number" min="1" value={trainingForm.epochs} onChange={e=>setTrainingForm({...trainingForm,epochs:e.target.value})}/></label><label>Image size<input type="number" min="320" step="32" value={trainingForm.imgsz} onChange={e=>setTrainingForm({...trainingForm,imgsz:e.target.value})}/></label><label>Batch<input type="number" min="1" value={trainingForm.batch} onChange={e=>setTrainingForm({...trainingForm,batch:e.target.value})}/></label></div>
           <p className="hint"><strong>Train mới từ đầu trong Traffic AI</strong> = tạo một Training Run mới từ base model pretrained bạn chọn (khuyến nghị YOLO26s), <strong>không tiếp tục học từ best.pt cũ</strong>. Đây là fine-tune mới, không phải random-weight training.</p><button disabled={!selectedDataset || selectedDataset?.status !== 'ready' || busy || trainingRuns.some(r=>r.status==='running')} onClick={startTraining}>5. Bắt đầu fine-tune mới RTX 3060</button>
           <div className="event-list training-runs">{trainingRuns.length ? trainingRuns.map(run=><div className="event-row training-row" key={run.id}><span>Run #{run.id} · Dataset #{run.dataset_id} · {run.base_model}</span><strong>{String(run.status).toUpperCase()} · {Number(run.progress || 0).toFixed(1)}%</strong><small>Epoch {run.current_epoch}/{run.epochs} · P {run.precision?.toFixed?.(3) ?? '-'} · R {run.recall?.toFixed?.(3) ?? '-'} · mAP50 {run.map50?.toFixed?.(3) ?? '-'} · mAP50-95 {run.map50_95?.toFixed?.(3) ?? '-'}</small>{run.status==='completed' && (run.is_active_model ? <span className="active-model-badge">✓ ĐANG DÙNG best.pt</span> : <button className="inline-action" disabled={busy} onClick={()=>activateTraining(run)}>6. Kích hoạt best.pt</button>)}{run.last_error && <small className="bad-text">{run.last_error}</small>}</div>) : <div className="empty">Chưa có training run.</div>}</div>
-          <p className="hint">Sau khi kích hoạt <code>best.pt</code>, V0.5.15 dùng <strong>Hybrid Recall</strong>: YOLO26 pretrained đảm nhiệm detect/track để không bỏ xe vì recall thấp, còn <code>best.pt</code> tùy biến refine class tại crossing. Strict Gate/Road Guard vẫn quyết định đếm; Annotation Studio tiếp tục dùng để nâng chất lượng ground truth cho các lần train sau.</p>
+          <p className="hint">Sau khi kích hoạt <code>best.pt</code>, V0.5.16 dùng <strong>Hybrid Recall</strong>: YOLO26 pretrained đảm nhiệm detect/track để không bỏ xe vì recall thấp, còn <code>best.pt</code> tùy biến refine class tại crossing. Strict Gate/Road Guard vẫn quyết định đếm; Annotation Studio tiếp tục dùng để nâng chất lượng ground truth cho các lần train sau.</p>
         </article>
       </section>
 

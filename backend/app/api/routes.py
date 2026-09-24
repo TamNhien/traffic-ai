@@ -446,6 +446,24 @@ def list_pipelines() -> list[dict]:
         raise HTTPException(status_code=502, detail=f"AI service unavailable: {exc}") from exc
 
 
+@router.get("/cameras/{camera_id}/road-proposal")
+def camera_road_proposal(camera_id: int, db: Session = Depends(get_db)) -> dict:
+    camera = db.get(Camera, camera_id)
+    if camera is None:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    try:
+        response = httpx.get(f"{settings.ai_service_url}/pipelines/{camera_id}/road-proposal", timeout=5.0)
+        if response.status_code == 409:
+            detail = response.json().get("detail", "Chưa đủ dữ liệu luồng xe để đề xuất Road Zone.")
+            raise HTTPException(status_code=409, detail=detail)
+        response.raise_for_status()
+        return response.json()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Không lấy được đề xuất Road Zone từ AI Service: {exc}") from exc
+
+
 @router.post("/internal/events", response_model=VehicleEventRead, status_code=201)
 def internal_event(payload: VehicleEventCreate, x_ai_token: str | None = Header(default=None), db: Session = Depends(get_db)) -> VehicleEvent:
     _assert_ai_token(x_ai_token)

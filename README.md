@@ -1,72 +1,98 @@
-# Traffic AI V0.5.15 — Hybrid Recall + Track Rescue 🚗⚡
+# Traffic AI V0.5.16 — Auto Road-Zone Calibration 🚗🛣️✨
 
-V0.5.15 sửa lỗi quan sát trực tiếp trong clip thực tế: xe chạy qua liên tục nhưng gần như không có box và không đếm. Telemetry trong clip cho thấy có thời điểm `DET 1 · track 0 · road 0 · seen 2`: detector đã tạo detection nhưng ByteTrack chưa cấp ID. V0.5.14 lại chỉ vẽ box khi `boxes.id` tồn tại, nên detection thật bị ẩn khỏi AI Overlay; không có track ID thì Strict Gate cũng không thể đếm.
+V0.5.16 tiếp tục từ V0.5.15-R1 và giải quyết điểm nghẽn còn lại khi detector/ByteTrack đã thấy nhiều xe nhưng `road = 0` hoặc số `loại ngoài lòng đường` tăng cao: **Road Zone đặt thủ công không phủ đúng luồng xe thực tế**.
 
-## Thay đổi chính
+Bản này giữ nguyên Hybrid Recall (`YOLO26s pretrained` detect/track toàn khung + `best.pt` đang kích hoạt refine class tại crossing), Strict Gate, Road Guard 2.0, Dataset/Annotation Studio và model Run #3. Không xóa dataset, training run hay model.
 
-- **Luôn vẽ detection thô**: detection chưa có track ID được vẽ box vàng `DET`, không còn tình trạng `DET > 0` nhưng màn hình như không nhận dạng.
-- **Hybrid Recall mặc định khi kích hoạt custom `best.pt`**:
-  - `yolo26s.pt` pretrained làm detector + ByteTrack full-frame để ưu tiên recall và continuity;
-  - `best.pt` tùy biến vẫn là model đang kích hoạt và được dùng để refine class tại thời điểm crossing;
-  - Road Zone vẫn chỉ quyết định xe nào được phép đếm.
-- **Tăng kích thước inference mặc định** `640 → 960` để bắt xe nhỏ/xa tốt hơn trên camera giao thông.
-- **Confidence mặc định** `0.12 → 0.06` cho camera đang dùng default cũ.
-- **ByteTrack high-recall profile**:
-  - `track_high_thresh: 0.05`
-  - `track_low_thresh: 0.005`
-  - `new_track_thresh: 0.05`
-  - `track_buffer: 150`
-  - `match_thresh: 0.78`
-- Telemetry mới: `DET`, `chưa ID`, `track`, `road`, detector thực tế và trạng thái `HYBRID`/`DIRECT`.
-- Cảnh báo được tách đúng nguyên nhân:
-  - `DET > 0` nhưng `track = 0` → ByteTrack chưa cấp ID;
-  - `track > 0` nhưng `road = 0` → Road Zone chưa phủ luồng xe.
+## Auto Road-Zone mới
 
-## Kiến trúc inference mới
+Trong lúc AI chạy, worker thu thập anchor của các track **đang thật sự chuyển động**. Track đứng/đỗ bị loại bằng điều kiện displacement tối thiểu. Khi đủ dữ liệu, Dashboard hiện:
 
 ```text
-Custom best.pt đang kích hoạt
-        ↓
-HYBRID RECALL
-        ↓
-yolo26s.pt pretrained @ imgsz 960
-        ↓
-Full-frame detection
-        ↓
-ByteTrack high-recall
-        ↓
-Track ổn định
-        ↓
-Road Zone + Strict Gate
-        ↓
-Cắt vạch hợp lệ?
-   │             │
-  Không          Có
-   ↓              ↓
-Không đếm   best.pt refine class
-                  ↓
-               IN / OUT
+calib 6T/143P
 ```
 
-Xe trên lề vẫn có thể được nhận dạng/track nhưng **không được đếm** nếu crossing không nằm trong Road Zone hợp lệ.
+- `T` = số track chuyển động dùng để học vùng đường.
+- `P` = số điểm quỹ đạo.
+
+Khi đạt tối thiểu 4 moving tracks và 40 điểm, nút sau được bật:
+
+```text
+✨ AI đề xuất theo luồng xe
+```
+
+AI sẽ:
+
+1. Gom quỹ đạo chuyển động gần đây.
+2. Ước lượng trục chuyển động chính của luồng xe, gộp được cả hai chiều IN/OUT.
+3. Lấy envelope robust theo quantile để bỏ outlier/xe đỗ.
+4. Tạo polygon 4 điểm bám hành lang xe thực sự chạy.
+5. Đặt vạch đếm **vuông góc với hướng chuyển động chính**.
+6. Hiện preview vùng xanh/vạch vàng trước khi lưu.
+
+Sau khi xem đề xuất, bấm:
+
+```text
+✓ Dừng AI + áp dụng đề xuất
+```
+
+Hệ thống sẽ dừng phiên AI hiện tại, lưu Road Zone/vạch vào camera rồi bạn bấm `Chạy AI` để kiểm thử phiên mới. Nếu video đã chạy xong nhưng proposal đã được cache, nút vẫn có thể lấy và áp dụng đề xuất.
+
+## Thuật toán fail-safe
+
+Auto Road-Zone không tự lưu ngay khi vừa học xong. Proposal chỉ là bản xem trước. Backend vẫn dùng `validate_counting_geometry()` để chặn:
+
+- polygon tự bắt chéo;
+- vùng đường quá nhỏ;
+- vạch quá ngắn;
+- đầu vạch nằm ngoài Road Zone.
+
+Nếu dữ liệu chưa đủ, API trả rõ số track/điểm hiện có thay vì đoán geometry.
+
+## Runtime telemetry mới
+
+Ví dụ:
+
+```text
+DET 12 · chưa ID 1 · track 11 · road 4 · seen 36 · calib 8T/226P · Tổng 19
+```
+
+Mục tiêu sau khi áp dụng Auto Road-Zone là `road` phản ánh đúng số track đang chạy trong lòng đường, trong khi xe đứng/đỗ hoặc xe ngoài lề vẫn có thể được detect nhưng không được cộng IN/OUT.
+
+## Cấu hình mới
+
+`.env.example`:
+
+```env
+AI_FLOW_CALIBRATION_HISTORY_FRAMES=1200
+AI_FLOW_CALIBRATION_POINTS_PER_TRACK=180
+```
+
+`start.ps1` tự bổ sung hai biến này nếu `.env` cũ chưa có.
 
 ## Database
 
 Migration mới:
 
 ```text
-0028_full_detect_v0514
-        ↓
 0029_hybrid_recall_v0515
+        ↓
+0030_auto_road_v0516
 ```
 
-Migration chỉ hạ default camera confidence và nâng `schema_version=0.5.15`; không xóa dataset, training run, model, best.pt hay lịch sử đếm.
+Migration chỉ nâng:
 
-## Cập nhật
+```text
+schema_version = 0.5.16
+```
 
-Giải nén/chép đè source vào:
+Không thêm cột mới vì proposal được học runtime rồi lưu vào các cột `road_x1..road_y4` và `line_x1..line_y2` vốn đã có.
 
-```powershell
+## Cập nhật trên máy
+
+Chép full source đè vào:
+
+```text
 D:\LienThongDH\DoAn\traffic-ai
 ```
 
@@ -82,30 +108,66 @@ datasets\
 training-runs\
 ```
 
-Không dùng `docker compose down -v`.
+Không dùng:
 
-Chạy:
+```powershell
+docker compose down -v
+```
+
+Test:
 
 ```powershell
 cd D:\LienThongDH\DoAn\traffic-ai
 .\scripts\test.ps1
+```
+
+Mong muốn có:
+
+```text
+[Traffic AI] Auto Road-Zone Calibration V0.5.16
+[OK] Auto Road-Zone Calibration V0.5.16
+```
+
+Sau đó:
+
+```powershell
 .\scripts\start.ps1
+```
+
+Database:
+
+```powershell
 .\scripts\verify-database.ps1
 ```
 
 Mong muốn:
 
 ```text
-0029_hybrid_recall_v0515
-schema_version = 0.5.15
+0030_auto_road_v0516
+schema_version = 0.5.16
 ```
 
-Sau đó `Ctrl + F5`, bấm `Chạy AI` → `AI Overlay` và nhìn telemetry. Với custom model đang kích hoạt phải thấy dạng:
+## Cách dùng Auto Road-Zone
 
 ```text
-HYBRID detect yolo26s.pt + refine best.pt
-DET ... · chưa ID ... · track ... · road ...
+1. Chạy AI
+        ↓
+2. Để xe chạy qua khoảng 10–30 giây
+        ↓
+3. Chờ calib đạt ít nhất 4T/40P
+        ↓
+4. Bấm “✨ AI đề xuất theo luồng xe”
+        ↓
+5. Xem vùng xanh + vạch vàng đề xuất
+        ↓
+6. Bấm “✓ Dừng AI + áp dụng đề xuất”
+        ↓
+7. Chạy AI lại
+        ↓
+8. Kiểm tra DET / track / road / Tổng / IN / OUT
 ```
+
+Nếu luồng xe thay đổi theo giờ/camera, có thể chạy đề xuất lại để cập nhật geometry.
 
 ## Phát hành
 
@@ -116,11 +178,5 @@ Sau khi chạy ổn vẫn chỉ một lệnh:
 ```
 
 ```text
-→ test → build → push GitHub → tag v0.5.15 → GitHub Actions → Release
+→ test → build → push GitHub → tag v0.5.16 → GitHub Actions → Release
 ```
-
-## V0.5.15-R1 — hotfix contract test ByteTrack
-
-- Sửa false-fail ở `Strict Gate + fast crossing V0.5.8`: contract cũ bắt cứng `track_high_thresh: 0.10` và `new_track_thresh: 0.10` dù V0.5.15 đã chủ động hạ xuống `0.05` để tăng recall và nâng `track_buffer` lên `150`.
-- Contract mới kiểm tra tương thích theo ngữ nghĩa: `track_high_thresh <= 0.10`, `new_track_thresh <= 0.10`, `track_buffer >= 120`, đồng thời vẫn giữ `AI_GATE_ENDPOINT_MARGIN=0.035`.
-- Không đổi runtime, database, migration hay model. `VERSION` vẫn là `0.5.15`; đây chỉ là hotfix kiểm thử để `test.ps1` chấp nhận tuning V0.5.15 tốt hơn tuning lịch sử V0.5.8.
