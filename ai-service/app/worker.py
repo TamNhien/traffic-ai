@@ -12,6 +12,7 @@ import httpx2 as httpx
 from app.async_tasks import EventDispatcher, LatestFrameEncoder
 from app.classification import TrackLabelSmoother, VehicleClassPolicy
 from app.counting import CountingLine, LineCrossingCounter, RoadZone
+from app.dedup import single_heavy_vehicle_plan
 from app.flow_calibration import FlowCalibrator
 from app.gate_roi import gate_roi_for_line, road_zone_roi
 from app.schemas import PipelineStart
@@ -80,6 +81,8 @@ class PipelineWorker(threading.Thread):
         self.warmup = os.getenv("AI_WARMUP", "1").strip().lower() not in {"0", "false", "no"}
         self.video_pace = os.getenv("AI_VIDEO_PACE", "1").strip().lower() not in {"0", "false", "no"}
         self.iou = float(os.getenv("AI_IOU", "0.55"))
+        self.agnostic_nms = os.getenv("AI_AGNOSTIC_NMS", "0").strip().lower() not in {"0", "false", "no"}
+        self.heavy_duplicate_iou = float(os.getenv("AI_HEAVY_DUP_IOU", "0.68"))
         self.tracker_config = str(Path(__file__).with_name("bytetrack_traffic.yaml"))
         self._event_dispatcher = EventDispatcher(self.backend_url, self.shared_token, self.state)
         self._jpeg_encoder = LatestFrameEncoder(self._set_latest_jpeg, self.state, self.jpeg_quality, self.jpeg_max_width)
@@ -295,6 +298,7 @@ class PipelineWorker(threading.Thread):
                     device=device,
                     imgsz=self.imgsz,
                     half=use_half,
+                    agnostic_nms=self.agnostic_nms,
                     verbose=False,
                 )
                 self.state.inference_ms = round((time.perf_counter() - infer_started) * 1000.0, 1)
@@ -308,13 +312,26 @@ class PipelineWorker(threading.Thread):
                 self.state.active_tracks = 0
                 self.state.untracked_detections = 0
                 self.state.road_tracks_current_frame = 0
+                self.state.suppressed_class_duplicates_current_frame = 0
                 if boxes is not None and boxes.id is not None:
                     xyxy = boxes.xyxy.cpu().tolist()
                     ids = boxes.id.int().cpu().tolist()
                     classes = boxes.cls.int().cpu().tolist()
                     confs = boxes.conf.cpu().tolist()
+                    labels = [str(result.names[int(cls_id)]) for cls_id in classes]
+                    keep_indices, duplicate_aliases, suppressed_duplicates = single_heavy_vehicle_plan(
+                        [tuple(map(float, rect)) for rect in xyxy],
+                        labels,
+                        [float(conf) for conf in confs],
+                        self.heavy_duplicate_iou,
+                    )
+                    self.state.suppressed_class_duplicates_current_frame = suppressed_duplicates
                     claimed_canonical_ids: set[int] = set()
-                    for rect_roi, track_id_raw, cls_id, confidence in zip(xyxy, ids, classes, confs):
+                    for item_index in keep_indices:
+                        rect_roi = xyxy[item_index]
+                        track_id_raw = ids[item_index]
+                        cls_id = classes[item_index]
+                        confidence = confs[item_index]
                         raw_track_id = int(track_id_raw)
                         rx1, ry1, rx2, ry2 = rect_roi
                         rect = (rx1 + offset_x, ry1 + offset_y, rx2 + offset_x, ry2 + offset_y)
@@ -333,6 +350,8 @@ class PipelineWorker(threading.Thread):
                             claimed_canonical_ids,
                         )
                         claimed_canonical_ids.add(track_id)
+                        for duplicate_index in duplicate_aliases.get(item_index, []):
+                            self._continuity.alias_raw_id(int(ids[duplicate_index]), track_id)
                         if stitched:
                             self.state.stitch_recoveries = self._continuity.stitch_count
 

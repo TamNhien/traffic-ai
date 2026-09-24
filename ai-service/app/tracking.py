@@ -107,6 +107,18 @@ class TrackContinuityResolver:
         self._cleanup(frame_index)
         return canonical, stitched
 
+    def alias_raw_id(self, raw_id: int, canonical_id: int) -> None:
+        """Bind a duplicate ByteTrack raw ID to an existing canonical vehicle."""
+        raw_id = int(raw_id)
+        canonical_id = int(canonical_id)
+        previous = self._raw_to_canonical.get(raw_id)
+        self._raw_to_canonical[raw_id] = canonical_id
+        if previous is not None and previous != canonical_id:
+            for candidate_raw, mapped in list(self._raw_to_canonical.items()):
+                if mapped == previous:
+                    self._raw_to_canonical[candidate_raw] = canonical_id
+            self._states.pop(previous, None)
+
     def velocity_for(self, canonical_id: int) -> Point:
         state = self._states.get(int(canonical_id))
         return state.velocity if state is not None else (0.0, 0.0)

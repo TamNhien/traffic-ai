@@ -111,6 +111,8 @@ if ($envTextV515 -notmatch '(?m)^AI_HYBRID_POLICY_V0515=1[ \t]*\r?$') {
   [System.IO.File]::WriteAllText($envPath, $envTextV515, [System.Text.UTF8Encoding]::new($false))
 }
 Ensure-EnvSetting "AI_HYBRID_RECALL" "1"
+Ensure-EnvSetting "AI_AGNOSTIC_NMS" "0"
+Ensure-EnvSetting "AI_HEAVY_DUP_IOU" "0.68"
 Ensure-EnvSetting "AI_RECALL_MODEL_NAME" "yolo26s.pt"
 Ensure-EnvSetting "AI_FLOW_CALIBRATION_HISTORY_FRAMES" "1200"
 Ensure-EnvSetting "AI_FLOW_CALIBRATION_POINTS_PER_TRACK" "180"
@@ -220,7 +222,7 @@ if (-not $dashboardOk -or -not $apiOk) {
 }
 
 Write-Host ""
-Write-Host "[OK] Traffic AI V0.5.16 đã khởi động." -ForegroundColor Green
+Write-Host "[OK] Traffic AI V0.5.17 đã khởi động." -ForegroundColor Green
 Write-Host "Dashboard : https://traffic-ai.test:8443"
 Write-Host "API Docs  : https://traffic-ai.test:8444/docs"
 Write-Host "PostgreSQL: 127.0.0.1:5445 / traffic_ai_db"

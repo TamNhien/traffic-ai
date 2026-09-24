@@ -60,3 +60,13 @@ def test_motion_leading_anchor_changes_with_direction() -> None:
     assert motion_leading_anchor(rect, (0.0, -5.0)) == (20.0, 20.0)
     assert motion_leading_anchor(rect, (5.0, 0.0)) == (30.0, 40.0)
     assert motion_leading_anchor(rect, (-5.0, 0.0)) == (10.0, 40.0)
+
+
+def test_duplicate_heavy_raw_id_can_alias_existing_canonical() -> None:
+    resolver = TrackContinuityResolver(max_gap_frames=30, max_distance_ratio=0.14)
+    canonical, _ = resolver.resolve(10, (400, 220), "truck", 10, 1000, 600)
+    assert canonical == 10
+    resolver.alias_raw_id(44, canonical)
+    aliased, stitched = resolver.resolve(44, (405, 225), "bus", 11, 1000, 600)
+    assert aliased == 10
+    assert stitched is False

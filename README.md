@@ -1,96 +1,102 @@
-# Traffic AI V0.5.16 — Auto Road-Zone Calibration 🚗🛣️✨
+# Traffic AI V0.5.17 — Single-Object BUS/TRUCK Guard 🚛🚌
 
-V0.5.16 tiếp tục từ V0.5.15-R1 và giải quyết điểm nghẽn còn lại khi detector/ByteTrack đã thấy nhiều xe nhưng `road = 0` hoặc số `loại ngoài lòng đường` tăng cao: **Road Zone đặt thủ công không phủ đúng luồng xe thực tế**.
+V0.5.17 tiếp tục từ V0.5.16 và sửa lỗi một **xe tải có thể bị nhận/đếm đồng thời thành Xe buýt + Xe tải** khi detector tạo hai bounding box BUS/TRUCK chồng lên cùng một phương tiện.
 
-Bản này giữ nguyên Hybrid Recall (`YOLO26s pretrained` detect/track toàn khung + `best.pt` đang kích hoạt refine class tại crossing), Strict Gate, Road Guard 2.0, Dataset/Annotation Studio và model Run #3. Không xóa dataset, training run hay model.
+## Nguyên nhân
 
-## Auto Road-Zone mới
+YOLO/COCO có thể giữ hai detection khác class cho cùng một vật thể vì NMS mặc định là class-aware. Nếu cả BUS và TRUCK cùng đi vào ByteTrack, chúng có thể thành hai raw track ID và cùng cắt vạch, khiến một xe thật tạo hai lượt đếm.
 
-Trong lúc AI chạy, worker thu thập anchor của các track **đang thật sự chuyển động**. Track đứng/đỗ bị loại bằng điều kiện displacement tối thiểu. Khi đủ dữ liệu, Dashboard hiện:
+## Single-Object Guard V0.5.17
 
-```text
-calib 6T/143P
-```
-
-- `T` = số track chuyển động dùng để học vùng đường.
-- `P` = số điểm quỹ đạo.
-
-Khi đạt tối thiểu 4 moving tracks và 40 điểm, nút sau được bật:
+Pipeline mới:
 
 ```text
-✨ AI đề xuất theo luồng xe
+Full-frame YOLO26 detector
+        ↓
+ByteTrack
+        ↓
+BUS/TRUCK overlap guard
+        ↓
+IoU >= 0.68 ?
+  ├─ Không → giữ riêng
+  └─ Có    → giữ box mạnh hơn
+              + alias raw ID còn lại vào cùng canonical track
+        ↓
+Temporal class smoothing
+        ↓
+best.pt refine tại crossing
+        ↓
+Road Guard + Strict Gate
+        ↓
+MỘT phương tiện = MỘT crossing event
 ```
 
-AI sẽ:
+Guard chỉ xử lý cặp **BUS ↔ TRUCK** chồng box mạnh; không gộp tùy tiện xe máy/ô tô trong giao thông đông.
 
-1. Gom quỹ đạo chuyển động gần đây.
-2. Ước lượng trục chuyển động chính của luồng xe, gộp được cả hai chiều IN/OUT.
-3. Lấy envelope robust theo quantile để bỏ outlier/xe đỗ.
-4. Tạo polygon 4 điểm bám hành lang xe thực sự chạy.
-5. Đặt vạch đếm **vuông góc với hướng chuyển động chính**.
-6. Hiện preview vùng xanh/vạch vàng trước khi lưu.
+## Cấu hình mới
 
-Sau khi xem đề xuất, bấm:
+```env
+AI_AGNOSTIC_NMS=0
+AI_HEAVY_DUP_IOU=0.68
+```
+
+`AI_AGNOSTIC_NMS=0` giữ NMS class-aware mặc định để tránh làm mất các phương tiện thật đang chồng nhau trong cảnh đông. Lớp BUS/TRUCK guard riêng xử lý đúng xung đột cần sửa.
+
+`AI_HEAVY_DUP_IOU=0.68` nghĩa là BUS/TRUCK phải chồng nhau ít nhất khoảng 68% mới bị xem là cùng một xe.
+
+## Telemetry
+
+Dòng runtime có thêm:
 
 ```text
-✓ Dừng AI + áp dụng đề xuất
+gộp bus/truck N
 ```
-
-Hệ thống sẽ dừng phiên AI hiện tại, lưu Road Zone/vạch vào camera rồi bạn bấm `Chạy AI` để kiểm thử phiên mới. Nếu video đã chạy xong nhưng proposal đã được cache, nút vẫn có thể lấy và áp dụng đề xuất.
-
-## Thuật toán fail-safe
-
-Auto Road-Zone không tự lưu ngay khi vừa học xong. Proposal chỉ là bản xem trước. Backend vẫn dùng `validate_counting_geometry()` để chặn:
-
-- polygon tự bắt chéo;
-- vùng đường quá nhỏ;
-- vạch quá ngắn;
-- đầu vạch nằm ngoài Road Zone.
-
-Nếu dữ liệu chưa đủ, API trả rõ số track/điểm hiện có thay vì đoán geometry.
-
-## Runtime telemetry mới
 
 Ví dụ:
 
 ```text
-DET 12 · chưa ID 1 · track 11 · road 4 · seen 36 · calib 8T/226P · Tổng 19
+DET 8 · track 7 · road 4 · gộp bus/truck 1 · Tổng 22
 ```
 
-Mục tiêu sau khi áp dụng Auto Road-Zone là `road` phản ánh đúng số track đang chạy trong lòng đường, trong khi xe đứng/đỗ hoặc xe ngoài lề vẫn có thể được detect nhưng không được cộng IN/OUT.
+`gộp bus/truck 1` nghĩa là frame đó hệ thống đã loại 1 detection BUS/TRUCK trùng cùng một xe trước bộ đếm.
 
-## Cấu hình mới
+## Thông số hiện tại của camera
 
-`.env.example`:
+Với cấu hình người dùng đang thử:
 
-```env
-AI_FLOW_CALIBRATION_HISTORY_FRAMES=1200
-AI_FLOW_CALIBRATION_POINTS_PER_TRACK=180
+```text
+X1 = 0.32
+Y1 = 0.81
+X2 = 0.84
+Y2 = 0.55
+Confidence = 0.05
 ```
 
-`start.ps1` tự bổ sung hai biến này nếu `.env` cũ chưa có.
+V0.5.17 **không yêu cầu đổi Confidence** chỉ để sửa lỗi BUS/TRUCK đếm đôi. Có thể giữ `0.05` để cứu xe nhỏ/xa. Không nên hạ thấp thêm trước khi kiểm thử Single-Object Guard vì sẽ tăng detection yếu/false positive.
+
+Vạch vẫn nên gần vuông góc luồng xe thật và nằm hoàn toàn trong Road Zone.
 
 ## Database
 
-Migration mới:
+Migration:
 
 ```text
-0029_hybrid_recall_v0515
-        ↓
 0030_auto_road_v0516
+        ↓
+0031_single_vehicle_v0517
 ```
 
-Migration chỉ nâng:
+Mong muốn:
 
 ```text
-schema_version = 0.5.16
+schema_version = 0.5.17
 ```
 
-Không thêm cột mới vì proposal được học runtime rồi lưu vào các cột `road_x1..road_y4` và `line_x1..line_y2` vốn đã có.
+Migration chỉ nâng schema version, không xóa dataset, Run #3, `best.pt`, camera, vehicle events hoặc counting sessions.
 
-## Cập nhật trên máy
+## Cập nhật
 
-Chép full source đè vào:
+Chép source đè vào:
 
 ```text
 D:\LienThongDH\DoAn\traffic-ai
@@ -121,20 +127,20 @@ cd D:\LienThongDH\DoAn\traffic-ai
 .\scripts\test.ps1
 ```
 
-Mong muốn có:
+Contract mới:
 
 ```text
-[Traffic AI] Auto Road-Zone Calibration V0.5.16
-[OK] Auto Road-Zone Calibration V0.5.16
+[Traffic AI] Single-Object BUS/TRUCK Guard V0.5.17
+[OK] Single-Object BUS/TRUCK Guard V0.5.17
 ```
 
-Sau đó:
+Khởi động:
 
 ```powershell
 .\scripts\start.ps1
 ```
 
-Database:
+Kiểm tra DB:
 
 ```powershell
 .\scripts\verify-database.ps1
@@ -143,31 +149,17 @@ Database:
 Mong muốn:
 
 ```text
-0030_auto_road_v0516
-schema_version = 0.5.16
+0031_single_vehicle_v0517
+schema_version = 0.5.17
 ```
 
-## Cách dùng Auto Road-Zone
+Sau khi mở web, `Ctrl+F5`, chạy lại chính clip có xe tải và quan sát:
 
 ```text
-1. Chạy AI
-        ↓
-2. Để xe chạy qua khoảng 10–30 giây
-        ↓
-3. Chờ calib đạt ít nhất 4T/40P
-        ↓
-4. Bấm “✨ AI đề xuất theo luồng xe”
-        ↓
-5. Xem vùng xanh + vạch vàng đề xuất
-        ↓
-6. Bấm “✓ Dừng AI + áp dụng đề xuất”
-        ↓
-7. Chạy AI lại
-        ↓
-8. Kiểm tra DET / track / road / Tổng / IN / OUT
+DET · track · road · gộp bus/truck · Tổng
 ```
 
-Nếu luồng xe thay đổi theo giờ/camera, có thể chạy đề xuất lại để cập nhật geometry.
+Một xe tải đi qua chỉ được tạo **một** crossing event. Class cuối được chọn bằng temporal evidence + `best.pt` refiner.
 
 ## Phát hành
 
@@ -178,5 +170,5 @@ Sau khi chạy ổn vẫn chỉ một lệnh:
 ```
 
 ```text
-→ test → build → push GitHub → tag v0.5.16 → GitHub Actions → Release
+→ test → build → push GitHub → tag v0.5.17 → GitHub Actions → Release
 ```

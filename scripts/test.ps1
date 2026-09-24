@@ -300,18 +300,18 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.16") { throw "VERSION phải là 0.5.16, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0030_auto_road_v0516.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0030_auto_road_v0516.py." }
+  if ($version -ne "0.5.17") { throw "VERSION phải là 0.5.17, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0031_single_vehicle_v0517.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0031_single_vehicle_v0517.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0030_auto_road_v0516"' -or $migrationText -notmatch 'down_revision = "0029_hybrid_recall_v0515"' -or $migrationText -notmatch "value='0.5.16'") {
-    throw "Migration 0030_auto_road_v0516 không đúng contract V0.5.16."
+  if ($migrationText -notmatch 'revision = "0031_single_vehicle_v0517"' -or $migrationText -notmatch 'down_revision = "0030_auto_road_v0516"' -or $migrationText -notmatch "value='0.5.17'") {
+    throw "Migration 0031_single_vehicle_v0517 không đúng contract V0.5.17."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
 
 function Assert-AlembicRevisionSafetyContract {
-  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.16" -ForegroundColor Cyan
+  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.17" -ForegroundColor Cyan
   $versionsDir = Join-Path $root "backend\alembic\versions"
   $bad = @()
   Get-ChildItem $versionsDir -Filter "*.py" | ForEach-Object {
@@ -335,7 +335,7 @@ function Assert-AlembicRevisionSafetyContract {
   if ($v17 -notmatch 'revision = "0017_ai_test_dep_v053"') {
     throw "Migration V0.5.3 chưa dùng revision ID rút gọn an toàn."
   }
-  Write-Host "[OK] Alembic revision-length safety V0.5.16" -ForegroundColor Green
+  Write-Host "[OK] Alembic revision-length safety V0.5.17" -ForegroundColor Green
 }
 
 
@@ -509,6 +509,33 @@ function Assert-AutoRoadZoneV0516Contract {
     throw "Thiếu cấu hình runtime Auto Road-Zone V0.5.16."
   }
   Write-Host "[OK] Auto Road-Zone Calibration V0.5.16" -ForegroundColor Green
+}
+
+
+function Assert-SingleVehicleGuardV0517Contract {
+  Write-Host "`n[Traffic AI] Single-Object BUS/TRUCK Guard V0.5.17" -ForegroundColor Cyan
+  $dedup = Get-Content (Join-Path $root "ai-service\app\dedup.py") -Raw -Encoding UTF8
+  $worker = Get-Content (Join-Path $root "ai-service\app\worker.py") -Raw -Encoding UTF8
+  $runtime = Get-Content (Join-Path $root "ai-service\app\runtime.py") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  $envExample = Get-Content (Join-Path $root ".env.example") -Raw -Encoding UTF8
+  $startText = Get-Content (Join-Path $PSScriptRoot "start.ps1") -Raw -Encoding UTF8
+  if ($dedup -notmatch 'single_heavy_vehicle_plan' -or $dedup -notmatch 'HEAVY_CONFLICTS' -or $dedup -notmatch 'box_iou') {
+    throw "Thiếu BUS/TRUCK duplicate suppression implementation V0.5.17."
+  }
+  if ($worker -notmatch 'agnostic_nms=self\.agnostic_nms' -or $worker -notmatch 'single_heavy_vehicle_plan' -or $worker -notmatch 'alias_raw_id' -or $worker -notmatch 'AI_HEAVY_DUP_IOU') {
+    throw "AI worker chưa chặn cross-class NMS / BUS-TRUCK overlap trước counting."
+  }
+  if ($runtime -notmatch 'suppressed_class_duplicates_current_frame' -or $frontend -notmatch 'gộp bus/truck') {
+    throw "Thiếu telemetry Single-Object Guard V0.5.17."
+  }
+  if ($envExample -notmatch 'AI_AGNOSTIC_NMS=0' -or $envExample -notmatch 'AI_HEAVY_DUP_IOU=0\.68') {
+    throw ".env.example thiếu Single-Object Guard defaults."
+  }
+  if ($startText -notmatch 'AI_AGNOSTIC_NMS' -or $startText -notmatch 'AI_HEAVY_DUP_IOU') {
+    throw "start.ps1 chưa bổ sung tuning Single-Object Guard vào .env cũ."
+  }
+  Write-Host "[OK] Single-Object BUS/TRUCK Guard V0.5.17" -ForegroundColor Green
 }
 
 function Assert-SmoothPlaybackContract {
@@ -756,6 +783,7 @@ Assert-InstantOverlayRoadRoiV0513Contract
 Assert-FullFrameDetectStrictRoadCountV0514Contract
 Assert-HybridRecallTrackRescueV0515Contract
 Assert-AutoRoadZoneV0516Contract
+Assert-SingleVehicleGuardV0517Contract
 
 Write-Host "`n[Traffic AI] Road Zone + Frame Browser V0.5.11" -ForegroundColor Cyan
 $frontendV511 = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8

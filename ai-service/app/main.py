@@ -15,7 +15,7 @@ from app.sources import inspect_source, list_video_sources, read_source_preview,
 from app.training import auto_label, dataset_stats, extract_frames, prepare_dataset, purge_dataset, reset_dataset_labels, training_registry
 from app.annotation import accept_safe_annotations, get_annotation, get_annotation_image, list_annotations, save_annotation
 
-APP_VERSION = '0.5.16'
+APP_VERSION = '0.5.17'
 app = FastAPI(title='Traffic AI Service', version=APP_VERSION)
 SNAPSHOT_DIR = Path(os.getenv('SNAPSHOT_DIR', '/tmp/traffic-ai-snapshots'))
 SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)

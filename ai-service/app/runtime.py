@@ -30,6 +30,7 @@ class PipelineState:
     active_tracks: int = 0
     untracked_detections: int = 0
     road_tracks_current_frame: int = 0
+    suppressed_class_duplicates_current_frame: int = 0
     calibration_samples: int = 0
     calibration_tracks: int = 0
     calibration_moving_tracks: int = 0
