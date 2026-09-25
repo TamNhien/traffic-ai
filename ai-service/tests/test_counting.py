@@ -333,3 +333,43 @@ def test_crossing_engine_v72_bracket_confirm_does_not_accept_parallel_jitter() -
     # Large lateral movement with only a tiny normal component must stay rejected.
     assert counter.update(1202, (85, 51), 100, 100, 11) is None
     assert counter.bracket_confirm_rescues == 0
+
+
+def test_v0528_video_origin_rescue_counts_vehicle_already_straddling_gate() -> None:
+    counter = LineCrossingCounter(
+        CountingLine(0.1, 0.5, 0.9, 0.5),
+        startup_grace_frames=0,
+        origin_rescue_frames=20,
+        origin_rescue_distance_ratio=0.065,
+        origin_rescue_min_normal_ratio=0.30,
+    )
+    # The normal motion-leading anchor is already beyond the line when ByteTrack
+    # first assigns an ID, but the box centre is still straddling the gate.
+    assert counter.update(1301, (50, 80), 100, 100, 3, origin_probe=(50, 52)) is None
+    assert counter.update(1301, (50, 84), 100, 100, 4, origin_probe=(50, 62)) == "in"
+    assert counter.origin_rescues == 1
+    assert counter.in_count == 1
+
+
+def test_v0528_video_origin_rescue_rejects_track_that_started_far_from_gate() -> None:
+    counter = LineCrossingCounter(
+        CountingLine(0.1, 0.5, 0.9, 0.5),
+        origin_rescue_frames=20,
+        origin_rescue_distance_ratio=0.065,
+        origin_rescue_min_normal_ratio=0.30,
+    )
+    assert counter.update(1302, (50, 80), 100, 100, 3, origin_probe=(50, 70)) is None
+    assert counter.update(1302, (50, 86), 100, 100, 4, origin_probe=(50, 82)) is None
+    assert counter.origin_rescues == 0
+
+
+def test_v0528_video_origin_rescue_rejects_parallel_startup_jitter() -> None:
+    counter = LineCrossingCounter(
+        CountingLine(0.1, 0.5, 0.9, 0.5),
+        origin_rescue_frames=20,
+        origin_rescue_distance_ratio=0.065,
+        origin_rescue_min_normal_ratio=0.30,
+    )
+    assert counter.update(1303, (20, 80), 100, 100, 3, origin_probe=(20, 51)) is None
+    assert counter.update(1303, (80, 82), 100, 100, 4, origin_probe=(80, 53)) is None
+    assert counter.origin_rescues == 0

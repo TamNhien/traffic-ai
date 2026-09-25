@@ -1,4 +1,44 @@
-# Traffic AI V0.5.27 — Dual Refiner Consensus 4.0 + Benchmark Global Match 🚚🚲🎯
+# Traffic AI V0.5.28 — Video-Origin + Heavy-Vehicle Gate Rescue 🚚🎬
+
+V0.5.28 được xây trực tiếp từ V0.5.27 sau khi đối chiếu `clip1(3).mp4` và snapshot thực tế. Hai lỗi được xác nhận bằng video: **xe đầu clip đang cắt vạch nhưng ByteTrack chưa có đủ lịch sử phía trước vạch**, và **xe van/truck trắng thực sự đi qua vạch khoảng 14:40–14:44 nhưng box bốn bánh lớn có thể tạo anchor quá sát/ngoài biên Road Zone**.
+
+## Điểm mới V0.5.28
+
+- **Video-Origin Rescue**: với video local, trong 20 frame đầu, counter được phép dùng tâm box (`origin_probe`) để suy ra một điểm trước vạch chỉ khi track bắt đầu sát vạch, chuyển động rời vạch đủ mạnh, quỹ đạo suy ra cắt đúng đoạn vạch hữu hạn và vẫn vượt toàn bộ Road Zone/motion guards. Không nới rule này cho RTSP/live.
+- **Heavy-Vehicle Anchor Inset**: car/bus/truck dùng motion-leading anchor lùi 16% vào trong box theo hướng chuyển động. Điều này tránh van/truck lớn bị Road Zone loại chỉ vì box detector bị kéo dài/clipped ở mép ảnh, trong khi vẫn giữ hướng IN/OUT.
+- `Video-start` giờ phản ánh **origin rescue thật sự**, không chỉ đếm mọi crossing xảy ra sớm.
+- Dashboard thêm **Xe lớn anchor** để biết có bao nhiêu track bốn bánh đang dùng anchor an toàn.
+- Giữ nguyên Dual Refiner Consensus 4.0, Transactional Human Guard 2.1, Crossing Engine 7.2 và global benchmark matching của V0.5.27.
+
+## Cấu hình mới
+
+```ini
+AI_VIDEO_ORIGIN_RESCUE_FRAMES=20
+AI_VIDEO_ORIGIN_DISTANCE_RATIO=0.065
+AI_VIDEO_ORIGIN_MIN_NORMAL_RATIO=0.30
+AI_HEAVY_ANCHOR_INSET_RATIO=0.16
+```
+
+## Database
+
+```text
+0041_dual_refiner_v0527
+        ↓
+0042_origin_heavy_v0528
+schema_version = 0.5.28
+```
+
+## Regression tests mới
+
+- Video bắt đầu khi xe đang straddle vạch → rescue và đếm đúng.
+- Track bắt đầu xa vạch → không origin-rescue.
+- Jitter song song vạch ở đầu clip → không rescue.
+- Anchor bốn bánh lớn được inset theo hướng chuyển động.
+
+---
+
+## Lịch sử V0.5.27
+
 
 V0.5.27 tập trung vào hai điểm quan sát được từ phiên V0.5.26 GT=149: class refiner chạy rất nhiều nhưng không cứu được bicycle/truck, và báo cáo benchmark có thể ghép tham lam sai cặp khi nhiều crossing nằm gần nhau.
 
@@ -12,7 +52,7 @@ V0.5.27 tập trung vào hai điểm quan sát được từ phiên V0.5.26 GT=1
 
 ### Ghi chú từ snapshot phiên #124
 
-Chiếc van/xe tải nhỏ màu trắng quanh `frame_17930` đã được overlay nhận là `truck`, nhưng trong chuỗi snapshot nó vẫn nằm phía trên vạch vàng và chưa cắt vạch. Vì vậy **Xe tải = 0 là đúng contract đếm** cho track đó. V0.5.27 hiển thị rõ `Xe tải thấy` và `Xe tải cắt vạch` để phân biệt nhận diện với event đếm. Một số dòng GT Xe đạp → AI Xe máy cũng nằm trong các cụm crossing sát nhau; global temporal matching giúp tránh kết luận sai loại chỉ vì cặp timecode bị ghép tham lam.
+Ở V0.5.27, chuỗi snapshot rời rạc quanh `frame_17930` từng khiến việc quan sát kết thúc ở lúc van còn phía trên vạch. Khi đối chiếu lại **toàn bộ `clip1(3).mp4`**, van trắng thực tế tiếp tục đi xuống và cắt qua vạch khoảng 14:40–14:44. Vì vậy `Xe tải = 0` ở phiên cũ là **một miss của gate/anchor**, không phải vì xe chưa đi qua. V0.5.28 sửa đúng nhận định và runtime này. Một số dòng GT Xe đạp → AI Xe máy vẫn nằm trong các cụm crossing sát nhau; global temporal matching tiếp tục tránh ghép cặp tham lam.
 
 ---
 

@@ -197,6 +197,7 @@ class _GateSample:
 @dataclass(slots=True)
 class _TrackGateState:
     history: deque[_GateSample] = field(default_factory=lambda: deque(maxlen=48))
+    origin_history: deque[_GateSample] = field(default_factory=lambda: deque(maxlen=20))
     armed: bool = True
     counted_directions: set[str] = field(default_factory=set)
     last_count_frame: int = -10_000
@@ -241,6 +242,9 @@ class LineCrossingCounter:
         bracket_confirm: bool = False,
         bracket_confirm_min_normal_ratio: float = 0.55,
         bracket_confirm_max_gap_frames: int = 2,
+        origin_rescue_frames: int = 0,
+        origin_rescue_distance_ratio: float = 0.06,
+        origin_rescue_min_normal_ratio: float = 0.32,
     ) -> None:
         self.line = line
         self.road_zone = road_zone
@@ -266,6 +270,9 @@ class LineCrossingCounter:
         self.bracket_confirm = bool(bracket_confirm)
         self.bracket_confirm_min_normal_ratio = max(0.0, min(1.0, float(bracket_confirm_min_normal_ratio)))
         self.bracket_confirm_max_gap_frames = max(1, int(bracket_confirm_max_gap_frames))
+        self.origin_rescue_frames = max(0, int(origin_rescue_frames))
+        self.origin_rescue_distance_ratio = max(0.0, float(origin_rescue_distance_ratio))
+        self.origin_rescue_min_normal_ratio = max(0.0, min(1.0, float(origin_rescue_min_normal_ratio)))
         self._tracks: dict[int, _TrackGateState] = {}
         self.in_count = 0
         self.out_count = 0
@@ -273,6 +280,7 @@ class LineCrossingCounter:
         self.interpolated_crossings = 0
         self.rescued_crossings = 0
         self._last_crossing_mode: dict[int, str] = {}
+        self._last_origin_rescue: set[int] = set()
         self.rejected_outside_segment = 0
         self.rejected_outside_road = 0
         self.rejected_unconfirmed_side = 0
@@ -280,6 +288,7 @@ class LineCrossingCounter:
         self.road_edge_rescues = 0
         self.fast_confirm_rescues = 0
         self.bracket_confirm_rescues = 0
+        self.origin_rescues = 0
         self.rejected_rescue_validation = 0
         self.adaptive_cooldown_releases = 0
         self._last_crossing_point: dict[int, Point] = {}
@@ -291,6 +300,7 @@ class LineCrossingCounter:
         frame_width: int,
         frame_height: int,
         frame_index: int | None = None,
+        origin_probe: Point | None = None,
     ) -> str | None:
         if frame_index is None:
             state_existing = self._tracks.get(track_id)
@@ -305,6 +315,10 @@ class LineCrossingCounter:
 
         state = self._tracks.setdefault(int(track_id), _TrackGateState())
         sample = _GateSample(int(frame_index), anchor, distance, side)
+        if origin_probe is not None:
+            origin_distance = signed_distance(origin_probe, a, b)
+            origin_side = 0 if abs(origin_distance) <= dead_band else (1 if origin_distance > 0 else -1)
+            state.origin_history.append(_GateSample(int(frame_index), origin_probe, origin_distance, origin_side))
         if state.first_frame is None:
             state.first_frame = sample.frame_index
         state.total_samples += 1
@@ -345,6 +359,56 @@ class LineCrossingCounter:
                 previous = candidate
                 break
 
+        origin_candidate = False
+        if previous is None and self.origin_rescue_frames > 0 and sample.frame_index <= self.origin_rescue_frames:
+            origin_samples = list(state.origin_history)
+            if len(origin_samples) >= 2:
+                first_origin = origin_samples[0]
+                current_origin = origin_samples[-1]
+                origin_band = max(dead_band * 2.0, scale * self.origin_rescue_distance_ratio)
+                move_x_origin = current_origin.point[0] - first_origin.point[0]
+                move_y_origin = current_origin.point[1] - first_origin.point[1]
+                move_len_origin = max(hypot(move_x_origin, move_y_origin), 1e-6)
+                delta_origin = current_origin.distance - first_origin.distance
+                current_origin_side = current_origin.side
+                moving_away = (
+                    current_origin_side != 0
+                    and delta_origin * current_origin_side > 0
+                    and abs(current_origin.distance) >= abs(first_origin.distance) + dead_band * 0.35
+                )
+                normal_ratio_origin = abs(delta_origin) / move_len_origin
+                if (
+                    abs(first_origin.distance) <= origin_band
+                    and moving_away
+                    and normal_ratio_origin >= self.origin_rescue_min_normal_ratio
+                ):
+                    # The clip can begin while a vehicle already straddles the
+                    # gate. Extrapolate the first centre point backward by the
+                    # observed motion and require that the inferred point lands
+                    # on the opposite side of the finite counting segment. This
+                    # recovers a genuine frame-0 crossing without globally
+                    # weakening the normal opposite-side history requirement.
+                    required_shift = abs(first_origin.distance) + dead_band * 1.5
+                    factor = max(1.0, min(3.0, required_shift / max(abs(delta_origin), 1e-6)))
+                    predicted = (
+                        first_origin.point[0] - move_x_origin * factor,
+                        first_origin.point[1] - move_y_origin * factor,
+                    )
+                    predicted_distance = signed_distance(predicted, a, b)
+                    predicted_side = 0 if abs(predicted_distance) <= dead_band else (1 if predicted_distance > 0 else -1)
+                    inferred_crossing = segment_crossing_point(
+                        predicted, current_origin.point, a, b, segment_margin=self.segment_margin
+                    )
+                    if predicted_side == -current_origin_side and inferred_crossing is not None:
+                        previous = _GateSample(
+                            max(0, current_origin.frame_index - 1), predicted, predicted_distance, predicted_side
+                        )
+                        sample = current_origin
+                        anchor = current_origin.point
+                        distance = current_origin.distance
+                        side = current_origin.side
+                        origin_candidate = True
+
         if previous is None:
             return None
 
@@ -380,7 +444,11 @@ class LineCrossingCounter:
                 quick_crossing is not None
                 and quick_normal_ratio >= self.bracket_confirm_min_normal_ratio
             )
-        if observation_gap <= self.interpolation_gap_frames and state.side_streak < self.side_confirm_samples:
+        if (
+            not origin_candidate
+            and observation_gap <= self.interpolation_gap_frames
+            and state.side_streak < self.side_confirm_samples
+        ):
             if strong_destination:
                 self.fast_confirm_rescues += 1
             elif bracket_destination:
@@ -414,14 +482,15 @@ class LineCrossingCounter:
 
         crossing_start = previous
         crossing_end = sample
-        for left, right in zip(history[previous_index:-1], history[previous_index + 1:]):
-            if left.frame_index >= sample.frame_index:
-                break
-            # Adjacent samples bracket/touch the infinite gate. The finite-gate
-            # intersection below still decides whether the visible segment was
-            # really crossed.
-            if left.side == 0 or right.side == 0 or left.side * right.side < 0:
-                crossing_start, crossing_end = left, right
+        if not origin_candidate:
+            for left, right in zip(history[previous_index:-1], history[previous_index + 1:]):
+                if left.frame_index >= sample.frame_index:
+                    break
+                # Adjacent samples bracket/touch the infinite gate. The finite-gate
+                # intersection below still decides whether the visible segment was
+                # really crossed.
+                if left.side == 0 or right.side == 0 or left.side * right.side < 0:
+                    crossing_start, crossing_end = left, right
 
         crossing = segment_crossing_point(
             crossing_start.point,
@@ -527,13 +596,21 @@ class LineCrossingCounter:
             if right.frame_index > left.frame_index
         ]
         max_observation_gap = max(frame_gaps, default=1)
-        if len(crossing_window) == 2 and max_observation_gap <= 1:
+        if origin_candidate:
+            crossing_mode = "direct"
+            self.direct_crossings += 1
+            self.origin_rescues += 1
+            self._last_origin_rescue.add(int(track_id))
+        elif len(crossing_window) == 2 and max_observation_gap <= 1:
+            self._last_origin_rescue.discard(int(track_id))
             crossing_mode = "direct"
             self.direct_crossings += 1
         elif max_observation_gap <= self.interpolation_gap_frames:
+            self._last_origin_rescue.discard(int(track_id))
             crossing_mode = "interpolated"
             self.interpolated_crossings += 1
         else:
+            self._last_origin_rescue.discard(int(track_id))
             crossing_mode = "rescued"
             self.rescued_crossings += 1
         self._last_crossing_mode[int(track_id)] = crossing_mode
@@ -559,6 +636,8 @@ class LineCrossingCounter:
         track_id = int(track_id)
         state = self._tracks.get(track_id)
         mode = self._last_crossing_mode.pop(track_id, None)
+        was_origin_rescue = track_id in self._last_origin_rescue
+        self._last_origin_rescue.discard(track_id)
         self._last_crossing_point.pop(track_id, None)
         if state is not None:
             state.counted_directions.discard(str(direction))
@@ -570,6 +649,8 @@ class LineCrossingCounter:
             self.out_count -= 1
         if mode == "direct" and self.direct_crossings > 0:
             self.direct_crossings -= 1
+            if was_origin_rescue and self.origin_rescues > 0:
+                self.origin_rescues -= 1
         elif mode == "interpolated" and self.interpolated_crossings > 0:
             self.interpolated_crossings -= 1
         elif mode == "rescued" and self.rescued_crossings > 0:

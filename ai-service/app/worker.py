@@ -95,6 +95,7 @@ class PipelineWorker(threading.Thread):
         self._truck_crossing_tracks: set[int] = set()
         self._bicycle_tracks_seen: set[int] = set()
         self._video_start_rescue_tracks: set[int] = set()
+        self._heavy_anchor_tracks: set[int] = set()
         self._refine_ids: list[int] = []
         self._general_refine_ids: list[int] = []
         self._refiner_thread: threading.Thread | None = None
@@ -166,6 +167,10 @@ class PipelineWorker(threading.Thread):
         self.iou = float(os.getenv("AI_IOU", "0.55"))
         self.agnostic_nms = os.getenv("AI_AGNOSTIC_NMS", "0").strip().lower() not in {"0", "false", "no"}
         self.heavy_duplicate_iou = float(os.getenv("AI_HEAVY_DUP_IOU", "0.68"))
+        self.heavy_anchor_inset_ratio = max(0.0, min(0.40, float(os.getenv("AI_HEAVY_ANCHOR_INSET_RATIO", "0.16"))))
+        self.video_origin_rescue_frames = max(0, int(os.getenv("AI_VIDEO_ORIGIN_RESCUE_FRAMES", "20")))
+        self.video_origin_distance_ratio = max(0.0, float(os.getenv("AI_VIDEO_ORIGIN_DISTANCE_RATIO", "0.065")))
+        self.video_origin_min_normal_ratio = max(0.0, min(1.0, float(os.getenv("AI_VIDEO_ORIGIN_MIN_NORMAL_RATIO", "0.30"))))
         self.tracker_config = str(Path(__file__).with_name("bytetrack_traffic.yaml"))
         self._event_dispatcher = EventDispatcher(self.backend_url, self.shared_token, self.state)
         self._jpeg_encoder = LatestFrameEncoder(self._set_latest_jpeg, self.state, self.jpeg_quality, self.jpeg_max_width)
@@ -696,6 +701,9 @@ class PipelineWorker(threading.Thread):
                 bracket_confirm=os.getenv("AI_GATE_BRACKET_CONFIRM", "1").strip().lower() not in {"0", "false", "no"},
                 bracket_confirm_min_normal_ratio=float(os.getenv("AI_GATE_BRACKET_CONFIRM_MIN_NORMAL_RATIO", "0.55")),
                 bracket_confirm_max_gap_frames=int(os.getenv("AI_GATE_BRACKET_CONFIRM_MAX_GAP", "2")),
+                origin_rescue_frames=self.video_origin_rescue_frames if self.payload.source_type == "video" else 0,
+                origin_rescue_distance_ratio=self.video_origin_distance_ratio,
+                origin_rescue_min_normal_ratio=self.video_origin_min_normal_ratio,
             )
 
             self._event_dispatcher.start()
@@ -837,7 +845,12 @@ class PipelineWorker(threading.Thread):
                             self.state.stitch_recoveries = self._continuity.stitch_count
 
                         velocity = self._continuity.velocity_for(track_id)
-                        anchor = motion_leading_anchor(rect, velocity)
+                        family_hint = vehicle_family(current_label)
+                        anchor_inset = self.heavy_anchor_inset_ratio if family_hint == "four-wheel" else 0.0
+                        anchor = motion_leading_anchor(rect, velocity, inset_ratio=anchor_inset)
+                        if anchor_inset > 0.0 and int(track_id) not in self._heavy_anchor_tracks:
+                            self._heavy_anchor_tracks.add(int(track_id))
+                            self.state.heavy_anchor_tracks = len(self._heavy_anchor_tracks)
                         self.state.active_tracks += 1
                         if counter.road_zone is not None and counter.road_zone.contains(anchor, width, height):
                             self.state.road_tracks_current_frame += 1
@@ -936,7 +949,15 @@ class PipelineWorker(threading.Thread):
                                 device, use_half, velocity=velocity, force=False,
                             )
 
-                        direction = counter.update(track_id, anchor, width, height, frame_index=frame_index)
+                        direction = counter.update(
+                            track_id, anchor, width, height, frame_index=frame_index,
+                            origin_probe=(
+                                center
+                                if self.payload.source_type == "video" and frame_index <= self.video_origin_rescue_frames
+                                else None
+                            ),
+                        )
+                        self.state.video_start_rescues = counter.origin_rescues
                         self.state.rejected_outside_road = counter.rejected_outside_road
                         self.state.fast_confirm_rescues = counter.fast_confirm_rescues
                         self.state.bracket_confirm_rescues = counter.bracket_confirm_rescues
@@ -958,13 +979,6 @@ class PipelineWorker(threading.Thread):
 
                         if direction:
                             crossing_this_frame = True
-                            if (
-                                self.payload.source_type == "video"
-                                and frame_index <= int(os.getenv("AI_GATE_STARTUP_GRACE_FRAMES", "12"))
-                                and int(track_id) not in self._video_start_rescue_tracks
-                            ):
-                                self._video_start_rescue_tracks.add(int(track_id))
-                                self.state.video_start_rescues += 1
                             refined = None
                             lag_allows_refine = (
                                 self.payload.source_type != "video"
@@ -1146,6 +1160,7 @@ class PipelineWorker(threading.Thread):
                         "bicycle_tracks_seen": self.state.bicycle_tracks_seen,
                         "truck_tracks_seen": self.state.truck_tracks_seen,
                         "truck_crossing_tracks": self.state.truck_crossing_tracks,
+                        "heavy_anchor_tracks": self.state.heavy_anchor_tracks,
                         "video_start_rescues": self.state.video_start_rescues,
                         "human_guard_rejections": self.state.human_guard_rejections,
                         "rider_guard_rescues": self.state.rider_guard_rescues,
@@ -1367,7 +1382,7 @@ class PipelineWorker(threading.Thread):
         rt = f"x{self.state.realtime_factor:.2f}" if self.state.source_fps > 0 else "live"
         cv2.putText(
             frame,
-            f"DET {self.state.detections_current_frame} | UNTRACKED {self.state.untracked_detections} | TRACK {self.state.active_tracks} | ROAD {self.state.road_tracks_current_frame} | TOTAL {self.state.total_count} | IN {self.state.in_count} | OUT {self.state.out_count} | FPS {self.state.fps:.1f} ({rt}) | {self.state.inference_ms:.0f}ms | {'HYBRID' if self.hybrid_mode else 'DIRECT'} {Path(self.detector_model_name).name} | ROI {self.detection_roi_mode.upper()} | DIRECT-X {self.state.direct_crossings} | INTERP {self.state.interpolated_crossings} | RESCUE {self.state.rescued_crossings} | ROAD-REJECT {counter.rejected_outside_road} | CONFIRM-REJECT {counter.rejected_unconfirmed_side} | COOL-REJECT {counter.rejected_cooldown} | COOL-REL {counter.adaptive_cooldown_releases} | FAST-CONF {counter.fast_confirm_rescues} | BRACKET+ {counter.bracket_confirm_rescues} | RESCUE-X {counter.rejected_rescue_validation} | CLASS-R {self.state.class_refine_checks} | GEN-R {self.state.general_refine_checks} | CONS+ {self.state.class_consensus_rescues} | BIKE+ {self.state.bicycle_class_rescues} | TRUCK+ {self.state.truck_class_rescues} | TRUCK-SEEN {self.state.truck_tracks_seen} | TRUCK-X {self.state.truck_crossing_tracks} | START+ {self.state.video_start_rescues} | HUMAN-X {self.state.human_guard_rejections} | RIDER+ {self.state.rider_guard_rescues} | GUARD-PENDING {self.state.human_guard_pending_crossings} | ROAD-EDGE+ {counter.road_edge_rescues}",
+            f"DET {self.state.detections_current_frame} | UNTRACKED {self.state.untracked_detections} | TRACK {self.state.active_tracks} | ROAD {self.state.road_tracks_current_frame} | TOTAL {self.state.total_count} | IN {self.state.in_count} | OUT {self.state.out_count} | FPS {self.state.fps:.1f} ({rt}) | {self.state.inference_ms:.0f}ms | {'HYBRID' if self.hybrid_mode else 'DIRECT'} {Path(self.detector_model_name).name} | ROI {self.detection_roi_mode.upper()} | DIRECT-X {self.state.direct_crossings} | INTERP {self.state.interpolated_crossings} | RESCUE {self.state.rescued_crossings} | ROAD-REJECT {counter.rejected_outside_road} | CONFIRM-REJECT {counter.rejected_unconfirmed_side} | COOL-REJECT {counter.rejected_cooldown} | COOL-REL {counter.adaptive_cooldown_releases} | FAST-CONF {counter.fast_confirm_rescues} | BRACKET+ {counter.bracket_confirm_rescues} | RESCUE-X {counter.rejected_rescue_validation} | CLASS-R {self.state.class_refine_checks} | GEN-R {self.state.general_refine_checks} | CONS+ {self.state.class_consensus_rescues} | BIKE+ {self.state.bicycle_class_rescues} | TRUCK+ {self.state.truck_class_rescues} | TRUCK-SEEN {self.state.truck_tracks_seen} | TRUCK-X {self.state.truck_crossing_tracks} | HEAVY-A {self.state.heavy_anchor_tracks} | START+ {self.state.video_start_rescues} | HUMAN-X {self.state.human_guard_rejections} | RIDER+ {self.state.rider_guard_rescues} | GUARD-PENDING {self.state.human_guard_pending_crossings} | ROAD-EDGE+ {counter.road_edge_rescues}",
             (20, 32),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.62,

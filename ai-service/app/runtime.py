@@ -42,6 +42,7 @@ class PipelineState:
     bicycle_tracks_seen: int = 0
     truck_tracks_seen: int = 0
     truck_crossing_tracks: int = 0
+    heavy_anchor_tracks: int = 0
     video_start_rescues: int = 0
     human_guard_rejections: int = 0
     rider_guard_rescues: int = 0

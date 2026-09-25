@@ -70,3 +70,27 @@ def test_duplicate_heavy_raw_id_can_alias_existing_canonical() -> None:
     aliased, stitched = resolver.resolve(44, (405, 225), "bus", 11, 1000, 600)
     assert aliased == 10
     assert stitched is False
+
+
+def test_v0528_heavy_vehicle_anchor_insets_large_box_from_road_edge() -> None:
+    rect = (10.0, 20.0, 30.0, 100.0)
+    assert motion_leading_anchor(rect, (0.0, 5.0), inset_ratio=0.20) == (20.0, 84.0)
+    assert motion_leading_anchor(rect, (0.0, -5.0), inset_ratio=0.20) == (20.0, 36.0)
+
+
+def test_v0528_heavy_inset_anchor_keeps_van_crossing_inside_road_zone() -> None:
+    from app.counting import CountingLine, LineCrossingCounter, RoadZone
+
+    zone = RoadZone(0.0, 0.0, 1.0, 0.0, 1.0, 0.86, 0.0, 0.86)
+    counter = LineCrossingCounter(
+        CountingLine(0.1, 0.5, 0.9, 0.5),
+        road_zone=zone,
+        startup_grace_frames=0,
+    )
+    before = motion_leading_anchor((40.0, 0.0, 60.0, 50.0), (0.0, 8.0), inset_ratio=0.16)
+    after = motion_leading_anchor((40.0, 35.0, 60.0, 95.0), (0.0, 8.0), inset_ratio=0.16)
+    assert before[1] < 50.0
+    assert after[1] < 86.0  # raw leading edge y=95 would be outside the Road Zone
+    assert counter.update(1401, before, 100, 100, 10) is None
+    assert counter.update(1401, after, 100, 100, 11) == "in"
+    assert counter.rejected_outside_road == 0

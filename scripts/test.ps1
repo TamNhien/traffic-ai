@@ -300,18 +300,18 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.27") { throw "VERSION phải là 0.5.27, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0041_dual_refiner_v0527.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0041_dual_refiner_v0527.py." }
+  if ($version -ne "0.5.28") { throw "VERSION phải là 0.5.28, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0042_origin_heavy_v0528.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0042_origin_heavy_v0528.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0041_dual_refiner_v0527"' -or $migrationText -notmatch 'down_revision = "0040_class_refiner_v0526"' -or $migrationText -notmatch "value='0.5.27'") {
-    throw "Migration 0041_dual_refiner_v0527 không đúng contract V0.5.27."
+  if ($migrationText -notmatch 'revision = "0042_origin_heavy_v0528"' -or $migrationText -notmatch 'down_revision = "0041_dual_refiner_v0527"' -or $migrationText -notmatch "value='0.5.28'") {
+    throw "Migration 0042_origin_heavy_v0528 không đúng contract V0.5.28."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
 
 function Assert-AlembicRevisionSafetyContract {
-  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.27" -ForegroundColor Cyan
+  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.28" -ForegroundColor Cyan
   $versionsDir = Join-Path $root "backend\alembic\versions"
   $bad = @()
   Get-ChildItem $versionsDir -Filter "*.py" | ForEach-Object {
@@ -335,7 +335,7 @@ function Assert-AlembicRevisionSafetyContract {
   if ($v17 -notmatch 'revision = "0017_ai_test_dep_v053"') {
     throw "Migration V0.5.3 chưa dùng revision ID rút gọn an toàn."
   }
-  Write-Host "[OK] Alembic revision-length safety V0.5.27" -ForegroundColor Green
+  Write-Host "[OK] Alembic revision-length safety V0.5.28" -ForegroundColor Green
 }
 
 
@@ -1068,6 +1068,35 @@ function Assert-DualRefinerConsensusV0527Contract {
   Write-Host "[OK] Dual Refiner Consensus 4.0 + Benchmark Global Match V0.5.27" -ForegroundColor Green
 }
 
+function Assert-VideoOriginHeavyGateV0528Contract {
+  Write-Host "`n[Traffic AI] Video-Origin + Heavy-Vehicle Gate Rescue V0.5.28" -ForegroundColor Cyan
+  $counting = Get-Content (Join-Path $root "ai-service\app\counting.py") -Raw -Encoding UTF8
+  $tracking = Get-Content (Join-Path $root "ai-service\app\tracking.py") -Raw -Encoding UTF8
+  $worker = Get-Content (Join-Path $root "ai-service\app\worker.py") -Raw -Encoding UTF8
+  $runtime = Get-Content (Join-Path $root "ai-service\app\runtime.py") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  $envExample = Get-Content (Join-Path $root ".env.example") -Raw -Encoding UTF8
+  $start = Get-Content (Join-Path $PSScriptRoot "start.ps1") -Raw -Encoding UTF8
+  $countingTests = Get-Content (Join-Path $root "ai-service\tests\test_counting.py") -Raw -Encoding UTF8
+  $trackingTests = Get-Content (Join-Path $root "ai-service\tests\test_tracking.py") -Raw -Encoding UTF8
+  if ($counting -notmatch 'origin_rescue_frames' -or $counting -notmatch 'origin_rescues' -or $counting -notmatch 'origin_probe') {
+    throw "V0.5.28 thiếu Video-Origin crossing rescue."
+  }
+  if ($tracking -notmatch 'inset_ratio' -or $worker -notmatch 'AI_HEAVY_ANCHOR_INSET_RATIO' -or $runtime -notmatch 'heavy_anchor_tracks') {
+    throw "V0.5.28 thiếu heavy-vehicle inset anchor / telemetry."
+  }
+  if ($envExample -notmatch 'AI_VIDEO_ORIGIN_RESCUE_FRAMES=20' -or $envExample -notmatch 'AI_HEAVY_ANCHOR_INSET_RATIO=0.16' -or $start -notmatch 'AI_VIDEO_ORIGIN_DISTANCE_RATIO') {
+    throw "V0.5.28 thiếu cấu hình runtime cho origin/heavy rescue."
+  }
+  if ($frontend -notmatch 'Video-Origin \+ Heavy-Vehicle Gate Rescue' -or $frontend -notmatch 'Xe lớn anchor') {
+    throw "Frontend V0.5.28 thiếu telemetry origin/heavy rescue."
+  }
+  if ($countingTests -notmatch 'test_v0528_video_origin_rescue_counts_vehicle_already_straddling_gate' -or $trackingTests -notmatch 'test_v0528_heavy_vehicle_anchor_insets_large_box_from_road_edge') {
+    throw "V0.5.28 thiếu regression tests cho xe đầu clip hoặc xe tải/van lớn."
+  }
+  Write-Host "[OK] Video-Origin + Heavy-Vehicle Gate Rescue V0.5.28" -ForegroundColor Green
+}
+
 function Assert-LegacySemanticCompatibilityV0523R1 {
   Write-Host "`n[Traffic AI] Legacy semantic contract compatibility V0.5.23-R1" -ForegroundColor Cyan
   $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
@@ -1127,6 +1156,7 @@ Assert-RiderAwareHumanGuardV0524Contract
 Assert-TransactionalHumanGuardV0525Contract
 Assert-TargetAwareClassRefinerV0526Contract
 Assert-DualRefinerConsensusV0527Contract
+Assert-VideoOriginHeavyGateV0528Contract
 Assert-LegacySemanticCompatibilityV0523R1
 
 Write-Host "`n[Traffic AI] Road Zone + Frame Browser V0.5.11" -ForegroundColor Cyan
