@@ -300,18 +300,18 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.20") { throw "VERSION phải là 0.5.20, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0034_benchmark_overlay_v0520.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0034_benchmark_overlay_v0520.py." }
+  if ($version -ne "0.5.21") { throw "VERSION phải là 0.5.21, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0035_crossing_v0521.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0035_crossing_v0521.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0034_benchmark_overlay_v0520"' -or $migrationText -notmatch 'down_revision = "0033_ground_truth_v0519"' -or $migrationText -notmatch "value='0.5.20'") {
-    throw "Migration 0034_benchmark_overlay_v0520 không đúng contract V0.5.20."
+  if ($migrationText -notmatch 'revision = "0035_crossing_v0521"' -or $migrationText -notmatch 'down_revision = "0034_benchmark_overlay_v0520"' -or $migrationText -notmatch "value='0.5.21'") {
+    throw "Migration 0035_crossing_v0521 không đúng contract V0.5.21."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
 
 function Assert-AlembicRevisionSafetyContract {
-  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.20" -ForegroundColor Cyan
+  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.21" -ForegroundColor Cyan
   $versionsDir = Join-Path $root "backend\alembic\versions"
   $bad = @()
   Get-ChildItem $versionsDir -Filter "*.py" | ForEach-Object {
@@ -335,7 +335,7 @@ function Assert-AlembicRevisionSafetyContract {
   if ($v17 -notmatch 'revision = "0017_ai_test_dep_v053"') {
     throw "Migration V0.5.3 chưa dùng revision ID rút gọn an toàn."
   }
-  Write-Host "[OK] Alembic revision-length safety V0.5.20" -ForegroundColor Green
+  Write-Host "[OK] Alembic revision-length safety V0.5.21" -ForegroundColor Green
 }
 
 
@@ -628,6 +628,37 @@ function Assert-BenchmarkGateOverlayV0520Contract {
 }
 
 
+function Assert-CrossingEngineV0521Contract {
+  Write-Host "`n[Traffic AI] Crossing Engine 7.0 + Benchmark Reconcile V0.5.21" -ForegroundColor Cyan
+  $counting = Get-Content (Join-Path $root "ai-service\app\counting.py") -Raw -Encoding UTF8
+  $worker = Get-Content (Join-Path $root "ai-service\app\worker.py") -Raw -Encoding UTF8
+  $benchmarking = Get-Content (Join-Path $root "backend\app\benchmarking.py") -Raw -Encoding UTF8
+  $routes = Get-Content (Join-Path $root "backend\app\api\routes.py") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  $envExample = Get-Content (Join-Path $root ".env.example") -Raw -Encoding UTF8
+  $start = Get-Content (Join-Path $root "scripts\start.ps1") -Raw -Encoding UTF8
+  if ($counting -notmatch 'startup_grace_frames' -or $counting -notmatch 'side_confirm_samples' -or $counting -notmatch 'crossing_cooldown_frames' -or $counting -notmatch 'contains_with_margin') {
+    throw "Crossing Engine 7.0 thiếu startup guard / side confirm / cooldown / Road-edge tolerance."
+  }
+  if ($worker -notmatch 'AI_GATE_STARTUP_GRACE_FRAMES' -or $worker -notmatch 'AI_GATE_SIDE_CONFIRM_SAMPLES' -or $worker -notmatch 'AI_GATE_COOLDOWN_FRAMES' -or $worker -notmatch 'AI_ROAD_ANCHOR_MARGIN_RATIO') {
+    throw "AI worker chưa nối tuning V0.5.21 vào Crossing Engine."
+  }
+  if ($envExample -notmatch 'AI_GATE_STARTUP_GRACE_FRAMES=12' -or $start -notmatch 'AI_GATE_COOLDOWN_FRAMES') {
+    throw "Cấu hình runtime V0.5.21 chưa được persist qua .env/start.ps1."
+  }
+  if ($benchmarking -notmatch 'false_positive_reason_counts' -or $benchmarking -notmatch 'direction_flip_jitter' -or $benchmarking -notmatch 'startup_artifact') {
+    throw "Ground-truth analyzer V0.5.21 chưa phân loại nguyên nhân đếm dư."
+  }
+  if ($routes -notmatch '/benchmarks/\{benchmark_id\}/reconcile' -or $routes -notmatch 'reconciled_at' -or $routes -notmatch 'clone_marks_from_benchmark_id') {
+    throw "Backend thiếu endpoint Đối chiếu lại hoặc sao chép Ground Truth V0.5.21."
+  }
+  if ($frontend -notmatch 'Đang đối chiếu' -or $frontend -notmatch 'reconcileStatus' -or $frontend -notmatch 'Nguyên nhân đếm dư nghi ngờ' -or $frontend -notmatch 'Sao chép .* GT sang Session') {
+    throw "Frontend chưa hiển thị trạng thái đối chiếu, analyzer đếm dư hoặc tái sử dụng GT V0.5.21."
+  }
+  Write-Host "[OK] Crossing Engine 7.0 + Benchmark Reconcile V0.5.21" -ForegroundColor Green
+}
+
+
 function Assert-SmoothPlaybackContract {
   Write-Host "`n[Traffic AI] Smooth Playback 4.1 contract" -ForegroundColor Cyan
   $aiMain = Get-Content (Join-Path $root "ai-service\app\main.py") -Raw -Encoding UTF8
@@ -877,6 +908,7 @@ Assert-SingleVehicleGuardV0517Contract
 Assert-CrossingEngineV0518Contract
 Assert-GroundTruthBenchmarkV0519Contract
 Assert-BenchmarkGateOverlayV0520Contract
+Assert-CrossingEngineV0521Contract
 
 Write-Host "`n[Traffic AI] Road Zone + Frame Browser V0.5.11" -ForegroundColor Cyan
 $frontendV511 = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8

@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './styles.css'
 
-const APP_VERSION = '0.5.20'
+const APP_VERSION = '0.5.21'
 const vehicleLabels = {
   motorcycle: 'Xe máy', bicycle: 'Xe đạp', car: 'Ô tô', bus: 'Xe buýt', truck: 'Xe tải', other: 'Khác'
 }
@@ -11,7 +11,19 @@ const missReasonLabels = {
   tracker_miss: 'YOLO thấy nhưng ByteTrack mất ID',
   road_zone_reject: 'Track bị Road Zone loại',
   crossing_gate_miss: 'Track trong đường nhưng Crossing Gate không phát event',
+  crossing_confirmation_reject: 'Crossing chưa đủ xác nhận phía sau vạch',
+  crossing_cooldown_reject: 'Crossing bị cooldown chống đếm lặp',
   no_trace_window: 'Không có telemetry gần timecode',
+}
+const falsePositiveReasonLabels = {
+  startup_artifact: 'Event giả lúc khởi tạo clip',
+  direction_flip_jitter: 'Cùng track đảo IN/OUT quá nhanh',
+  same_track_repeat: 'Cùng track phát event lặp',
+  duplicate_near_gt: 'Event dư nằm sát một GT đã khớp',
+  rescued_gap_unmatched: 'Rescue qua gap nhưng GT không có',
+  interpolated_unmatched: 'Nội suy qua vạch nhưng GT không có',
+  direct_unmatched: 'Direct crossing nhưng GT không có',
+  unmatched_ai_event: 'AI event chưa xác định nguyên nhân',
 }
 
 const clamp01 = value => Math.min(1, Math.max(0, Number(value)))
@@ -303,7 +315,7 @@ function AnnotationEditor({ dataset, onChanged }) {
   const currentIndex = Math.max(0, items.findIndex(i=>i.image_name===currentName))
   const imageUrl = currentName ? `/api/datasets/${dataset.id}/images/${encodeURIComponent(currentName)}?v=${encodeURIComponent(dataset.updated_at || '')}` : ''
   return <section className="panel annotation-panel" id="annotation">
-    <div className="panel-head"><div><span className="panel-kicker">ANNOTATION STUDIO · SMART REVIEW</span><h2>3. Chỉ rà soát ảnh cần thiết trước khi train lại</h2></div><span className="lock-state">V0.5.20</span></div>
+    <div className="panel-head"><div><span className="panel-kicker">ANNOTATION STUDIO · SMART REVIEW</span><h2>3. Chỉ rà soát ảnh cần thiết trước khi train lại</h2></div><span className="lock-state">V0.5.21</span></div>
     <p className="hint"><strong>Không cần sửa tay cả 1.200 ảnh.</strong> Chế độ mặc định đưa ảnh xe máy/xe đạp, confidence thấp, ảnh đông xe hoặc ảnh không detection lên trước. Ảnh ô tô/bus/truck rõ và confidence cao có thể duyệt nhanh sau khi bạn spot-check.</p>
     <div className="annotation-summary"><span>Tổng ảnh: <strong>{indexData?.total ?? 0}</strong></span><span>Đang hiện: <strong>{indexData?.filtered_total ?? 0}</strong></span><span>Cần ưu tiên: <strong>{indexData?.priority_images ?? 0}</strong></span><span>Có thể duyệt nhanh: <strong>{indexData?.safe_auto_accept_images ?? 0}</strong></span><span>Đã duyệt: <strong>{indexData?.reviewed_images ?? dataset.reviewed_images ?? 0}</strong></span><span>Ảnh khó: <strong>{indexData?.difficult_images ?? dataset.difficult_images ?? 0}</strong></span><span>Mất cân bằng: <strong>{indexData?.imbalance_ratio ? `x${indexData.imbalance_ratio}` : '—'}</strong></span></div>
     <div className="smart-review-bar"><label>Lọc ảnh<select value={reviewMode} onChange={e=>setReviewMode(e.target.value)}><option value="priority">🔥 Ưu tiên cần kiểm tra</option><option value="unreviewed">Chưa duyệt</option><option value="difficult">Ảnh khó</option><option value="all">Tất cả ảnh</option></select></label><button className="secondary" disabled={bulkBusy || !(indexData?.safe_auto_accept_images>0)} onClick={acceptSafe}>{bulkBusy?'Đang duyệt...':'Duyệt nhanh ảnh tin cậy'}</button></div>
@@ -396,6 +408,8 @@ function GroundTruthBenchmark({ selectedCameraId, sessions }) {
   const [tolerance, setTolerance] = useState(0.75)
   const [playbackRate, setPlaybackRate] = useState(0.5)
   const [busy, setBusy] = useState(false)
+  const [reconciling, setReconciling] = useState(false)
+  const [reconcileStatus, setReconcileStatus] = useState('')
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
   const videoRef = useRef(null)
@@ -444,21 +458,27 @@ function GroundTruthBenchmark({ selectedCameraId, sessions }) {
     loadBenchmarks()
   }, [selectedCameraId, cameraSessions[0]?.id])
 
-  useEffect(() => { loadDetail(selectedBenchmarkId) }, [selectedBenchmarkId])
+  useEffect(() => { setReconcileStatus(''); loadDetail(selectedBenchmarkId) }, [selectedBenchmarkId])
 
-  const createBenchmark = async () => {
+  const createBenchmark = async (cloneGroundTruth=false) => {
     if (!selectedSessionId) return
     setBusy(true); setError(''); setMessage('')
     try {
       const response = await fetch('/api/benchmarks', {
         method:'POST', headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({session_id:Number(selectedSessionId), tolerance_seconds:Number(tolerance || 0.75)})
+        body:JSON.stringify({
+          session_id:Number(selectedSessionId),
+          tolerance_seconds:Number(tolerance || 0.75),
+          clone_marks_from_benchmark_id: cloneGroundTruth && detail?.id ? Number(detail.id) : null,
+        })
       })
       const body = await readBody(response)
       if (!response.ok) throw new Error(body.detail || 'Không tạo được benchmark')
       await loadBenchmarks()
       setSelectedBenchmarkId(body.id)
-      setMessage(`Đã tạo Benchmark #${body.id}. Mở video và đánh dấu từng xe thật sự cắt vạch.`)
+      setMessage(body.cloned_marks
+        ? `Đã tạo Benchmark #${body.id} và sao chép ${body.cloned_marks} Ground Truth. Bây giờ chỉ cần đối chiếu session AI mới.`
+        : `Đã tạo Benchmark #${body.id}. Mở video và đánh dấu từng xe thật sự cắt vạch.`)
     } catch (err) { setError(err.message) } finally { setBusy(false) }
   }
 
@@ -506,6 +526,23 @@ function GroundTruthBenchmark({ selectedCameraId, sessions }) {
     } catch (err) { setError(err.message) } finally { setBusy(false) }
   }
 
+  const reconcileBenchmark = async () => {
+    if (!detail || reconciling) return
+    const before = report ? `${report.matched}/${report.missed}/${report.false_positives}` : ''
+    setReconciling(true); setError(''); setReconcileStatus('Đang đối chiếu lại GT ↔ AI từ dữ liệu gốc...')
+    try {
+      const response = await fetch(`/api/benchmarks/${detail.id}/reconcile`, {method:'POST', cache:'no-store'})
+      const body = await readBody(response)
+      if (!response.ok) throw new Error(body.detail || 'Không đối chiếu lại được benchmark')
+      setReport(body)
+      const after = `${body.matched}/${body.missed}/${body.false_positives}`
+      const stamp = new Date(body.reconciled_at || Date.now()).toLocaleTimeString('vi-VN')
+      setReconcileStatus(before === after
+        ? `Đã đối chiếu lại lúc ${stamp}. Kết quả không đổi: khớp ${body.matched}, lọt ${body.missed}, dư ${body.false_positives}.`
+        : `Đã đối chiếu lại lúc ${stamp}. Kết quả mới: khớp ${body.matched}, lọt ${body.missed}, dư ${body.false_positives}.`)
+    } catch (err) { setError(err.message); setReconcileStatus('') } finally { setReconciling(false) }
+  }
+
   useEffect(() => {
     if (!detail) return () => {}
     const handler = event => {
@@ -534,13 +571,14 @@ function GroundTruthBenchmark({ selectedCameraId, sessions }) {
 
   return <section className="benchmark-layout" id="benchmark">
     <article className="panel benchmark-panel">
-      <div className="panel-head"><div><span className="panel-kicker">GROUND-TRUTH COUNTING BENCHMARK</span><h2>Đánh dấu xe thật cắt vạch trên chính clip</h2></div><span className="lock-state">V0.5.20</span></div>
+      <div className="panel-head"><div><span className="panel-kicker">GROUND-TRUTH COUNTING BENCHMARK</span><h2>Đánh dấu xe thật cắt vạch trên chính clip</h2></div><span className="lock-state">V0.5.21</span></div>
       <p className="hint">Benchmark không đoán tổng xe. Bạn xem lại clip, dừng đúng lúc mỗi xe <strong>thực sự cắt vạch</strong> rồi bấm đánh dấu IN/OUT. Traffic AI lưu timecode video cho từng event và tự ghép GT ↔ AI để chỉ ra chính xác <strong>xe bị lọt</strong> và <strong>xe đếm dư</strong>.</p>
       <div className="benchmark-create-row">
         <label>Phiên AI<select value={selectedSessionId || ''} onChange={e=>setSelectedSessionId(Number(e.target.value))}><option value="">-- Chọn phiên đã chạy clip --</option>{cameraSessions.map(item=><option key={item.id} value={item.id}>Session #{item.id} · {String(item.status).toUpperCase()} · AI {item.total_vehicles} lượt</option>)}</select></label>
         <button disabled={!selectedSessionId || busy} onClick={createBenchmark}>Tạo benchmark cho phiên này</button>
         <label>Benchmark<select value={selectedBenchmarkId || ''} onChange={e=>setSelectedBenchmarkId(Number(e.target.value))}><option value="">-- Chọn benchmark --</option>{benchmarks.map(item=><option key={item.id} value={item.id}>#{item.id} · Session #{item.session_id} · GT {item.mark_count}</option>)}</select></label>
       </div>
+      {detail?.marks?.length > 0 && selectedSessionId && Number(selectedSessionId) !== Number(detail.session_id) && <button className="secondary benchmark-clone-gt" disabled={busy} onClick={()=>createBenchmark(true)}>Sao chép {detail.marks.length} GT sang Session #{selectedSessionId}</button>}
       {error && <div className="source-status bad"><strong>⚠ Benchmark</strong><span>{error}</span></div>}
       {message && <div className="source-status ok"><strong>✓ Benchmark</strong><span>{message}</span></div>}
       {detail ? <>
@@ -562,16 +600,17 @@ function GroundTruthBenchmark({ selectedCameraId, sessions }) {
 
     <article className="panel benchmark-report-panel">
       <div className="panel-head"><div><span className="panel-kicker">BENCHMARK REPORT</span><h2>Xe lọt / đếm dư theo timecode</h2></div></div>
-      {detail && <div className="tolerance-row"><label>Cửa sổ ghép ± giây<input type="number" min="0.05" max="3" step="0.05" value={tolerance} onChange={e=>setTolerance(e.target.value)} /></label><button className="secondary" disabled={busy} onClick={saveTolerance}>Áp dụng</button><button disabled={busy} onClick={()=>loadDetail(detail.id)}>Đối chiếu lại</button></div>}
+      {detail && <><div className="tolerance-row"><label>Cửa sổ ghép ± giây<input type="number" min="0.05" max="3" step="0.05" value={tolerance} onChange={e=>setTolerance(e.target.value)} /></label><button className="secondary" disabled={busy || reconciling} onClick={saveTolerance}>Áp dụng</button><button disabled={busy || reconciling} onClick={reconcileBenchmark}>{reconciling ? 'Đang đối chiếu…' : 'Đối chiếu lại'}</button></div>{reconcileStatus && <div className="benchmark-reconcile-status">{reconcileStatus}</div>}</>}
       {report ? <>
         <div className="benchmark-metrics"><div><span>Ground truth</span><strong>{report.ground_truth_total}</strong></div><div><span>AI đếm</span><strong>{report.ai_total}</strong></div><div><span>Khớp</span><strong>{report.matched}</strong></div><div className={report.missed ? 'metric-bad' : ''}><span>Lọt không đếm</span><strong>{report.missed}</strong></div><div className={report.false_positives ? 'metric-warn' : ''}><span>Đếm dư</span><strong>{report.false_positives}</strong></div><div><span>Sai số tổng</span><strong>{report.count_error > 0 ? '+' : ''}{report.count_error}</strong></div></div>
         <div className="benchmark-scores"><span>Counting Recall <strong>{(Number(report.counting_recall || 0)*100).toFixed(1)}%</strong></span><span>Precision <strong>{(Number(report.counting_precision || 0)*100).toFixed(1)}%</strong></span><span>F1 <strong>{(Number(report.counting_f1 || 0)*100).toFixed(1)}%</strong></span><span>Class đúng <strong>{report.class_accuracy == null ? '—' : `${(report.class_accuracy*100).toFixed(1)}%`}</strong></span></div>
         {report.dominant_miss_reason && <div className="source-status bad"><strong>Nguyên nhân lọt nổi bật: {missReasonLabels[report.dominant_miss_reason] || report.dominant_miss_reason}</strong><span>{Object.entries(report.miss_reason_counts || {}).map(([reason,count])=>`${missReasonLabels[reason] || reason}: ${count}`).join(' · ')}</span></div>}
+        {report.dominant_false_positive_reason && <div className="source-status warn"><strong>Nguyên nhân đếm dư nghi ngờ: {falsePositiveReasonLabels[report.dominant_false_positive_reason] || report.dominant_false_positive_reason}</strong><span>{Object.entries(report.false_positive_reason_counts || {}).map(([reason,count])=>`${falsePositiveReasonLabels[reason] || reason}: ${count}`).join(' · ')}</span></div>}
         {report.legacy_ai_events_without_source_time > 0 && <div className="source-status bad"><strong>⚠ Phiên cũ thiếu timecode</strong><span>{report.legacy_ai_events_without_source_time} event được tạo trước V0.5.19 nên không thể ghép chính xác. Hãy chạy lại clip một lần trên V0.5.19 rồi benchmark session mới.</span></div>}
         <h3 className="benchmark-subhead">Lọt không đếm ({report.missed_items?.length || 0})</h3>
         <div className="benchmark-diff-list">{report.missed_items?.length ? report.missed_items.map(item=><button key={`m-${item.ground_truth_id}`} className="diff-row missed" onClick={()=>seekTo(item.time)}><strong>{formatVideoTime(item.time)}</strong><span>{String(item.direction).toUpperCase()} · {vehicleLabels[item.vehicle_type] || item.vehicle_type}</span><em>{item.diagnosis?.reason ? (missReasonLabels[item.diagnosis.reason] || item.diagnosis.reason) : 'GT có · AI không có'}</em></button>) : <div className="empty">Chưa có xe lọt trong cửa sổ ghép hiện tại.</div>}</div>
         <h3 className="benchmark-subhead">AI đếm dư ({report.false_positive_items?.length || 0})</h3>
-        <div className="benchmark-diff-list">{report.false_positive_items?.length ? report.false_positive_items.map(item=><button key={`f-${item.ai_event_id}`} className="diff-row false-positive" onClick={()=>seekTo(item.time)}><strong>{formatVideoTime(item.time)}</strong><span>{String(item.direction).toUpperCase()} · {vehicleLabels[item.vehicle_type] || item.vehicle_type}</span><em>AI có · GT không có</em></button>) : <div className="empty">Chưa có lượt đếm dư trong cửa sổ ghép hiện tại.</div>}</div>
+        <div className="benchmark-diff-list">{report.false_positive_items?.length ? report.false_positive_items.map(item=><button key={`f-${item.ai_event_id}`} className="diff-row false-positive" onClick={()=>seekTo(item.time)}><strong>{formatVideoTime(item.time)}</strong><span>{String(item.direction).toUpperCase()} · {vehicleLabels[item.vehicle_type] || item.vehicle_type}</span><em>{item.reason ? (falsePositiveReasonLabels[item.reason] || item.reason) : 'AI có · GT không có'}</em></button>) : <div className="empty">Chưa có lượt đếm dư trong cửa sổ ghép hiện tại.</div>}</div>
         <h3 className="benchmark-subhead">Theo loại phương tiện</h3>
         <div className="benchmark-class-grid">{Object.entries(report.per_class || {}).map(([name,item])=><div key={name}><span>{vehicleLabels[name] || name}</span><strong>GT {item.ground_truth} · AI {item.ai}</strong><small>Δ {item.difference > 0 ? '+' : ''}{item.difference}</small></div>)}</div>
       </> : <div className="empty">Tạo/chọn benchmark để xem Recall, Precision, xe lọt và xe đếm dư theo từng timecode.</div>}
@@ -934,7 +973,7 @@ const activateTraining = async run => {
             </> : activePipeline ? <img src={overlayStreamUrl} alt="Live AI stream" /> : <img src={previewUrl} alt="Preview camera" onLoad={e=>{e.currentTarget.style.visibility='visible'}} onError={e=>{e.currentTarget.style.visibility='hidden'}} />}
           </div>
           <div className="camera-select"><label>Camera</label><select value={selectedId || ''} onChange={e => setSelectedId(Number(e.target.value))}><option value="">-- Chọn camera --</option>{cameras.map(c => <option key={c.id} value={c.id}>{c.code} · {c.name}</option>)}</select><span>{activePipeline ? `INFERENCE · ${activePipeline.model_name || 'model đang kích hoạt'} · ${activePipeline.hybrid_mode ? `HYBRID detect ${activePipeline.detector_model_name || 'pretrained'} + refine best.pt` : `DIRECT ${activePipeline.detector_model_name || activePipeline.model_name || ''}`} · AI ${activePipeline.processing_progress ?? 0}% · FPS ${activePipeline.fps}/${activePipeline.source_fps || '-'} · RT x${activePipeline.realtime_factor ?? 0} · lag ${activePipeline.playback_lag_seconds ?? 0}s · ${activePipeline.inference_ms ?? 0} ms · ${String(activePipeline.device || '?').toUpperCase()} · DET ${activePipeline.detections_current_frame ?? 0} · chưa ID ${activePipeline.untracked_detections ?? 0} · track ${activePipeline.active_tracks ?? 0} · road ${activePipeline.road_tracks_current_frame ?? 0} · gộp bus/truck ${activePipeline.suppressed_class_duplicates_current_frame ?? 0} · seen ${activePipeline.detected_tracks ?? 0} · calib ${activePipeline.calibration_moving_tracks ?? 0}T/${activePipeline.calibration_samples ?? 0}P · DETECT ${(activePipeline.detection_roi_mode || 'full').toUpperCase()} · Tổng ${activePipeline.total_count} · IN ${activePipeline.in_count ?? 0} · OUT ${activePipeline.out_count ?? 0} · trực tiếp ${activePipeline.direct_crossings ?? 0} · nội suy ${activePipeline.interpolated_crossings ?? 0} · cứu ${activePipeline.rescued_crossings ?? 0} · loại ngoài lòng đường ${activePipeline.rejected_outside_road ?? 0}` : selected?.source_url || 'Chưa có camera'}</span></div>
-          {activePipeline && (activePipeline.detections_current_frame ?? 0) > 0 && (activePipeline.active_tracks ?? 0) === 0 && <div className="source-status bad"><strong>⚠ YOLO thấy xe nhưng ByteTrack chưa cấp ID</strong><span>V0.5.20 vẫn vẽ box DET màu vàng cho detection chưa có ID. Bộ đếm chỉ tăng khi track ổn định; profile ByteTrack high-recall sẽ cố bám các xe nhỏ/nhanh ở những frame tiếp theo.</span></div>}
+          {activePipeline && (activePipeline.detections_current_frame ?? 0) > 0 && (activePipeline.active_tracks ?? 0) === 0 && <div className="source-status bad"><strong>⚠ YOLO thấy xe nhưng ByteTrack chưa cấp ID</strong><span>V0.5.21 vẫn vẽ box DET màu vàng cho detection chưa có ID. Bộ đếm chỉ tăng khi track ổn định; profile ByteTrack high-recall sẽ cố bám các xe nhỏ/nhanh ở những frame tiếp theo.</span></div>}
           {activePipeline && (activePipeline.suppressed_class_duplicates_current_frame ?? 0) > 0 && <div className="source-status ok"><strong>✓ Đã gộp detection bus/truck trùng nhau</strong><span>Single-Object Guard loại detection BUS/TRUCK chồng lên cùng một xe trước khi đưa vào bộ đếm, tránh một xe tải bị cộng đồng thời vào Xe buýt và Xe tải.</span></div>}
           {activePipeline && (activePipeline.active_tracks ?? 0) > 0 && (activePipeline.road_tracks_current_frame ?? 0) === 0 && <div className="source-status bad"><strong>⚠ Có track nhưng Road Zone chưa phủ luồng xe</strong><span>Dừng AI rồi kéo vùng xanh bao phần lòng đường mà xe thực sự chạy; chỉ vùng xanh mới được phép đếm.</span></div>}
           {selected && !activePipeline && <div className={`source-status ${sourceStatus?.valid ? 'ok' : 'bad'}`}><strong>{sourceStatus?.valid ? '✓ Nguồn sẵn sàng' : '⚠ Nguồn chưa sẵn sàng'}</strong><span>{sourceStatus?.message || 'Đang kiểm tra nguồn...'}</span>{sourceStatus?.suggested_source_url && <><small>Gợi ý: {sourceStatus.suggested_source_url}</small><button type="button" className="inline-action" onClick={applySuggestedSource}>Dùng nguồn gợi ý</button></>}</div>}
@@ -957,7 +996,7 @@ const activateTraining = async run => {
           <div className="line-grid">{lineField('line_x1','X1')}{lineField('line_y1','Y1')}{lineField('line_x2','X2')}{lineField('line_y2','Y2')}{lineField('confidence_threshold','Confidence')}</div>
           <div className={`geometry-status ${countingGeometryState.valid ? 'ok' : 'bad'}`}><strong>{countingGeometryState.valid ? '✓ ROAD GUARD hợp lệ' : '⚠ Chưa thể lưu'}</strong><span>{countingGeometryState.message}</span></div>
           <button disabled={!selected || busy || !!activePipeline || !countingGeometryState.valid} onClick={saveCountingLine}>Lưu vạch + vùng lòng đường</button>
-          <p className="hint"><strong>Vùng xanh = lòng đường được phép đếm.</strong> V0.5.20 giữ <strong>Hybrid Recall</strong> + <strong>Auto Road-Zone</strong> và thêm <strong>Single-Object Guard</strong> để BUS/TRUCK chồng box chỉ được tính là một phương tiện: khi AI chạy đủ track chuyển động, bấm “AI đề xuất theo luồng xe” để hệ thống tự khoanh phần đường xe thật sự đi qua và đặt vạch gần vuông góc luồng xe. Hybrid Recall: YOLO26 pretrained quét toàn khung để tạo track ổn định, còn best.pt tùy biến kiểm tra lại class tại crossing. Detection chưa có ID vẫn hiện box vàng; chỉ track cắt vạch vàng hợp lệ trong vùng xanh mới được cộng IN/OUT.</p>
+          <p className="hint"><strong>Vùng xanh = lòng đường được phép đếm.</strong> V0.5.21 giữ <strong>Hybrid Recall</strong> + <strong>Auto Road-Zone</strong> và thêm <strong>Single-Object Guard</strong> để BUS/TRUCK chồng box chỉ được tính là một phương tiện: khi AI chạy đủ track chuyển động, bấm “AI đề xuất theo luồng xe” để hệ thống tự khoanh phần đường xe thật sự đi qua và đặt vạch gần vuông góc luồng xe. Hybrid Recall: YOLO26 pretrained quét toàn khung để tạo track ổn định, còn best.pt tùy biến kiểm tra lại class tại crossing. Detection chưa có ID vẫn hiện box vàng; chỉ track cắt vạch vàng hợp lệ trong vùng xanh mới được cộng IN/OUT.</p>
         </article>
 
         <article className="panel"><div className="panel-head"><div><span className="panel-kicker">CAMERA SOURCE</span><h2>{editingId ? `Sửa Camera #${editingId}` : 'Tạo camera mới'}</h2></div><button className="secondary" type="button" disabled={busy || !!activePipeline} onClick={beginNewCamera}>Camera mới</button></div><form className="camera-form" onSubmit={saveCamera}>
@@ -970,8 +1009,8 @@ const activateTraining = async run => {
       </section>
 
       <section className="training-layout" id="training">
-        <article className="panel training-panel"><div className="panel-head"><div><span className="panel-kicker">DATASET STUDIO · CLEAN RETRAIN</span><h2>Dataset giao thông Việt Nam</h2></div><span className="lock-state">V0.5.20</span></div>
-          <p className="hint"><strong>Train lại từ đầu</strong> nên tạo dataset mới sạch từ video gốc. V0.5.20 mặc định lấy mỗi 15 frame, tối đa 600 ảnh và tự loại frame gần trùng; vì vậy bạn không còn phải mặc định xử lý 1.200 ảnh gần giống nhau.</p>
+        <article className="panel training-panel"><div className="panel-head"><div><span className="panel-kicker">DATASET STUDIO · CLEAN RETRAIN</span><h2>Dataset giao thông Việt Nam</h2></div><span className="lock-state">V0.5.21</span></div>
+          <p className="hint"><strong>Train lại từ đầu</strong> nên tạo dataset mới sạch từ video gốc. V0.5.21 mặc định lấy mỗi 15 frame, tối đa 600 ảnh và tự loại frame gần trùng; vì vậy bạn không còn phải mặc định xử lý 1.200 ảnh gần giống nhau.</p>
           <div className="dataset-form">
             <label className="dataset-name-field">Tên dataset<input value={datasetForm.name} onChange={e=>setDatasetForm({...datasetForm,name:e.target.value})} placeholder="traffic-vietnam-clean-01" /></label>
             <label>Mỗi N frame<input type="number" min="1" value={datasetForm.every_n_frames} onChange={e=>setDatasetForm({...datasetForm,every_n_frames:e.target.value})}/></label>
@@ -991,7 +1030,7 @@ const activateTraining = async run => {
           <div className="train-form"><label>Base model<select value={trainingForm.base_model} onChange={e=>setTrainingForm({...trainingForm,base_model:e.target.value})}><option value="yolo26s.pt">YOLO26s</option><option value="yolo26m.pt">YOLO26m</option></select></label><label>Epochs<input type="number" min="1" value={trainingForm.epochs} onChange={e=>setTrainingForm({...trainingForm,epochs:e.target.value})}/></label><label>Image size<input type="number" min="320" step="32" value={trainingForm.imgsz} onChange={e=>setTrainingForm({...trainingForm,imgsz:e.target.value})}/></label><label>Batch<input type="number" min="1" value={trainingForm.batch} onChange={e=>setTrainingForm({...trainingForm,batch:e.target.value})}/></label></div>
           <p className="hint"><strong>Train mới từ đầu trong Traffic AI</strong> = tạo một Training Run mới từ base model pretrained bạn chọn (khuyến nghị YOLO26s), <strong>không tiếp tục học từ best.pt cũ</strong>. Đây là fine-tune mới, không phải random-weight training.</p><button disabled={!selectedDataset || selectedDataset?.status !== 'ready' || busy || trainingRuns.some(r=>r.status==='running')} onClick={startTraining}>5. Bắt đầu fine-tune mới RTX 3060</button>
           <div className="event-list training-runs">{trainingRuns.length ? trainingRuns.map(run=><div className="event-row training-row" key={run.id}><span>Run #{run.id} · Dataset #{run.dataset_id} · {run.base_model}</span><strong>{String(run.status).toUpperCase()} · {Number(run.progress || 0).toFixed(1)}%</strong><small>Epoch {run.current_epoch}/{run.epochs} · P {run.precision?.toFixed?.(3) ?? '-'} · R {run.recall?.toFixed?.(3) ?? '-'} · mAP50 {run.map50?.toFixed?.(3) ?? '-'} · mAP50-95 {run.map50_95?.toFixed?.(3) ?? '-'}</small>{run.status==='completed' && (run.is_active_model ? <span className="active-model-badge">✓ ĐANG DÙNG best.pt</span> : <button className="inline-action" disabled={busy} onClick={()=>activateTraining(run)}>6. Kích hoạt best.pt</button>)}{run.last_error && <small className="bad-text">{run.last_error}</small>}</div>) : <div className="empty">Chưa có training run.</div>}</div>
-          <p className="hint">Sau khi kích hoạt <code>best.pt</code>, V0.5.20 dùng <strong>Hybrid Recall</strong>: YOLO26 pretrained đảm nhiệm detect/track để không bỏ xe vì recall thấp, còn <code>best.pt</code> tùy biến refine class tại crossing. Strict Gate/Road Guard vẫn quyết định đếm; Annotation Studio tiếp tục dùng để nâng chất lượng ground truth cho các lần train sau.</p>
+          <p className="hint">Sau khi kích hoạt <code>best.pt</code>, V0.5.21 dùng <strong>Hybrid Recall</strong>: YOLO26 pretrained đảm nhiệm detect/track để không bỏ xe vì recall thấp, còn <code>best.pt</code> tùy biến refine class tại crossing. Strict Gate/Road Guard vẫn quyết định đếm; Annotation Studio tiếp tục dùng để nâng chất lượng ground truth cho các lần train sau.</p>
         </article>
       </section>
 

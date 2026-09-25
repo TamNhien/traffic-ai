@@ -42,3 +42,42 @@ def test_benchmark_tolerance_blocks_far_event() -> None:
     assert result["matched"] == 0
     assert result["missed"] == 1
     assert result["false_positives"] == 1
+
+
+def rich_item(idx, time, direction="in", vehicle_type="motorcycle", tracking_id=None, crossing_method=None, confidence=0.9):
+    return SimpleNamespace(
+        id=idx,
+        source_time_seconds=time,
+        direction=direction,
+        vehicle_type=vehicle_type,
+        tracking_id=tracking_id,
+        crossing_method=crossing_method,
+        confidence=confidence,
+    )
+
+
+def test_false_positive_analyzer_flags_startup_artifact() -> None:
+    result = match_crossings([], [rich_item(21, 0.08, tracking_id=7, crossing_method="direct")], 0.75)
+    assert result["false_positive_items"][0]["reason"] == "startup_artifact"
+    assert result["dominant_false_positive_reason"] == "startup_artifact"
+
+
+def test_false_positive_analyzer_flags_direction_flip_jitter() -> None:
+    ai = [
+        rich_item(31, 10.0, "in", tracking_id=55, crossing_method="direct"),
+        rich_item(32, 11.0, "out", tracking_id=55, crossing_method="interpolated"),
+    ]
+    result = match_crossings([rich_item(1, 10.02, "in")], ai, 0.20)
+    assert result["matched"] == 1
+    assert result["false_positives"] == 1
+    assert result["false_positive_items"][0]["reason"] == "direction_flip_jitter"
+
+
+def test_false_positive_analyzer_flags_duplicate_near_matched_gt() -> None:
+    ai = [
+        rich_item(41, 20.00, "in", tracking_id=71, crossing_method="direct"),
+        rich_item(42, 20.35, "in", tracking_id=72, crossing_method="direct"),
+    ]
+    result = match_crossings([rich_item(2, 20.02, "in")], ai, 0.50)
+    assert result["matched"] == 1
+    assert result["false_positive_items"][0]["reason"] == "duplicate_near_gt"

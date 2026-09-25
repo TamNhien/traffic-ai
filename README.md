@@ -1,3 +1,270 @@
+# Traffic AI V0.5.21 — Ground-truth Error Analyzer + Crossing Engine 7.0 🎯🚗
+
+V0.5.21 dùng trực tiếp Ground-truth Benchmark để xử lý hai vấn đề còn lại: **nút “Đối chiếu lại” không có phản hồi nhìn thấy được** và **Crossing Engine còn overcount / lọt xe**.
+
+## Điểm mới chính
+
+### 1. `Đối chiếu lại` giờ là một hành động thật
+
+Frontend gọi endpoint riêng:
+
+```text
+POST /api/benchmarks/{id}/reconcile
+```
+
+Nút chuyển trạng thái:
+
+```text
+Đối chiếu lại
+      ↓
+Đang đối chiếu…
+      ↓
+Đã đối chiếu lại lúc HH:mm:ss
+```
+
+Nếu số liệu không đổi, giao diện nói rõ:
+
+```text
+Kết quả không đổi: khớp ..., lọt ..., dư ...
+```
+
+Không còn trường hợp bấm nút nhưng không biết hệ thống có chạy hay không.
+
+### 2. Ground-truth Auto Error Analyzer cho `AI đếm dư`
+
+Mỗi false-positive event được phân tích theo timecode, tracking ID và crossing method. Report có thể gắn các nhãn chẩn đoán:
+
+```text
+Event giả lúc khởi tạo clip
+Cùng track đảo IN/OUT quá nhanh
+Cùng track phát event lặp
+Event dư nằm sát một GT đã khớp
+Rescue qua gap nhưng GT không có
+Nội suy qua vạch nhưng GT không có
+Direct crossing nhưng GT không có
+```
+
+Đây là **chẩn đoán**, không thay Ground Truth. GT do người dùng đánh dấu vẫn là chuẩn để xác định xe có thật sự cắt vạch hay không.
+
+### 3. Crossing Engine 7.0 giảm overcount
+
+Runtime mặc định mới:
+
+```env
+AI_GATE_STARTUP_GRACE_FRAMES=12
+AI_GATE_SIDE_CONFIRM_SAMPLES=2
+AI_GATE_COOLDOWN_FRAMES=60
+AI_ROAD_ANCHOR_MARGIN_RATIO=0.012
+```
+
+Luồng đếm mới:
+
+```text
+Track đi tới vạch
+   ↓
+không tính crossing trong 12 frame đầu clip
+   ↓
+trajectory thật sự đổi phía vạch
+   ↓
+phải có thêm observation xác nhận ở phía mới
+   ↓
+không được lặp crossing cùng canonical track trong cooldown
+   ↓
+Road Zone corridor vẫn strict
+   ↓
+COUNT
+```
+
+Mục tiêu là giảm các event kiểu:
+
+```text
+IN → OUT → IN
+```
+
+trong vài frame do jitter / ID instability.
+
+### 4. Road Zone edge tolerance chỉ cứu sai số anchor nhỏ
+
+Road Guard trước đây yêu cầu cả hai observed anchor phải nằm tuyệt đối trong polygon. V0.5.21 cho phép **chỉ observed anchor** lệch ra mép Road Zone một khoảng rất nhỏ (`0.012` cạnh ngắn frame), trong khi:
+
+```text
+crossing point
+probe trước crossing
+probe sau crossing
+```
+
+vẫn bắt buộc nằm **strict** trong Road Zone.
+
+Do đó mục tiêu là cứu các GT bị `Road Zone reject` vì leading-edge anchor lệch vài pixel, nhưng không mở cửa cho xe chạy ngoài lề.
+
+### 5. Backend chống rapid direction-flip lần hai
+
+Ngay cả khi runtime gửi lại event do bất ổn, backend còn có lớp idempotency bổ sung cho cùng canonical `tracking_id` trong cửa sổ ngắn theo frame/timecode.
+
+### 6. Không phải đánh lại 149 Ground Truth
+
+Sau khi chạy V0.5.21 thành một Session mới với **cùng clip + cùng vạch**, Benchmark Studio hiện nút:
+
+```text
+Sao chép 149 GT sang Session #...
+```
+
+Backend chỉ cho sao chép khi nguồn video và vạch đếm khớp benchmark nguồn. Nhờ vậy bạn có thể dùng đúng 149 mốc GT đã đánh để so V0.5.20 ↔ V0.5.21, không phải xem lại 15 phút clip và bấm I/O lần nữa.
+
+---
+
+# Database V0.5.21
+
+Migration:
+
+```text
+0034_benchmark_overlay_v0520
+        ↓
+0035_crossing_v0521
+```
+
+Schema:
+
+```text
+schema_version = 0.5.21
+```
+
+Migration này không xóa bảng/dữ liệu và không đụng:
+
+```text
+Dataset #4
+Ground Truth Benchmark hiện có
+Run #3
+best.pt
+vehicle_events cũ
+counting_sessions cũ
+```
+
+---
+
+# Cập nhật trên máy
+
+Chép full source đè vào:
+
+```text
+D:\LienThongDH\DoAn\traffic-ai
+```
+
+Giữ nguyên:
+
+```text
+.env
+gateway\certs\
+videos\
+models\
+snapshots\
+datasets\
+training-runs\
+```
+
+Không dùng:
+
+```powershell
+docker compose down -v
+```
+
+Nếu Windows đánh dấu file PowerShell từ ZIP:
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+```
+
+Sau đó:
+
+```powershell
+.\scripts\test.ps1
+```
+
+Mong muốn có:
+
+```text
+[Traffic AI] Crossing Engine 7.0 + Benchmark Reconcile V0.5.21
+[OK] Crossing Engine 7.0 + Benchmark Reconcile V0.5.21
+```
+
+Nếu PASS:
+
+```powershell
+.\scripts\start.ps1
+```
+
+Database:
+
+```powershell
+.\scripts\verify-database.ps1
+```
+
+mong muốn:
+
+```text
+0035_crossing_v0521
+schema_version = 0.5.21
+```
+
+Sau đó `Ctrl + F5` trên trình duyệt.
+
+---
+
+# Kiểm thử V0.5.21
+
+```text
+Python compile                         PASS
+Backend unit tests                    15/15 PASS
+AI Service unit tests                 66/66 PASS
+Crossing Engine 7.0 regression        PASS
+Ground-truth false-positive analyzer  PASS
+Benchmark reconcile endpoint          PASS
+Ground Truth clone contract           PASS
+Alembic single head                   PASS
+head = 0035_crossing_v0521            PASS
+Revision ID <= 32 chars               PASS
+Sensitive/runtime artifact scan       PASS
+```
+
+Môi trường đóng gói hiện tại không có đúng Node 26.10/Docker Desktop của máy đích, nên vòng `Vite build + Docker full-suite` vẫn do `./scripts/test.ps1` trên máy Windows của bạn xác nhận. Backend tests ở môi trường đóng gói dùng SQLite và temporary `httpx2 -> httpx` compatibility shim; source thật không đổi dependency của dự án.
+
+
+# Benchmark sau khi nâng
+
+Benchmark cũ vẫn được giữ để xem kết quả V0.5.20. Để đo hiệu quả Crossing Engine 7.0, hãy chạy lại **đúng clip + đúng vạch + đúng Road Zone** thành một Session mới rồi tạo Benchmark mới. Ground Truth cũ có thể dùng làm mốc tham chiếu, nhưng event AI của session mới phải được đối chiếu với session mới.
+
+Mục tiêu không phải làm tổng AI “gần 149” bằng cách ép số, mà là đồng thời:
+
+```text
+missed ↓
+false positive ↓
+Recall ↑
+Precision ↑
+F1 ↑
+```
+
+---
+
+# Phát hành vẫn một lệnh
+
+```powershell
+.\scripts\publish.ps1
+```
+
+```text
+→ test
+→ build
+→ push GitHub
+→ tag v0.5.21
+→ GitHub Actions
+→ Release
+```
+
+---
+
+# Lịch sử trước V0.5.21
+
 # Traffic AI V0.5.20 — Benchmark Gate Overlay + IN/OUT 🎯🛣️
 
 V0.5.20 sửa blocker của Ground-truth Benchmark: **video benchmark phải hiển thị đúng vạch đếm, Road Zone và hướng IN/OUT**, nếu không người dùng không thể biết lúc nào xe thực sự cắt vạch để đánh dấu GT.

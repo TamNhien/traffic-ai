@@ -136,6 +136,7 @@ class BenchmarkCreate(BaseModel):
     session_id: int
     name: str | None = None
     tolerance_seconds: float = 0.75
+    clone_marks_from_benchmark_id: int | None = None
 
 
 class BenchmarkUpdate(BaseModel):
@@ -549,6 +550,29 @@ def internal_event(payload: VehicleEventCreate, x_ai_token: str | None = Header(
     if existing is not None:
         return existing
 
+    # Crossing Engine 7.0 backend safety: the same canonical track producing an
+    # opposite-direction event a moment later is almost always gate jitter, not
+    # a real vehicle leaving and returning. Keep legitimate later turn-arounds
+    # possible by applying this guard only inside a short source-video window.
+    if payload.session_id is not None and payload.tracking_id is not None:
+        recent_same_track = db.scalar(select(VehicleEvent).where(
+            VehicleEvent.session_id == payload.session_id,
+            VehicleEvent.tracking_id == payload.tracking_id,
+        ).order_by(VehicleEvent.id.desc()))
+        if recent_same_track is not None:
+            frame_close = (
+                payload.source_frame_index is not None
+                and recent_same_track.source_frame_index is not None
+                and abs(payload.source_frame_index - recent_same_track.source_frame_index) <= 60
+            )
+            time_close = (
+                payload.source_time_seconds is not None
+                and recent_same_track.source_time_seconds is not None
+                and abs(payload.source_time_seconds - recent_same_track.source_time_seconds) <= 2.0
+            )
+            if frame_close or time_close:
+                return recent_same_track
+
     event = VehicleEvent(**payload.model_dump(exclude_none=True))
     db.add(event)
     if payload.session_id:
@@ -668,7 +692,44 @@ def create_benchmark(payload: BenchmarkCreate, db: Session = Depends(get_db)) ->
     db.add(row)
     db.commit()
     db.refresh(row)
-    return _benchmark_payload(row, 0)
+
+    cloned_marks = 0
+    if payload.clone_marks_from_benchmark_id is not None:
+        source_benchmark = db.get(CountingBenchmark, payload.clone_marks_from_benchmark_id)
+        if source_benchmark is None:
+            db.delete(row); db.commit()
+            raise HTTPException(status_code=404, detail="Benchmark nguồn để sao chép Ground Truth không tồn tại.")
+        same_source = source_benchmark.source_url == row.source_url
+        line_delta = max(
+            abs(source_benchmark.line_x1 - row.line_x1), abs(source_benchmark.line_y1 - row.line_y1),
+            abs(source_benchmark.line_x2 - row.line_x2), abs(source_benchmark.line_y2 - row.line_y2),
+        )
+        if not same_source or line_delta > 0.002:
+            db.delete(row); db.commit()
+            raise HTTPException(
+                status_code=422,
+                detail="Không thể sao chép GT: session mới phải dùng đúng video và đúng vạch đếm của benchmark nguồn.",
+            )
+        source_marks = list(db.scalars(
+            select(GroundTruthCrossing)
+            .where(GroundTruthCrossing.benchmark_id == source_benchmark.id)
+            .order_by(GroundTruthCrossing.source_time_seconds, GroundTruthCrossing.id)
+        ).all())
+        for mark in source_marks:
+            db.add(GroundTruthCrossing(
+                benchmark_id=row.id,
+                source_time_seconds=mark.source_time_seconds,
+                source_frame_index=mark.source_frame_index,
+                vehicle_type=mark.vehicle_type,
+                direction=mark.direction,
+                note=mark.note,
+            ))
+        cloned_marks = len(source_marks)
+        db.commit()
+
+    payload_out = _benchmark_payload(row, cloned_marks)
+    payload_out["cloned_marks"] = cloned_marks
+    return payload_out
 
 
 @router.get("/benchmarks/{benchmark_id}")
@@ -741,8 +802,7 @@ def delete_ground_truth_mark(benchmark_id: int, mark_id: int, db: Session = Depe
     return {"status": "deleted", "mark_id": mark_id}
 
 
-@router.get("/benchmarks/{benchmark_id}/report")
-def benchmark_report(benchmark_id: int, db: Session = Depends(get_db)) -> dict:
+def _build_benchmark_report(benchmark_id: int, db: Session) -> dict:
     benchmark = db.get(CountingBenchmark, benchmark_id)
     if benchmark is None:
         raise HTTPException(status_code=404, detail="Benchmark not found")
@@ -792,6 +852,25 @@ def benchmark_report(benchmark_id: int, db: Session = Depends(get_db)) -> dict:
         "dominant_miss_reason": dominant_miss_reason,
         "ready": bool(marks) and len(timed_events) > 0,
     })
+    return report
+
+
+@router.get("/benchmarks/{benchmark_id}/report")
+def benchmark_report(benchmark_id: int, db: Session = Depends(get_db)) -> dict:
+    return _build_benchmark_report(benchmark_id, db)
+
+
+@router.post("/benchmarks/{benchmark_id}/reconcile")
+def reconcile_benchmark(benchmark_id: int, db: Session = Depends(get_db)) -> dict:
+    """Force a fresh GT↔AI reconciliation and return an explicit timestamp.
+
+    V0.5.21 makes the UI action observable instead of silently issuing the same
+    GET again. The report is always rebuilt from current GT marks and persisted
+    vehicle events; nothing is cached or mutated by this endpoint.
+    """
+    report = _build_benchmark_report(benchmark_id, db)
+    report["reconciled_at"] = datetime.now(timezone.utc).isoformat()
+    report["recomputed"] = True
     return report
 
 

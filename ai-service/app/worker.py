@@ -240,6 +240,10 @@ class PipelineWorker(threading.Thread):
                 interpolation_gap_frames=int(os.getenv("AI_GATE_INTERPOLATION_GAP", "3")),
                 min_perpendicular_ratio=float(os.getenv("AI_GATE_MIN_NORMAL_RATIO", "0.10")),
                 min_crossing_motion_ratio=float(os.getenv("AI_GATE_MIN_MOTION_RATIO", "0.004")),
+                startup_grace_frames=int(os.getenv("AI_GATE_STARTUP_GRACE_FRAMES", "12")),
+                side_confirm_samples=int(os.getenv("AI_GATE_SIDE_CONFIRM_SAMPLES", "2")),
+                crossing_cooldown_frames=int(os.getenv("AI_GATE_COOLDOWN_FRAMES", "60")),
+                road_anchor_margin_ratio=float(os.getenv("AI_ROAD_ANCHOR_MARGIN_RATIO", "0.012")),
             )
 
             self._event_dispatcher.start()
@@ -473,6 +477,9 @@ class PipelineWorker(threading.Thread):
                         "crossing_events": len(pending_crossing_events),
                         "rejected_outside_road": counter.rejected_outside_road,
                         "rejected_outside_segment": counter.rejected_outside_segment,
+                        "rejected_unconfirmed_side": counter.rejected_unconfirmed_side,
+                        "rejected_cooldown": counter.rejected_cooldown,
+                        "road_edge_rescues": counter.road_edge_rescues,
                     }, separators=(",", ":")) + "\n")
                 if pending_crossing_events:
                     snapshot = self._save_crossing_snapshot(cv2, frame, frame_index)
@@ -646,7 +653,7 @@ class PipelineWorker(threading.Thread):
         rt = f"x{self.state.realtime_factor:.2f}" if self.state.source_fps > 0 else "live"
         cv2.putText(
             frame,
-            f"DET {self.state.detections_current_frame} | UNTRACKED {self.state.untracked_detections} | TRACK {self.state.active_tracks} | ROAD {self.state.road_tracks_current_frame} | TOTAL {self.state.total_count} | IN {counter.in_count} | OUT {counter.out_count} | FPS {self.state.fps:.1f} ({rt}) | {self.state.inference_ms:.0f}ms | {'HYBRID' if self.hybrid_mode else 'DIRECT'} {Path(self.detector_model_name).name} | ROI {self.detection_roi_mode.upper()} | DIRECT-X {counter.direct_crossings} | INTERP {counter.interpolated_crossings} | RESCUE {counter.rescued_crossings} | ROAD-REJECT {counter.rejected_outside_road}",
+            f"DET {self.state.detections_current_frame} | UNTRACKED {self.state.untracked_detections} | TRACK {self.state.active_tracks} | ROAD {self.state.road_tracks_current_frame} | TOTAL {self.state.total_count} | IN {counter.in_count} | OUT {counter.out_count} | FPS {self.state.fps:.1f} ({rt}) | {self.state.inference_ms:.0f}ms | {'HYBRID' if self.hybrid_mode else 'DIRECT'} {Path(self.detector_model_name).name} | ROI {self.detection_roi_mode.upper()} | DIRECT-X {counter.direct_crossings} | INTERP {counter.interpolated_crossings} | RESCUE {counter.rescued_crossings} | ROAD-REJECT {counter.rejected_outside_road} | CONFIRM-REJECT {counter.rejected_unconfirmed_side} | COOL-REJECT {counter.rejected_cooldown} | ROAD-EDGE+ {counter.road_edge_rescues}",
             (20, 32),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.62,

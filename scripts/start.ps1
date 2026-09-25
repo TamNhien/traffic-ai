@@ -133,7 +133,11 @@ Ensure-EnvSetting "AI_ROAD_ROI_MARGIN" "0.02"
 Ensure-EnvSetting "AI_GATE_ROI_MARGIN" "0.16"
 Ensure-EnvSetting "AI_GATE_ROI_MIN_SPAN" "0.52"
 Ensure-EnvSetting "AI_GATE_ENDPOINT_MARGIN" "0.035"
+Ensure-EnvSetting "AI_GATE_STARTUP_GRACE_FRAMES" "12"
+Ensure-EnvSetting "AI_GATE_SIDE_CONFIRM_SAMPLES" "2"
+Ensure-EnvSetting "AI_GATE_COOLDOWN_FRAMES" "60"
 Ensure-EnvSetting "AI_ROAD_ZONE_PROBE_RATIO" "0.018"
+Ensure-EnvSetting "AI_ROAD_ANCHOR_MARGIN_RATIO" "0.012"
 Ensure-EnvSetting "AI_REFINE_AT_CROSSING" "1"
 Ensure-EnvSetting "AI_REFINE_MODEL_NAME" "yolo26m.pt"
 Ensure-EnvSetting "AI_REFINE_IMGSZ" "640"
@@ -224,7 +228,7 @@ if (-not $dashboardOk -or -not $apiOk) {
 }
 
 Write-Host ""
-Write-Host "[OK] Traffic AI V0.5.20 đã khởi động." -ForegroundColor Green
+Write-Host "[OK] Traffic AI V0.5.21 đã khởi động." -ForegroundColor Green
 Write-Host "Dashboard : https://traffic-ai.test:8443"
 Write-Host "API Docs  : https://traffic-ai.test:8444/docs"
 Write-Host "PostgreSQL: 127.0.0.1:5445 / traffic_ai_db"

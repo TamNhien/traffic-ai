@@ -79,3 +79,8 @@
 
 /* V0.5.19-R1 Benchmark responsive hotfix: controls must never overflow into report panel. */
 @media(max-width:1280px){.benchmark-create-row{grid-template-columns:minmax(0,1fr)}.benchmark-create-row>label:last-child{grid-column:auto}.benchmark-create-row>button{width:100%;max-width:none}}
+
+/* V0.5.21 Benchmark reconciliation feedback + over-count diagnostics */
+.source-status.warn{background:rgba(120,83,8,.20);border-color:rgba(250,204,21,.30);color:#fde68a}
+.benchmark-reconcile-status{margin:8px 0 2px;padding:8px 10px;border:1px solid rgba(96,165,250,.28);border-radius:8px;background:rgba(30,64,175,.16);color:#bfdbfe;font-size:12px;line-height:1.4}
+.benchmark-clone-gt{width:100%;margin:-2px 0 10px}

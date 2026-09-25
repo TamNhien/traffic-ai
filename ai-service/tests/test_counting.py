@@ -194,3 +194,58 @@ def test_crossing_engine_v6_long_gap_remains_rescue() -> None:
     assert counter.interpolated_crossings == 0
     assert counter.rescued_crossings == 1
     assert counter.crossing_breakdown == {"direct": 0, "interpolated": 0, "rescued": 1}
+
+
+def test_crossing_engine_v7_startup_grace_does_not_replay_old_crossing() -> None:
+    counter = LineCrossingCounter(
+        CountingLine(0.1, 0.5, 0.9, 0.5),
+        startup_grace_frames=12,
+        side_confirm_samples=2,
+    )
+    assert counter.update(1001, (50, 20), 100, 100, 1) is None
+    assert counter.update(1001, (50, 80), 100, 100, 2) is None
+    for frame in range(3, 14):
+        assert counter.update(1001, (50, 82), 100, 100, frame) is None
+    assert counter.total_crossings == 0
+
+
+def test_crossing_engine_v7_requires_destination_side_confirmation() -> None:
+    counter = LineCrossingCounter(
+        CountingLine(0.1, 0.5, 0.9, 0.5),
+        side_confirm_samples=2,
+        startup_grace_frames=0,
+    )
+    assert counter.update(1002, (50, 20), 100, 100, 10) is None
+    assert counter.update(1002, (50, 80), 100, 100, 11) is None
+    assert counter.rejected_unconfirmed_side == 1
+    assert counter.update(1002, (50, 82), 100, 100, 12) == "in"
+    assert counter.in_count == 1
+
+
+def test_crossing_engine_v7_cooldown_blocks_rapid_direction_flip() -> None:
+    counter = LineCrossingCounter(
+        CountingLine(0.1, 0.5, 0.9, 0.5),
+        dead_band_ratio=0.01,
+        rearm_distance_ratio=0.10,
+        crossing_cooldown_frames=60,
+        startup_grace_frames=0,
+    )
+    assert counter.update(1003, (50, 20), 100, 100, 10) is None
+    assert counter.update(1003, (50, 80), 100, 100, 11) == "in"
+    assert counter.update(1003, (50, 90), 100, 100, 12) is None
+    assert counter.update(1003, (50, 20), 100, 100, 20) is None
+    assert counter.out_count == 0
+    assert counter.rejected_cooldown >= 1
+
+
+def test_crossing_engine_v7_allows_tiny_anchor_road_edge_error() -> None:
+    zone = RoadZone(0.20, 0.0, 0.80, 0.0, 0.80, 1.0, 0.20, 1.0)
+    counter = LineCrossingCounter(
+        CountingLine(0.0, 0.5, 1.0, 0.5),
+        road_zone=zone,
+        road_anchor_margin_ratio=0.02,
+        startup_grace_frames=0,
+    )
+    assert counter.update(1004, (19, 20), 100, 100, 1) is None
+    assert counter.update(1004, (50, 80), 100, 100, 2) == "in"
+    assert counter.road_edge_rescues == 1

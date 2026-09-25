@@ -40,12 +40,19 @@ def diagnose_trace(session_id: int, times: Iterable[float], window_seconds: floa
         max_road = max(int(row.get("road_tracks", 0)) for row in nearby)
         event_frames = sum(int(row.get("crossing_events", 0)) for row in nearby)
         outside_road_delta = max(int(row.get("rejected_outside_road", 0)) for row in nearby) - min(int(row.get("rejected_outside_road", 0)) for row in nearby)
+        confirm_delta = max(int(row.get("rejected_unconfirmed_side", 0)) for row in nearby) - min(int(row.get("rejected_unconfirmed_side", 0)) for row in nearby)
+        cooldown_delta = max(int(row.get("rejected_cooldown", 0)) for row in nearby) - min(int(row.get("rejected_cooldown", 0)) for row in nearby)
+        road_edge_rescue_delta = max(int(row.get("road_edge_rescues", 0)) for row in nearby) - min(int(row.get("road_edge_rescues", 0)) for row in nearby)
         if max_det <= 0:
             reason = "detector_miss"
         elif max_track <= 0:
             reason = "tracker_miss"
         elif max_road <= 0 or outside_road_delta > 0:
             reason = "road_zone_reject"
+        elif cooldown_delta > 0:
+            reason = "crossing_cooldown_reject"
+        elif confirm_delta > 0:
+            reason = "crossing_confirmation_reject"
         else:
             reason = "crossing_gate_miss"
         result.append({
@@ -56,5 +63,8 @@ def diagnose_trace(session_id: int, times: Iterable[float], window_seconds: floa
             "max_road": max_road,
             "crossing_events_nearby": event_frames,
             "outside_road_delta": outside_road_delta,
+            "confirmation_reject_delta": confirm_delta,
+            "cooldown_reject_delta": cooldown_delta,
+            "road_edge_rescue_delta": road_edge_rescue_delta,
         })
     return {"available": True, "session_id": int(session_id), "window_seconds": window, "items": result}

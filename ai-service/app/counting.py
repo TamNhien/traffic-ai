@@ -46,6 +46,24 @@ class RoadZone:
     def contains(self, point: Point, width: int, height: int) -> bool:
         return point_in_polygon(point, self.denormalize(width, height))
 
+    def contains_with_margin(self, point: Point, width: int, height: int, margin_ratio: float = 0.0) -> bool:
+        """Accept a tiny tracking-anchor error around the polygon boundary.
+
+        Crossing/probe points remain strict. V0.5.21 uses this only for the two
+        observed anchors so a bounding-box leading edge a few pixels outside the
+        green road polygon does not create a false Road Zone miss.
+        """
+        polygon = self.denormalize(width, height)
+        if point_in_polygon(point, polygon):
+            return True
+        margin_px = max(0.0, float(margin_ratio)) * max(1.0, min(width, height))
+        if margin_px <= 0:
+            return False
+        return min(
+            point_segment_distance(point, polygon[index], polygon[(index + 1) % len(polygon)])
+            for index in range(len(polygon))
+        ) <= margin_px
+
     @property
     def area_ratio(self) -> float:
         points = self.normalized_points()
@@ -78,6 +96,19 @@ def _point_on_segment(point: Point, a: Point, b: Point, eps: float = 1e-6) -> bo
     if cross > eps * max(1.0, hypot(bx - ax, by - ay)):
         return False
     return min(ax, bx) - eps <= px <= max(ax, bx) + eps and min(ay, by) - eps <= py <= max(ay, by) + eps
+
+
+def point_segment_distance(point: Point, a: Point, b: Point) -> float:
+    px, py = point
+    ax, ay = a
+    bx, by = b
+    dx, dy = bx - ax, by - ay
+    length_sq = dx * dx + dy * dy
+    if length_sq <= 1e-12:
+        return hypot(px - ax, py - ay)
+    t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / length_sq))
+    qx, qy = ax + t * dx, ay + t * dy
+    return hypot(px - qx, py - qy)
 
 
 def point_in_polygon(point: Point, polygon: list[Point]) -> bool:
@@ -169,6 +200,10 @@ class _TrackGateState:
     armed: bool = True
     counted_directions: set[str] = field(default_factory=set)
     last_count_frame: int = -10_000
+    last_nonzero_side: int = 0
+    side_streak: int = 0
+    first_frame: int | None = None
+    total_samples: int = 0
 
 
 class LineCrossingCounter:
@@ -192,6 +227,10 @@ class LineCrossingCounter:
         interpolation_gap_frames: int = 3,
         min_perpendicular_ratio: float = 0.10,
         min_crossing_motion_ratio: float = 0.004,
+        startup_grace_frames: int = 0,
+        side_confirm_samples: int = 1,
+        crossing_cooldown_frames: int = 0,
+        road_anchor_margin_ratio: float = 0.0,
     ) -> None:
         self.line = line
         self.road_zone = road_zone
@@ -204,6 +243,10 @@ class LineCrossingCounter:
         self.interpolation_gap_frames = max(1, min(self.history_gap_frames, int(interpolation_gap_frames)))
         self.min_perpendicular_ratio = max(0.0, min(1.0, float(min_perpendicular_ratio)))
         self.min_crossing_motion_ratio = max(0.0, float(min_crossing_motion_ratio))
+        self.startup_grace_frames = max(0, int(startup_grace_frames))
+        self.side_confirm_samples = max(1, int(side_confirm_samples))
+        self.crossing_cooldown_frames = max(0, int(crossing_cooldown_frames))
+        self.road_anchor_margin_ratio = max(0.0, float(road_anchor_margin_ratio))
         self._tracks: dict[int, _TrackGateState] = {}
         self.in_count = 0
         self.out_count = 0
@@ -213,6 +256,9 @@ class LineCrossingCounter:
         self._last_crossing_mode: dict[int, str] = {}
         self.rejected_outside_segment = 0
         self.rejected_outside_road = 0
+        self.rejected_unconfirmed_side = 0
+        self.rejected_cooldown = 0
+        self.road_edge_rescues = 0
 
     def update(
         self,
@@ -235,6 +281,15 @@ class LineCrossingCounter:
 
         state = self._tracks.setdefault(int(track_id), _TrackGateState())
         sample = _GateSample(int(frame_index), anchor, distance, side)
+        if state.first_frame is None:
+            state.first_frame = sample.frame_index
+        state.total_samples += 1
+        if side != 0:
+            if side == state.last_nonzero_side:
+                state.side_streak += 1
+            else:
+                state.last_nonzero_side = side
+                state.side_streak = 1
 
         if not state.armed:
             state.history.append(sample)
@@ -244,6 +299,11 @@ class LineCrossingCounter:
             return None
 
         state.history.append(sample)
+        if sample.frame_index <= self.startup_grace_frames:
+            # Never replay a crossing that happened during startup once the
+            # grace window expires. Keep only the most recent side sample.
+            state.history = deque([sample], maxlen=48)
+            return None
         if side == 0:
             return None
 
@@ -259,6 +319,18 @@ class LineCrossingCounter:
                 break
 
         if previous is None:
+            return None
+
+        observation_gap = sample.frame_index - previous.frame_index
+        # Crossing Engine 7.0: direct/interpolated crossings must be confirmed
+        # by a second observation on the destination side. Sparse long-gap
+        # rescues stay eligible so fast vehicles are not lost merely because the
+        # detector skipped frames.
+        if observation_gap <= self.interpolation_gap_frames and state.side_streak < self.side_confirm_samples:
+            self.rejected_unconfirmed_side += 1
+            return None
+        if sample.frame_index - state.last_count_frame < self.crossing_cooldown_frames:
+            self.rejected_cooldown += 1
             return None
 
         # Crossing Engine 6.0: use the most local pair of observations that
@@ -317,15 +389,22 @@ class LineCrossingCounter:
             # drivable polygon. A long diagonal jump from sidewalk to sidewalk is
             # therefore never accepted merely because its segment passes through
             # the green polygon around the yellow gate.
-            if not (
-                self.road_zone.contains(previous.point, frame_width, frame_height)
-                and self.road_zone.contains(anchor, frame_width, frame_height)
-                and self.road_zone.contains(crossing, frame_width, frame_height)
+            previous_strict = self.road_zone.contains(previous.point, frame_width, frame_height)
+            anchor_strict = self.road_zone.contains(anchor, frame_width, frame_height)
+            anchors_ok = (
+                self.road_zone.contains_with_margin(previous.point, frame_width, frame_height, self.road_anchor_margin_ratio)
+                and self.road_zone.contains_with_margin(anchor, frame_width, frame_height, self.road_anchor_margin_ratio)
+            )
+            corridor_ok = (
+                self.road_zone.contains(crossing, frame_width, frame_height)
                 and self.road_zone.contains(before, frame_width, frame_height)
                 and self.road_zone.contains(after, frame_width, frame_height)
-            ):
+            )
+            if not (anchors_ok and corridor_ok):
                 self.rejected_outside_road += 1
                 return None
+            if not (previous_strict and anchor_strict):
+                self.road_edge_rescues += 1
 
         move_x = anchor[0] - previous.point[0]
         move_y = anchor[1] - previous.point[1]
