@@ -102,6 +102,12 @@ class EventDispatcher(threading.Thread):
                             response = client.post(f"{self.backend_url}/events", json=payload)
                             response.raise_for_status()
                             self.state.delivered_events += 1
+                            if response.headers.get("X-TrafficAI-Deduplicated") == "1":
+                                self.state.deduplicated_events += 1
+                                if response.headers.get("X-TrafficAI-Dedup-Reason") == "crossing-signature":
+                                    self.state.crossing_signature_duplicates += 1
+                            else:
+                                self.state.persisted_events += 1
                             delivered = True
                             break
                         except Exception as exc:

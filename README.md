@@ -1,3 +1,480 @@
+# V0.5.23-R1 — Legacy test contract hotfix
+
+Bản R1 không đổi AI runtime, database, model, dataset hay migration. Hotfix chỉ sửa `scripts/test.ps1` để các contract legacy kiểm tra **ý nghĩa tương thích** thay vì bắt cứng chuỗi giao diện của engine cũ.
+
+- V0.5.18 không còn bắt buộc literal `Crossing Engine 6.0`; V0.5.23 đang dùng Crossing Engine 7.1 nhưng vẫn phải giữ `Tổng lượt cắt vạch`, `Trực tiếp`, `Nội suy` và `rescued_crossings`.
+- V0.5.21 chấp nhận workflow tái sử dụng GT mới `Sao chép ... GT từ Benchmark ...`, thay cho wording cũ `... sang Session`.
+- thêm contract `Legacy semantic contract compatibility V0.5.23-R1` để ngăn regression tương tự ở các bản sau.
+
+Lỗi được sửa:
+
+```text
+[Traffic AI] Crossing Engine 6.0 V0.5.18
+Frontend thiếu tổng xe hoặc breakdown crossing V0.5.18.
+```
+
+Đây là **false-fail của test legacy**; frontend V0.5.23 vẫn có đầy đủ breakdown crossing và đã nâng nhãn engine lên 7.1.
+
+---
+
+# Traffic AI V0.5.23 — Benchmark Integrity + Crossing Engine 7.1 + Human-vs-Motorcycle Guard 🚗🎯🧍
+
+V0.5.23 tiếp tục trực tiếp từ benchmark thật của `clip1.mp4` và frame camera người dùng cung cấp.
+
+Baseline V0.5.22 đã đo được:
+
+```text
+Ground Truth      149
+AI event DB       158
+Khớp              133
+Lọt                16
+Đếm dư             25
+Recall            89.3%
+Precision         84.2%
+F1                86.6%
+Class đúng        97.0%
+```
+
+Ngoài ra Session #120 từng hiển thị `162` ở worker nhưng Benchmark chỉ có `158` event DB. Frame camera thực tế còn cho thấy **một người đi bộ bị YOLO gán `motorcycle`**, nên nếu người đó cắt vạch thì có thể tạo false positive xe máy.
+
+Bản này xử lý đồng thời ba lớp thay vì tiếp tục hạ confidence:
+
+1. **Human-vs-Motorcycle Guard** — dùng PERSON evidence của YOLO26 pretrained để chặn người bị nhầm thành motorcycle/bicycle trước khi tăng IN/OUT.
+2. **Benchmark Integrity** — tổng Session sau khi COMPLETED lấy từ `vehicle_events` thật trong DB; worker total, event bị backend dedup và event thiếu timecode được hiển thị tách biệt.
+3. **Crossing Engine 7.1** — fast-confirm cho xe nhanh, adaptive cooldown cho lượt quay đầu thật, rescue validation chống ID-jump và crossing-signature dedup cực hẹp cho ID switch.
+
+---
+
+## 1. Human-vs-Motorcycle Guard
+
+Ảnh camera cho thấy trường hợp điển hình:
+
+```text
+người đi bộ
+   ↓
+YOLO vehicle detector
+   ↓
+motorcycle #... 0.52   ❌
+   ↓
+ByteTrack
+   ↓
+đi qua vạch
+   ↓
+Xe máy +1              ❌
+```
+
+V0.5.23 thêm verifier person-aware độc lập:
+
+```text
+candidate motorcycle/bicycle
+        ↓
+box cao/hẹp giống người?
+        ↓
+YOLO26 pretrained kiểm tra crop:
+PERSON + MOTORCYCLE + BICYCLE
+        ↓
+PERSON chiếm gần toàn candidate
+và two-wheel evidence yếu
+        ↓
+PERSON-GUARD
+        ↓
+KHÔNG đưa vào Crossing Counter
+KHÔNG tăng IN / OUT
+KHÔNG tạo VehicleEvent
+```
+
+Guard cố ý **không** xóa motorcycle khi có người lái thật. Nếu crop vẫn có two-wheel evidence cạnh tranh, candidate được giữ.
+
+Telemetry mới:
+
+```text
+Human Guard 3
+HUMAN-X 3
+```
+
+Box bị loại trên AI Overlay hiển thị `PERSON-GUARD` để dễ kiểm tra bằng mắt.
+
+Runtime:
+
+```env
+AI_HUMAN_GUARD=1
+AI_HUMAN_GUARD_MODEL=yolo26s.pt
+AI_HUMAN_GUARD_IMGSZ=512
+AI_HUMAN_GUARD_CHECK_INTERVAL=12
+AI_HUMAN_GUARD_CONF=0.08
+```
+
+`best.pt` Run #3 vẫn giữ vai trò refine class của phương tiện. Human Guard dùng model pretrained vì custom dataset hiện không có class `person`.
+
+---
+
+## 2. Benchmark Integrity: worker 162 nhưng DB 158 được giải thích rõ
+
+Trước đây:
+
+```text
+AI worker total       162
+backend dedup          -4
+VehicleEvent DB       158
+
+Session.total_vehicles = max(..., 162)
+Benchmark AI count     = 158
+```
+
+nên Dashboard và Benchmark có hai tổng khác nhau.
+
+V0.5.23 đổi semantics:
+
+```text
+worker_total_vehicles   = tổng candidate crossing ở worker
+
+total_vehicles          = số VehicleEvent thật đã persist DB
+
+dedup_suppressed_events = worker_total - persisted DB
+```
+
+Khi session kết thúc backend **COUNT trực tiếp `vehicle_events`** rồi chốt Session.
+
+Benchmark Report có khối:
+
+```text
+✓ Benchmark Integrity OK
+Worker đề xuất 162
+DB lưu        158
+Có timecode   158
+Backend gộp     4
+Human Guard     ...
+```
+
+Migration cũng sửa các session cũ có event DB để Session #120 không tiếp tục hiển thị `162` trong lịch sử khi DB chỉ có `158` event. Giá trị worker cũ được giữ ở `worker_total_vehicles`.
+
+---
+
+## 3. Crossing Engine 7.1
+
+### Fast destination confirmation
+
+V0.5.21 yêu cầu hai observation ở phía sau vạch. Benchmark cho thấy một số xe nhanh đã đi đủ xa sang phía mới nhưng vẫn bị ghi:
+
+```text
+Crossing chưa đủ xác nhận phía sau vạch
+```
+
+V0.5.23 cho phép xác nhận ngay khi điểm mới đã cách vạch đủ xa:
+
+```env
+AI_GATE_FAST_CONFIRM_DISTANCE_RATIO=0.018
+```
+
+Nó không nới crossing cho điểm chỉ rung sát dead-band.
+
+### Adaptive cooldown
+
+Cooldown cứng 60 frame giảm overcount nhưng cũng chặn một số lượt quay đầu thật.
+
+V7.1 chỉ giữ cooldown nếu track **chưa thật sự rời xa vạch**. Track đã đi xa rồi quay lại có thể được release sớm:
+
+```env
+AI_GATE_ADAPTIVE_COOLDOWN=1
+AI_GATE_COOLDOWN_RELEASE_RATIO=0.055
+```
+
+Telemetry:
+
+```text
+COOL-REL ...
+```
+
+### Rescue validation
+
+Long-gap rescue là nguồn false positive rủi ro nhất. V7.1 từ chối rescue nếu:
+
+- chuyển động quá song song với vạch;
+- jump quá xa giống ID switch;
+- hai điểm chỉ nằm rất sát hai phía dead-band.
+
+```env
+AI_GATE_RESCUE_MIN_NORMAL_RATIO=0.28
+AI_GATE_RESCUE_MAX_JUMP_RATIO=0.26
+AI_GATE_RESCUE_MIN_SIDE_RATIO=0.010
+```
+
+Telemetry:
+
+```text
+RESCUE-X ...
+```
+
+### Crossing signature dedup
+
+Mỗi event mới lưu thêm vị trí giao vạch chuẩn hóa:
+
+```text
+crossing_x
+crossing_y
+```
+
+Backend chỉ gộp hai event khác track khi chúng:
+
+```text
+cùng session
+cùng hướng
+cùng họ phương tiện
+cách nhau <= ~0.22s
+điểm cắt gần như cùng vị trí
+```
+
+Threshold được cố ý đặt hẹp để không gộp hai xe máy thật chạy gần nhau.
+
+---
+
+## 4. Database V0.5.23
+
+Migration:
+
+```text
+0036_gt_reuse_v0522
+        ↓
+0037_integrity_v0523
+```
+
+Schema:
+
+```text
+schema_version = 0.5.23
+```
+
+`counting_sessions` thêm:
+
+```text
+worker_total_vehicles
+dedup_suppressed_events
+human_guard_rejections
+```
+
+`vehicle_events` thêm:
+
+```text
+crossing_x
+crossing_y
+```
+
+Không xóa:
+
+```text
+Dataset #4
+600 ảnh
+Run #3
+best.pt
+Benchmark #1 / #2
+149 Ground Truth
+vehicle_events cũ
+training-runs/
+models/
+```
+
+---
+
+## 5. Cách test đúng V0.5.23
+
+Giữ nguyên vạch và Road Zone hiện tại để tái sử dụng đúng 149 GT.
+
+```text
+V0.5.22 baseline
+GT 149 · AI 158 · Match 133 · Miss 16 · FP 25
+        ↓
+V0.5.23
+Chạy lại đúng clip1.mp4 đến COMPLETED
+        ↓
+Tạo Benchmark Session mới
+        ↓
+Sao chép 149 GT
+        ↓
+Đối chiếu lại
+```
+
+So sánh:
+
+```text
+AI
+Khớp
+Lọt
+Dư
+Recall
+Precision
+F1
+Benchmark Integrity
+Human Guard
+```
+
+Không cần đánh I/O lại 149 lần.
+
+---
+
+## 6. Cập nhật trên máy
+
+Chép full source đè vào:
+
+```text
+D:\LienThongDH\DoAn\traffic-ai
+```
+
+Giữ nguyên:
+
+```text
+.env
+gateway\certs\
+videos\
+models\
+snapshots\
+datasets\
+training-runs\
+```
+
+Không dùng:
+
+```powershell
+docker compose down -v
+```
+
+Nếu Windows chặn `.ps1`:
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+```
+
+Kiểm thử:
+
+```powershell
+.\scripts\test.ps1
+```
+
+Mong muốn:
+
+```text
+[Traffic AI] Benchmark Integrity + Crossing Engine 7.1 + Human Guard V0.5.23
+[OK] Benchmark Integrity + Crossing Engine 7.1 + Human Guard V0.5.23
+
+[SUCCESS] All Traffic AI tests passed.
+```
+
+Khởi động:
+
+```powershell
+.\scripts\start.ps1
+```
+
+Database:
+
+```powershell
+.\scripts\verify-database.ps1
+```
+
+Mong muốn:
+
+```text
+0037_integrity_v0523
+schema_version = 0.5.23
+```
+
+Trình duyệt:
+
+```text
+Ctrl + F5
+```
+
+---
+
+## 7. Phát hành vẫn một lệnh
+
+```powershell
+.\scripts\publish.ps1
+```
+
+```text
+→ test
+→ build
+→ push GitHub
+→ tag v0.5.23
+→ GitHub Actions
+→ Release
+```
+
+---
+
+## Kiểm thử trong môi trường đóng gói
+
+```text
+Python compile                         PASS
+AI Service unit tests                 74/74 PASS
+Backend unit tests                    17/17 PASS
+Human Guard geometry policy           PASS
+Pedestrian dominates motorcycle       PASS
+Real rider two-wheel evidence          PASS
+Fast-confirm crossing                 PASS
+Adaptive cooldown release             PASS
+Long-gap rescue validation             PASS
+Crossing rollback for Human Guard      PASS
+Benchmark Integrity source contract    PASS
+Alembic head/revision safety           PASS
+```
+
+Frontend `npm install` trong môi trường đóng gói bị timeout mạng; vì vậy Vite + Docker full-suite không được ghi PASS giả và vẫn do `./scripts/test.ps1` trên máy Windows/Docker của bạn xác nhận.
+
+---
+
+# Traffic AI V0.5.22 — Ground Truth Reuse Fix ♻️🎯
+
+V0.5.22 sửa lỗi UX của V0.5.21: sau khi tạo Benchmark mới cho Session mới, selector tự chuyển sang Benchmark đích `GT 0`, làm nút sao chép biến mất vì frontend chỉ nhìn Ground Truth của benchmark đang chọn.
+
+Bản này thêm API sao chép GT **vào benchmark đã tạo** và tự tìm benchmark nguồn tương thích (cùng video + cùng vạch). Với tình huống hiện tại:
+
+```text
+Benchmark #1 · Session #119 · GT 149
+Benchmark #2 · Session #120 · GT 0
+          ↓
+Sao chép 149 GT từ Benchmark #1 sang Benchmark #2
+          ↓
+Benchmark #2 · GT 149
+          ↓
+Đối chiếu lại với AI Session #120
+```
+
+Không cần xem lại 15:46 phút clip và không cần bấm I/O lại. Backend từ chối sao chép nếu video/vạch khác hoặc benchmark đích đã có GT, để tránh benchmark sai hoặc nhân đôi dữ liệu.
+
+
+## Với dữ liệu hiện tại của bạn
+
+Sau khi nâng V0.5.22, chọn:
+
+```text
+Benchmark #2 · Session #120 · GT 0
+```
+
+ngay dưới selector sẽ hiện:
+
+```text
+Sao chép 149 GT từ Benchmark #1 sang Benchmark #2
+```
+
+Bấm một lần, Benchmark #2 thành `GT 149`, sau đó bấm `Đối chiếu lại`. Không cần tạo Benchmark #3 và không cần đánh lại I/O.
+
+V0.5.22 cũng sửa một lỗi React kín: nút `Tạo benchmark cho phiên này` trước đây truyền click-event vào tham số clone vì dùng `onClick={createBenchmark}`. Bản mới gọi tường minh `onClick={()=>createBenchmark()}` nên tạo benchmark thường không còn bị hiểu nhầm là yêu cầu clone.
+
+## Database
+
+```text
+0035_crossing_v0521
+        ↓
+0036_gt_reuse_v0522
+schema_version = 0.5.22
+```
+
+Không xóa dataset, model, session, benchmark hay 149 Ground Truth cũ.
+
+---
+
 # Traffic AI V0.5.21 — Ground-truth Error Analyzer + Crossing Engine 7.0 🎯🚗
 
 V0.5.21 dùng trực tiếp Ground-truth Benchmark để xử lý hai vấn đề còn lại: **nút “Đối chiếu lại” không có phản hồi nhìn thấy được** và **Crossing Engine còn overcount / lọt xe**.

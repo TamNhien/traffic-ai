@@ -249,3 +249,56 @@ def test_crossing_engine_v7_allows_tiny_anchor_road_edge_error() -> None:
     assert counter.update(1004, (19, 20), 100, 100, 1) is None
     assert counter.update(1004, (50, 80), 100, 100, 2) == "in"
     assert counter.road_edge_rescues == 1
+
+
+def test_crossing_engine_v71_fast_destination_can_bypass_second_confirmation() -> None:
+    counter = LineCrossingCounter(
+        CountingLine(0.1, 0.5, 0.9, 0.5),
+        side_confirm_samples=2,
+        fast_confirm_distance_ratio=0.18,
+        startup_grace_frames=0,
+    )
+    assert counter.update(1101, (50, 20), 100, 100, 10) is None
+    assert counter.update(1101, (50, 80), 100, 100, 11) == "in"
+    assert counter.fast_confirm_rescues == 1
+
+
+def test_crossing_engine_v71_adaptive_cooldown_allows_real_turnaround_after_far_rearm() -> None:
+    counter = LineCrossingCounter(
+        CountingLine(0.1, 0.5, 0.9, 0.5),
+        dead_band_ratio=0.01,
+        rearm_distance_ratio=0.10,
+        crossing_cooldown_frames=60,
+        adaptive_cooldown=True,
+        cooldown_release_ratio=0.30,
+        startup_grace_frames=0,
+    )
+    assert counter.update(1102, (50, 20), 100, 100, 10) is None
+    assert counter.update(1102, (50, 80), 100, 100, 11) == "in"
+    assert counter.update(1102, (50, 95), 100, 100, 12) is None
+    assert counter.update(1102, (50, 20), 100, 100, 20) == "out"
+    assert counter.adaptive_cooldown_releases == 1
+
+
+def test_crossing_engine_v71_rejects_implausible_long_gap_rescue() -> None:
+    counter = LineCrossingCounter(
+        CountingLine(0.1, 0.5, 0.9, 0.5),
+        history_gap_frames=45,
+        interpolation_gap_frames=3,
+        rescue_max_jump_ratio=0.20,
+        startup_grace_frames=0,
+    )
+    assert counter.update(1103, (10, 20), 100, 100, 1) is None
+    # Huge diagonal ID-switch-like jump crossing the line.
+    assert counter.update(1103, (90, 80), 100, 100, 12) is None
+    assert counter.rejected_rescue_validation == 1
+
+
+def test_crossing_can_be_revoked_by_downstream_human_guard() -> None:
+    counter = LineCrossingCounter(CountingLine(0.1, 0.5, 0.9, 0.5))
+    assert counter.update(1104, (50, 20), 100, 100, 1) is None
+    assert counter.update(1104, (50, 80), 100, 100, 2) == "in"
+    assert counter.in_count == 1
+    counter.revoke_last_crossing(1104, "in")
+    assert counter.in_count == 0
+    assert counter.total_crossings == 0

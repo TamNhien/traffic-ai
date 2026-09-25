@@ -204,6 +204,7 @@ class _TrackGateState:
     side_streak: int = 0
     first_frame: int | None = None
     total_samples: int = 0
+    max_abs_distance_since_count: float = 0.0
 
 
 class LineCrossingCounter:
@@ -231,6 +232,12 @@ class LineCrossingCounter:
         side_confirm_samples: int = 1,
         crossing_cooldown_frames: int = 0,
         road_anchor_margin_ratio: float = 0.0,
+        fast_confirm_distance_ratio: float = 0.0,
+        adaptive_cooldown: bool = False,
+        cooldown_release_ratio: float = 0.0,
+        rescue_min_normal_ratio: float = 0.0,
+        rescue_max_jump_ratio: float = 0.0,
+        rescue_min_side_distance_ratio: float = 0.0,
     ) -> None:
         self.line = line
         self.road_zone = road_zone
@@ -247,6 +254,12 @@ class LineCrossingCounter:
         self.side_confirm_samples = max(1, int(side_confirm_samples))
         self.crossing_cooldown_frames = max(0, int(crossing_cooldown_frames))
         self.road_anchor_margin_ratio = max(0.0, float(road_anchor_margin_ratio))
+        self.fast_confirm_distance_ratio = max(0.0, float(fast_confirm_distance_ratio))
+        self.adaptive_cooldown = bool(adaptive_cooldown)
+        self.cooldown_release_ratio = max(0.0, float(cooldown_release_ratio))
+        self.rescue_min_normal_ratio = max(0.0, min(1.0, float(rescue_min_normal_ratio)))
+        self.rescue_max_jump_ratio = max(0.0, float(rescue_max_jump_ratio))
+        self.rescue_min_side_distance_ratio = max(0.0, float(rescue_min_side_distance_ratio))
         self._tracks: dict[int, _TrackGateState] = {}
         self.in_count = 0
         self.out_count = 0
@@ -259,6 +272,10 @@ class LineCrossingCounter:
         self.rejected_unconfirmed_side = 0
         self.rejected_cooldown = 0
         self.road_edge_rescues = 0
+        self.fast_confirm_rescues = 0
+        self.rejected_rescue_validation = 0
+        self.adaptive_cooldown_releases = 0
+        self._last_crossing_point: dict[int, Point] = {}
 
     def update(
         self,
@@ -290,6 +307,9 @@ class LineCrossingCounter:
             else:
                 state.last_nonzero_side = side
                 state.side_streak = 1
+
+        if state.last_count_frame > -10_000:
+            state.max_abs_distance_since_count = max(state.max_abs_distance_since_count, abs(distance))
 
         if not state.armed:
             state.history.append(sample)
@@ -326,12 +346,28 @@ class LineCrossingCounter:
         # by a second observation on the destination side. Sparse long-gap
         # rescues stay eligible so fast vehicles are not lost merely because the
         # detector skipped frames.
+        strong_destination = (
+            self.fast_confirm_distance_ratio > 0.0
+            and abs(distance) >= max(dead_band * 2.2, scale * self.fast_confirm_distance_ratio)
+        )
         if observation_gap <= self.interpolation_gap_frames and state.side_streak < self.side_confirm_samples:
-            self.rejected_unconfirmed_side += 1
-            return None
+            if strong_destination:
+                self.fast_confirm_rescues += 1
+            else:
+                self.rejected_unconfirmed_side += 1
+                return None
         if sample.frame_index - state.last_count_frame < self.crossing_cooldown_frames:
-            self.rejected_cooldown += 1
-            return None
+            release_distance = scale * self.cooldown_release_ratio
+            can_release = (
+                self.adaptive_cooldown
+                and release_distance > 0.0
+                and state.max_abs_distance_since_count >= release_distance
+            )
+            if can_release:
+                self.adaptive_cooldown_releases += 1
+            else:
+                self.rejected_cooldown += 1
+                return None
 
         # Crossing Engine 6.0: use the most local pair of observations that
         # actually brackets the line. Older builds intersected the last stable
@@ -375,6 +411,27 @@ class LineCrossingCounter:
         if crossing is None:
             self.rejected_outside_segment += 1
             return None
+
+        # Crossing Engine 7.1: long-gap rescues are useful for fast vehicles but
+        # are also the riskiest source of over-count. Validate the jump before
+        # accepting it. Defaults are disabled for backwards-compatible unit
+        # tests; runtime enables conservative thresholds through environment.
+        if observation_gap > self.interpolation_gap_frames:
+            jump_x = anchor[0] - previous.point[0]
+            jump_y = anchor[1] - previous.point[1]
+            jump_len = max(hypot(jump_x, jump_y), 1e-6)
+            diagonal = max(hypot(frame_width, frame_height), 1.0)
+            normal_ratio = abs(distance - previous.distance) / jump_len
+            jump_ratio = jump_len / diagonal
+            side_depth_ratio = min(abs(distance), abs(previous.distance)) / scale
+            rescue_invalid = (
+                (self.rescue_min_normal_ratio > 0.0 and normal_ratio < self.rescue_min_normal_ratio)
+                or (self.rescue_max_jump_ratio > 0.0 and jump_ratio > self.rescue_max_jump_ratio)
+                or (self.rescue_min_side_distance_ratio > 0.0 and side_depth_ratio < self.rescue_min_side_distance_ratio)
+            )
+            if rescue_invalid:
+                self.rejected_rescue_validation += 1
+                return None
 
         if self.road_zone is not None:
             move_x_zone = anchor[0] - previous.point[0]
@@ -423,6 +480,8 @@ class LineCrossingCounter:
         state.counted_directions.add(direction)
         state.armed = False
         state.last_count_frame = sample.frame_index
+        state.max_abs_distance_since_count = 0.0
+        self._last_crossing_point[int(track_id)] = crossing
 
         # Crossing quality is classified from actual observation continuity.
         # DIRECT      = consecutive observations bracket the gate.
@@ -454,6 +513,35 @@ class LineCrossingCounter:
             self.out_count += 1
         return direction
 
+
+    def crossing_point_for(self, track_id: int) -> Point | None:
+        return self._last_crossing_point.get(int(track_id))
+
+    def revoke_last_crossing(self, track_id: int, direction: str) -> None:
+        """Undo the most recent crossing when a downstream semantic guard rejects it.
+
+        Human Guard runs only after geometry finds a real line crossing. If the
+        object is then proven to be a pedestrian, the geometry counter must be
+        rolled back so IN/OUT telemetry remains truthful.
+        """
+        track_id = int(track_id)
+        state = self._tracks.get(track_id)
+        mode = self._last_crossing_mode.pop(track_id, None)
+        self._last_crossing_point.pop(track_id, None)
+        if state is not None:
+            state.counted_directions.discard(str(direction))
+            state.armed = False
+            state.max_abs_distance_since_count = 0.0
+        if direction == "in" and self.in_count > 0:
+            self.in_count -= 1
+        elif direction == "out" and self.out_count > 0:
+            self.out_count -= 1
+        if mode == "direct" and self.direct_crossings > 0:
+            self.direct_crossings -= 1
+        elif mode == "interpolated" and self.interpolated_crossings > 0:
+            self.interpolated_crossings -= 1
+        elif mode == "rescued" and self.rescued_crossings > 0:
+            self.rescued_crossings -= 1
 
     def crossing_mode_for(self, track_id: int) -> str | None:
         return self._last_crossing_mode.get(int(track_id))

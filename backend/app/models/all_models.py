@@ -122,6 +122,9 @@ class CountingSession(Base):
         _enum(SessionStatus, "session_status"), nullable=False, server_default="running"
     )
     total_vehicles: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    worker_total_vehicles: Mapped[int | None] = mapped_column(Integer)
+    dedup_suppressed_events: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    human_guard_rejections: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     average_fps: Mapped[float | None] = mapped_column(Float)
     source_url: Mapped[str | None] = mapped_column(Text)
     source_fps: Mapped[float | None] = mapped_column(Float)
@@ -149,6 +152,8 @@ class VehicleEvent(Base):
     source_frame_index: Mapped[int | None] = mapped_column(Integer, index=True)
     source_time_seconds: Mapped[float | None] = mapped_column(Float, index=True)
     crossing_method: Mapped[str | None] = mapped_column(String(24))
+    crossing_x: Mapped[float | None] = mapped_column(Float)
+    crossing_y: Mapped[float | None] = mapped_column(Float)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 

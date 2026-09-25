@@ -300,18 +300,18 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.21") { throw "VERSION phải là 0.5.21, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0035_crossing_v0521.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0035_crossing_v0521.py." }
+  if ($version -ne "0.5.23") { throw "VERSION phải là 0.5.23, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0037_integrity_v0523.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0037_integrity_v0523.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0035_crossing_v0521"' -or $migrationText -notmatch 'down_revision = "0034_benchmark_overlay_v0520"' -or $migrationText -notmatch "value='0.5.21'") {
-    throw "Migration 0035_crossing_v0521 không đúng contract V0.5.21."
+  if ($migrationText -notmatch 'revision = "0037_integrity_v0523"' -or $migrationText -notmatch 'down_revision = "0036_gt_reuse_v0522"' -or $migrationText -notmatch "value='0.5.23'") {
+    throw "Migration 0037_integrity_v0523 không đúng contract V0.5.23."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
 
 function Assert-AlembicRevisionSafetyContract {
-  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.21" -ForegroundColor Cyan
+  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.23" -ForegroundColor Cyan
   $versionsDir = Join-Path $root "backend\alembic\versions"
   $bad = @()
   Get-ChildItem $versionsDir -Filter "*.py" | ForEach-Object {
@@ -335,7 +335,7 @@ function Assert-AlembicRevisionSafetyContract {
   if ($v17 -notmatch 'revision = "0017_ai_test_dep_v053"') {
     throw "Migration V0.5.3 chưa dùng revision ID rút gọn an toàn."
   }
-  Write-Host "[OK] Alembic revision-length safety V0.5.21" -ForegroundColor Green
+  Write-Host "[OK] Alembic revision-length safety V0.5.23" -ForegroundColor Green
 }
 
 
@@ -552,8 +552,10 @@ function Assert-CrossingEngineV0518Contract {
   if ($runtime -notmatch 'direct_crossings' -or $runtime -notmatch 'interpolated_crossings' -or $worker -notmatch 'DIRECT-X' -or $worker -notmatch 'INTERP') {
     throw "Thiếu telemetry Crossing Engine 6.0 ở runtime/overlay."
   }
-  if ($frontend -notmatch 'Trực tiếp' -or $frontend -notmatch 'Nội suy' -or $frontend -notmatch 'Tổng lượt cắt vạch' -or $frontend -notmatch 'Crossing Engine 6\.0') {
-    throw "Frontend thiếu tổng xe hoặc breakdown crossing V0.5.18."
+  # Legacy V0.5.18 contract is semantic, not tied to the old UI label "Crossing Engine 6.0".
+  # Newer engines (7.x) must preserve the same total/direct/interpolated/rescued breakdown.
+  if ($frontend -notmatch 'Trực tiếp' -or $frontend -notmatch 'Nội suy' -or $frontend -notmatch 'Tổng lượt cắt vạch' -or $frontend -notmatch 'rescued_crossings') {
+    throw "Frontend thiếu tổng xe hoặc breakdown crossing tương thích V0.5.18+."
   }
   if ($envExample -notmatch 'AI_GATE_INTERPOLATION_GAP=3') {
     throw ".env.example thiếu AI_GATE_INTERPOLATION_GAP=3."
@@ -652,10 +654,59 @@ function Assert-CrossingEngineV0521Contract {
   if ($routes -notmatch '/benchmarks/\{benchmark_id\}/reconcile' -or $routes -notmatch 'reconciled_at' -or $routes -notmatch 'clone_marks_from_benchmark_id') {
     throw "Backend thiếu endpoint Đối chiếu lại hoặc sao chép Ground Truth V0.5.21."
   }
-  if ($frontend -notmatch 'Đang đối chiếu' -or $frontend -notmatch 'reconcileStatus' -or $frontend -notmatch 'Nguyên nhân đếm dư nghi ngờ' -or $frontend -notmatch 'Sao chép .* GT sang Session') {
-    throw "Frontend chưa hiển thị trạng thái đối chiếu, analyzer đếm dư hoặc tái sử dụng GT V0.5.21."
+  $hasGroundTruthReuseUi = ($frontend -match 'Sao chép .* GT sang Session') -or ($frontend -match 'Sao chép .* GT từ Benchmark')
+  if ($frontend -notmatch 'Đang đối chiếu' -or $frontend -notmatch 'reconcileStatus' -or $frontend -notmatch 'Nguyên nhân đếm dư nghi ngờ' -or -not $hasGroundTruthReuseUi) {
+    throw "Frontend chưa hiển thị trạng thái đối chiếu, analyzer đếm dư hoặc tái sử dụng GT V0.5.21+."
   }
   Write-Host "[OK] Crossing Engine 7.0 + Benchmark Reconcile V0.5.21" -ForegroundColor Green
+}
+
+
+function Assert-GroundTruthReuseV0522Contract {
+  Write-Host "`n[Traffic AI] Ground Truth reuse V0.5.22" -ForegroundColor Cyan
+  $routes = Get-Content (Join-Path $root "backend\app\api\routes.py") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  if ($routes -notmatch '/benchmarks/\{benchmark_id\}/clone-marks' -or $routes -notmatch '_clone_marks_into_existing_benchmark' -or $routes -notmatch 'BenchmarkCloneMarks') {
+    throw "Backend V0.5.22 thiếu API sao chép GT vào benchmark đã tạo."
+  }
+  if ($frontend -notmatch 'compatibleCloneSource' -or $frontend -notmatch 'cloneGroundTruthIntoCurrent' -or $frontend -notmatch 'Sao chép .* GT từ Benchmark') {
+    throw "Frontend V0.5.22 chưa hiện nút sao chép GT cho benchmark đích GT=0."
+  }
+  if ($frontend -notmatch 'onClick=\{\(\)=>createBenchmark\(\)\}' -or $frontend -match 'onClick=\{createBenchmark\}') {
+    throw "Frontend V0.5.22 còn truyền React click-event nhầm thành clone source khi tạo benchmark."
+  }
+  Write-Host "[OK] Ground Truth reuse V0.5.22" -ForegroundColor Green
+}
+
+
+function Assert-BenchmarkIntegrityCrossingV0523Contract {
+  Write-Host "`n[Traffic AI] Benchmark Integrity + Crossing Engine 7.1 + Human Guard V0.5.23" -ForegroundColor Cyan
+  $worker = Get-Content (Join-Path $root "ai-service\app\worker.py") -Raw -Encoding UTF8
+  $counting = Get-Content (Join-Path $root "ai-service\app\counting.py") -Raw -Encoding UTF8
+  $human = Get-Content (Join-Path $root "ai-service\app\human_guard.py") -Raw -Encoding UTF8
+  $routes = Get-Content (Join-Path $root "backend\app\api\routes.py") -Raw -Encoding UTF8
+  $models = Get-Content (Join-Path $root "backend\app\models\all_models.py") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  $envExample = Get-Content (Join-Path $root ".env.example") -Raw -Encoding UTF8
+  if ($human -notmatch 'human_dominates_two_wheel_candidate' -or $worker -notmatch 'AI_HUMAN_GUARD' -or $worker -notmatch 'PERSON-GUARD') {
+    throw "V0.5.23 thiếu Human-vs-Motorcycle Guard cho người bị nhầm thành xe hai bánh."
+  }
+  if ($counting -notmatch 'fast_confirm_distance_ratio' -or $counting -notmatch 'adaptive_cooldown' -or $counting -notmatch 'rejected_rescue_validation') {
+    throw "Crossing Engine 7.1 thiếu fast-confirm / adaptive cooldown / rescue validation."
+  }
+  if ($routes -notmatch 'worker_total_vehicles' -or $routes -notmatch 'persisted_count' -or $routes -notmatch 'X-TrafficAI-Deduplicated') {
+    throw "Benchmark Integrity V0.5.23 chưa đồng bộ worker count với VehicleEvent DB."
+  }
+  if ($models -notmatch 'dedup_suppressed_events' -or $models -notmatch 'human_guard_rejections' -or $models -notmatch 'crossing_x') {
+    throw "Database V0.5.23 thiếu telemetry integrity/crossing signature."
+  }
+  if ($frontend -notmatch 'Benchmark Integrity' -or $frontend -notmatch 'Human Guard' -or $frontend -notmatch 'Rescue bị loại') {
+    throw "Frontend V0.5.23 thiếu Benchmark Integrity / Human Guard telemetry."
+  }
+  if ($envExample -notmatch 'AI_GATE_ADAPTIVE_COOLDOWN=1' -or $envExample -notmatch 'AI_HUMAN_GUARD=1') {
+    throw "Runtime config V0.5.23 thiếu tuning Crossing Engine 7.1 / Human Guard."
+  }
+  Write-Host "[OK] Benchmark Integrity + Crossing Engine 7.1 + Human Guard V0.5.23" -ForegroundColor Green
 }
 
 
@@ -868,6 +919,18 @@ function Assert-DatasetControlsVisibilityV0510R1Contract {
   Write-Host "[OK] Dataset controls visibility V0.5.10-R1" -ForegroundColor Green
 }
 
+function Assert-LegacySemanticCompatibilityV0523R1 {
+  Write-Host "`n[Traffic AI] Legacy semantic contract compatibility V0.5.23-R1" -ForegroundColor Cyan
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  if ($frontend -notmatch 'Tổng lượt cắt vạch' -or $frontend -notmatch 'direct_crossings' -or $frontend -notmatch 'interpolated_crossings' -or $frontend -notmatch 'rescued_crossings') {
+    throw "V0.5.23-R1 thiếu crossing breakdown tương thích các engine cũ."
+  }
+  if ($frontend -notmatch 'Sao chép .* GT từ Benchmark' -or $frontend -notmatch 'cloneGroundTruthIntoCurrent') {
+    throw "V0.5.23-R1 thiếu Ground Truth reuse UI tương thích V0.5.21+."
+  }
+  Write-Host "[OK] Legacy semantic contract compatibility V0.5.23-R1" -ForegroundColor Green
+}
+
 function Invoke-Step([string]$Title, [scriptblock]$Action) {
   Write-Host "`n[Traffic AI] $Title" -ForegroundColor Cyan
   & $Action
@@ -909,6 +972,9 @@ Assert-CrossingEngineV0518Contract
 Assert-GroundTruthBenchmarkV0519Contract
 Assert-BenchmarkGateOverlayV0520Contract
 Assert-CrossingEngineV0521Contract
+Assert-GroundTruthReuseV0522Contract
+Assert-BenchmarkIntegrityCrossingV0523Contract
+Assert-LegacySemanticCompatibilityV0523R1
 
 Write-Host "`n[Traffic AI] Road Zone + Frame Browser V0.5.11" -ForegroundColor Cyan
 $frontendV511 = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8

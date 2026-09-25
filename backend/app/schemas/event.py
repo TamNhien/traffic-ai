@@ -18,6 +18,8 @@ class VehicleEventCreate(BaseModel):
     source_frame_index: int | None = Field(default=None, ge=0)
     source_time_seconds: float | None = Field(default=None, ge=0.0)
     crossing_method: str | None = None
+    crossing_x: float | None = Field(default=None, ge=0.0, le=1.0)
+    crossing_y: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
 class VehicleEventRead(BaseModel):
@@ -34,5 +36,7 @@ class VehicleEventRead(BaseModel):
     source_frame_index: int | None
     source_time_seconds: float | None
     crossing_method: str | None
+    crossing_x: float | None
+    crossing_y: float | None
 
     model_config = ConfigDict(from_attributes=True)

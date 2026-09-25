@@ -55,6 +55,16 @@ class AnnotationUpdate(BaseModel):
     difficult: bool = False
 
 
+
+
+def _vehicle_family_value(value) -> str:
+    label = str(getattr(value, "value", value))
+    if label in {"bicycle", "motorcycle"}:
+        return "two-wheel"
+    if label in {"car", "bus", "truck"}:
+        return "four-wheel"
+    return label
+
 def _dataset_slug(name: str) -> str:
     value = re.sub(r"[^a-z0-9_-]+", "-", name.strip().lower())
     value = re.sub(r"-+", "-", value).strip("-_")
@@ -127,6 +137,7 @@ class SessionFinish(BaseModel):
     status: str
     total_vehicles: int = 0
     average_fps: float | None = None
+    human_guard_rejections: int = 0
     source_fps: float | None = None
     source_duration_seconds: float | None = None
     last_error: str | None = None
@@ -141,6 +152,10 @@ class BenchmarkCreate(BaseModel):
 
 class BenchmarkUpdate(BaseModel):
     tolerance_seconds: float
+
+
+class BenchmarkCloneMarks(BaseModel):
+    source_benchmark_id: int
 
 
 class GroundTruthMarkCreate(BaseModel):
@@ -364,7 +379,9 @@ def list_sessions(limit: int = Query(default=50, ge=1, le=200), db: Session = De
     return [{
         "id": row.id, "camera_id": row.camera_id, "model_id": row.model_id,
         "started_at": row.started_at, "ended_at": row.ended_at, "status": row.status,
-        "total_vehicles": row.total_vehicles, "average_fps": row.average_fps,
+        "total_vehicles": row.total_vehicles, "worker_total_vehicles": row.worker_total_vehicles,
+        "dedup_suppressed_events": row.dedup_suppressed_events, "human_guard_rejections": row.human_guard_rejections,
+        "average_fps": row.average_fps,
         "source_url": row.source_url, "source_fps": row.source_fps, "source_duration_seconds": row.source_duration_seconds,
     } for row in rows]
 
@@ -531,7 +548,7 @@ def camera_road_proposal(camera_id: int, db: Session = Depends(get_db)) -> dict:
 
 
 @router.post("/internal/events", response_model=VehicleEventRead, status_code=201)
-def internal_event(payload: VehicleEventCreate, x_ai_token: str | None = Header(default=None), db: Session = Depends(get_db)) -> VehicleEvent:
+def internal_event(payload: VehicleEventCreate, response: Response, x_ai_token: str | None = Header(default=None), db: Session = Depends(get_db)) -> VehicleEvent:
     _assert_ai_token(x_ai_token)
 
     # Event delivery is retried by the AI service. Make this endpoint idempotent
@@ -548,6 +565,7 @@ def internal_event(payload: VehicleEventCreate, x_ai_token: str | None = Header(
             VehicleEvent.direction == payload.direction,
         ).order_by(VehicleEvent.id.desc()))
     if existing is not None:
+        response.headers["X-TrafficAI-Deduplicated"] = "1"
         return existing
 
     # Crossing Engine 7.0 backend safety: the same canonical track producing an
@@ -571,8 +589,42 @@ def internal_event(payload: VehicleEventCreate, x_ai_token: str | None = Header(
                 and abs(payload.source_time_seconds - recent_same_track.source_time_seconds) <= 2.0
             )
             if frame_close or time_close:
+                response.headers["X-TrafficAI-Deduplicated"] = "1"
                 return recent_same_track
 
+    # Crossing Engine 7.1 cross-ID signature guard. A ByteTrack ID switch can
+    # create two canonical IDs for the same physical crossing. Suppress only
+    # extremely-near same-direction/same-family signatures so two real vehicles
+    # traveling close together are still preserved.
+    if (
+        payload.session_id is not None
+        and payload.source_time_seconds is not None
+        and payload.crossing_x is not None
+        and payload.crossing_y is not None
+    ):
+        lower = max(0.0, float(payload.source_time_seconds) - 0.22)
+        recent = list(db.scalars(select(VehicleEvent).where(
+            VehicleEvent.session_id == payload.session_id,
+            VehicleEvent.source_time_seconds.is_not(None),
+            VehicleEvent.source_time_seconds >= lower,
+            VehicleEvent.source_time_seconds <= float(payload.source_time_seconds) + 0.02,
+            VehicleEvent.direction == payload.direction,
+        ).order_by(VehicleEvent.id.desc()).limit(8)).all())
+        for other in recent:
+            if other.crossing_x is None or other.crossing_y is None:
+                continue
+            if payload.tracking_id is not None and other.tracking_id == payload.tracking_id:
+                continue
+            if _vehicle_family_value(other.vehicle_type) != _vehicle_family_value(payload.vehicle_type):
+                continue
+            dx = float(payload.crossing_x) - float(other.crossing_x)
+            dy = float(payload.crossing_y) - float(other.crossing_y)
+            if (dx * dx + dy * dy) ** 0.5 <= 0.025:
+                response.headers["X-TrafficAI-Deduplicated"] = "1"
+                response.headers["X-TrafficAI-Dedup-Reason"] = "crossing-signature"
+                return other
+
+    response.headers["X-TrafficAI-Deduplicated"] = "0"
     event = VehicleEvent(**payload.model_dump(exclude_none=True))
     db.add(event)
     if payload.session_id:
@@ -613,7 +665,18 @@ def internal_session_finish(session_id: int, payload: SessionFinish, x_ai_token:
     session = db.get(CountingSession, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
-    session.total_vehicles = max(session.total_vehicles, payload.total_vehicles)
+    persisted_events = list(db.scalars(select(VehicleEvent).where(VehicleEvent.session_id == session_id).order_by(VehicleEvent.id)).all())
+    persisted_count = len(persisted_events)
+    persisted_in = sum(1 for event in persisted_events if str(getattr(event.direction, "value", event.direction)) == "in")
+    persisted_out = sum(1 for event in persisted_events if str(getattr(event.direction, "value", event.direction)) == "out")
+    persisted_by_type = {name: 0 for name in ("motorcycle", "bicycle", "car", "bus", "truck", "other")}
+    for event in persisted_events:
+        label = str(getattr(event.vehicle_type, "value", event.vehicle_type))
+        persisted_by_type[label if label in persisted_by_type else "other"] += 1
+    session.worker_total_vehicles = int(payload.total_vehicles)
+    session.total_vehicles = persisted_count
+    session.dedup_suppressed_events = max(0, int(payload.total_vehicles) - persisted_count)
+    session.human_guard_rejections = max(0, int(payload.human_guard_rejections or 0))
     session.average_fps = payload.average_fps
     if payload.source_fps is not None:
         session.source_fps = payload.source_fps
@@ -625,7 +688,16 @@ def internal_session_finish(session_id: int, payload: SessionFinish, x_ai_token:
     if camera:
         camera.status = CameraStatus.error if payload.status == "error" else CameraStatus.inactive
     db.commit()
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "worker_total_vehicles": int(payload.total_vehicles),
+        "persisted_events": persisted_count,
+        "persisted_in": persisted_in,
+        "persisted_out": persisted_out,
+        "persisted_by_type": persisted_by_type,
+        "dedup_suppressed_events": session.dedup_suppressed_events,
+        "human_guard_rejections": session.human_guard_rejections,
+    }
 
 
 @router.get("/benchmarks")
@@ -730,6 +802,70 @@ def create_benchmark(payload: BenchmarkCreate, db: Session = Depends(get_db)) ->
     payload_out = _benchmark_payload(row, cloned_marks)
     payload_out["cloned_marks"] = cloned_marks
     return payload_out
+
+
+def _benchmark_clone_compatibility(source: CountingBenchmark, target: CountingBenchmark) -> tuple[bool, str]:
+    if source.id == target.id:
+        return False, "Benchmark nguồn và đích phải khác nhau."
+    if source.source_url != target.source_url:
+        return False, "Không thể sao chép GT: benchmark nguồn và đích phải dùng đúng cùng video."
+    line_delta = max(
+        abs(source.line_x1 - target.line_x1), abs(source.line_y1 - target.line_y1),
+        abs(source.line_x2 - target.line_x2), abs(source.line_y2 - target.line_y2),
+    )
+    if line_delta > 0.002:
+        return False, "Không thể sao chép GT: benchmark nguồn và đích phải dùng đúng cùng vạch đếm."
+    return True, "ok"
+
+
+def _clone_marks_into_existing_benchmark(db: Session, source: CountingBenchmark, target: CountingBenchmark) -> int:
+    ok, reason = _benchmark_clone_compatibility(source, target)
+    if not ok:
+        raise HTTPException(status_code=422, detail=reason)
+    existing = db.scalar(
+        select(func.count(GroundTruthCrossing.id)).where(GroundTruthCrossing.benchmark_id == target.id)
+    ) or 0
+    if int(existing) > 0:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Benchmark đích đã có {int(existing)} Ground Truth. Không sao chép chồng để tránh nhân đôi dữ liệu.",
+        )
+    source_marks = list(db.scalars(
+        select(GroundTruthCrossing)
+        .where(GroundTruthCrossing.benchmark_id == source.id)
+        .order_by(GroundTruthCrossing.source_time_seconds, GroundTruthCrossing.id)
+    ).all())
+    if not source_marks:
+        raise HTTPException(status_code=422, detail="Benchmark nguồn chưa có Ground Truth để sao chép.")
+    for mark in source_marks:
+        db.add(GroundTruthCrossing(
+            benchmark_id=target.id,
+            source_time_seconds=mark.source_time_seconds,
+            source_frame_index=mark.source_frame_index,
+            vehicle_type=mark.vehicle_type,
+            direction=mark.direction,
+            note=mark.note,
+        ))
+    db.commit()
+    return len(source_marks)
+
+
+@router.post("/benchmarks/{benchmark_id}/clone-marks")
+def clone_benchmark_marks(benchmark_id: int, payload: BenchmarkCloneMarks, db: Session = Depends(get_db)) -> dict:
+    target = db.get(CountingBenchmark, benchmark_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="Benchmark đích không tồn tại.")
+    source = db.get(CountingBenchmark, payload.source_benchmark_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail="Benchmark nguồn không tồn tại.")
+    cloned = _clone_marks_into_existing_benchmark(db, source, target)
+    count = db.scalar(
+        select(func.count(GroundTruthCrossing.id)).where(GroundTruthCrossing.benchmark_id == target.id)
+    ) or 0
+    result = _benchmark_payload(target, int(count))
+    result["cloned_marks"] = cloned
+    result["source_benchmark_id"] = source.id
+    return result
 
 
 @router.get("/benchmarks/{benchmark_id}")
@@ -842,11 +978,27 @@ def _build_benchmark_report(benchmark_id: int, db: Session) -> dict:
         if reason:
             miss_reason_counts[reason] = miss_reason_counts.get(reason, 0) + 1
     dominant_miss_reason = max(miss_reason_counts, key=miss_reason_counts.get) if miss_reason_counts else None
+    session = db.get(CountingSession, benchmark.session_id)
+    persisted_count = len(all_events)
+    timed_count = len(timed_events)
+    session_total = int(session.total_vehicles) if session is not None else persisted_count
+    worker_total = int(session.worker_total_vehicles) if session is not None and session.worker_total_vehicles is not None else session_total
+    integrity = {
+        "ok": session_total == persisted_count == timed_count,
+        "session_total": session_total,
+        "worker_total": worker_total,
+        "persisted_events": persisted_count,
+        "timed_events": timed_count,
+        "missing_timecode": persisted_count - timed_count,
+        "dedup_suppressed_events": int(session.dedup_suppressed_events) if session is not None else max(0, worker_total - persisted_count),
+        "human_guard_rejections": int(session.human_guard_rejections) if session is not None else 0,
+    }
     report.update({
         "benchmark": _benchmark_payload(benchmark, len(marks)),
         "session_id": benchmark.session_id,
-        "timed_ai_events": len(timed_events),
-        "legacy_ai_events_without_source_time": len(all_events) - len(timed_events),
+        "timed_ai_events": timed_count,
+        "legacy_ai_events_without_source_time": persisted_count - timed_count,
+        "integrity": integrity,
         "trace_available": trace_available,
         "miss_reason_counts": miss_reason_counts,
         "dominant_miss_reason": dominant_miss_reason,

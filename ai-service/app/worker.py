@@ -17,6 +17,7 @@ from app.counting import CountingLine, LineCrossingCounter, RoadZone
 from app.dedup import single_heavy_vehicle_plan
 from app.flow_calibration import FlowCalibrator
 from app.gate_roi import gate_roi_for_line, road_zone_roi
+from app.human_guard import TWO_WHEEL_LABELS, human_dominates_two_wheel_candidate, is_person_like_two_wheel_box
 from app.schemas import PipelineStart
 from app.tracking import TrackContinuityResolver, motion_leading_anchor
 
@@ -46,6 +47,11 @@ class PipelineWorker(threading.Thread):
         self._refiner_model = None
         self._refine_ids: list[int] = []
         self._refiner_thread: threading.Thread | None = None
+        self._human_guard_model = None
+        self._human_guard_ids: list[int] = []
+        self._human_guard_thread: threading.Thread | None = None
+        self._human_rejected_tracks: set[int] = set()
+        self._human_guard_last_check: dict[int, int] = {}
         self._flow_calibrator = FlowCalibrator(
             history_frames=int(os.getenv("AI_FLOW_CALIBRATION_HISTORY_FRAMES", "1200")),
             per_track_points=int(os.getenv("AI_FLOW_CALIBRATION_POINTS_PER_TRACK", "180")),
@@ -80,6 +86,11 @@ class PipelineWorker(threading.Thread):
         self.refine_max_per_frame = max(0, int(os.getenv("AI_REFINE_MAX_PER_FRAME", "1")))
         self.refine_max_lag = max(0.0, float(os.getenv("AI_REFINE_MAX_LAG", "0.35")))
         self.refine_background_warmup = os.getenv("AI_REFINE_BACKGROUND_WARMUP", "1").strip().lower() not in {"0", "false", "no"}
+        self.human_guard_enabled = os.getenv("AI_HUMAN_GUARD", "1").strip().lower() not in {"0", "false", "no"}
+        self.human_guard_model_name = os.getenv("AI_HUMAN_GUARD_MODEL", self.recall_model_name)
+        self.human_guard_imgsz = int(os.getenv("AI_HUMAN_GUARD_IMGSZ", "512"))
+        self.human_guard_check_interval = max(3, int(os.getenv("AI_HUMAN_GUARD_CHECK_INTERVAL", "12")))
+        self.human_guard_conf = float(os.getenv("AI_HUMAN_GUARD_CONF", "0.08"))
         self.warmup = os.getenv("AI_WARMUP", "1").strip().lower() not in {"0", "false", "no"}
         self.video_pace = os.getenv("AI_VIDEO_PACE", "1").strip().lower() not in {"0", "false", "no"}
         self.iou = float(os.getenv("AI_IOU", "0.55"))
@@ -149,6 +160,72 @@ class PipelineWorker(threading.Thread):
 
         self._refiner_thread = threading.Thread(target=load_refiner, daemon=True, name=f"refiner-{self.payload.camera_id}")
         self._refiner_thread.start()
+
+    def _start_human_guard_background(self, YOLO, np, device, use_half: bool) -> None:
+        if not self.human_guard_enabled or self._human_guard_thread is not None:
+            return
+
+        def load_guard() -> None:
+            try:
+                model = YOLO(self.human_guard_model_name)
+                ids = self._named_class_ids(model.names, {"person", "motorcycle", "bicycle"})
+                if self.warmup and ids and not self._stop_event.is_set():
+                    dummy = np.zeros((min(self.human_guard_imgsz, self.imgsz), min(self.human_guard_imgsz, self.imgsz), 3), dtype=np.uint8)
+                    model.predict(dummy, conf=self.human_guard_conf, classes=ids, device=device, imgsz=min(self.human_guard_imgsz, self.imgsz), half=use_half, verbose=False)
+                if not self._stop_event.is_set():
+                    self._human_guard_model = model
+                    self._human_guard_ids = ids
+                    self.state.human_guard_ready = bool(ids)
+            except Exception:
+                self._human_guard_model = None
+                self._human_guard_ids = []
+                self.state.human_guard_ready = False
+
+        self._human_guard_thread = threading.Thread(target=load_guard, daemon=True, name=f"human-guard-{self.payload.camera_id}")
+        self._human_guard_thread.start()
+
+    def _verify_human_candidate(self, frame, rect, target_label: str, target_confidence: float, device, use_half: bool):
+        if self._human_guard_model is None or not self._human_guard_ids or target_label not in TWO_WHEEL_LABELS:
+            return None
+        try:
+            h, w = frame.shape[:2]
+            x1, y1, x2, y2 = [float(v) for v in rect]
+            pad_x = max(18, int((x2 - x1) * 0.40))
+            pad_y = max(18, int((y2 - y1) * 0.28))
+            ix1, iy1 = max(0, int(x1) - pad_x), max(0, int(y1) - pad_y)
+            ix2, iy2 = min(w, int(x2) + pad_x), min(h, int(y2) + pad_y)
+            crop = frame[iy1:iy2, ix1:ix2]
+            if crop.size == 0 or crop.shape[0] < 40 or crop.shape[1] < 28:
+                return None
+            predictions = self._human_guard_model.predict(
+                crop, conf=self.human_guard_conf, classes=self._human_guard_ids, device=device,
+                imgsz=self.human_guard_imgsz, half=use_half, verbose=False,
+            )
+            if not predictions or predictions[0].boxes is None:
+                return None
+            target_crop = (x1 - ix1, y1 - iy1, x2 - ix1, y2 - iy1)
+            best_person = None
+            best_person_conf = 0.0
+            best_vehicle_conf = 0.0
+            from app.human_guard import box_iou, coverage_of_target
+            boxes = predictions[0].boxes
+            for box, cls_id, conf in zip(boxes.xyxy.cpu().tolist(), boxes.cls.int().cpu().tolist(), boxes.conf.cpu().tolist()):
+                label = str(predictions[0].names[int(cls_id)])
+                evidence = tuple(map(float, box))
+                overlap = max(box_iou(target_crop, evidence), coverage_of_target(target_crop, evidence))
+                if overlap < 0.18:
+                    continue
+                if label == "person" and float(conf) > best_person_conf:
+                    best_person = evidence
+                    best_person_conf = float(conf)
+                elif label in TWO_WHEEL_LABELS:
+                    best_vehicle_conf = max(best_vehicle_conf, float(conf))
+            self.state.human_guard_checks += 1
+            return human_dominates_two_wheel_candidate(
+                target_crop, target_label, float(target_confidence), best_person, best_person_conf, best_vehicle_conf
+            )
+        except Exception:
+            return None
 
     @staticmethod
     def _looks_like_custom_model(model_name: str) -> bool:
@@ -244,6 +321,12 @@ class PipelineWorker(threading.Thread):
                 side_confirm_samples=int(os.getenv("AI_GATE_SIDE_CONFIRM_SAMPLES", "2")),
                 crossing_cooldown_frames=int(os.getenv("AI_GATE_COOLDOWN_FRAMES", "60")),
                 road_anchor_margin_ratio=float(os.getenv("AI_ROAD_ANCHOR_MARGIN_RATIO", "0.012")),
+                fast_confirm_distance_ratio=float(os.getenv("AI_GATE_FAST_CONFIRM_DISTANCE_RATIO", "0.018")),
+                adaptive_cooldown=os.getenv("AI_GATE_ADAPTIVE_COOLDOWN", "1").strip().lower() not in {"0", "false", "no"},
+                cooldown_release_ratio=float(os.getenv("AI_GATE_COOLDOWN_RELEASE_RATIO", "0.055")),
+                rescue_min_normal_ratio=float(os.getenv("AI_GATE_RESCUE_MIN_NORMAL_RATIO", "0.28")),
+                rescue_max_jump_ratio=float(os.getenv("AI_GATE_RESCUE_MAX_JUMP_RATIO", "0.26")),
+                rescue_min_side_distance_ratio=float(os.getenv("AI_GATE_RESCUE_MIN_SIDE_RATIO", "0.010")),
             )
 
             self._event_dispatcher.start()
@@ -258,6 +341,7 @@ class PipelineWorker(threading.Thread):
                 self._refiner_model = YOLO(self.refine_model_name)
                 self._refine_ids = self._named_class_ids(self._refiner_model.names, REFINE_VEHICLE_CLASSES)
                 self.state.refine_model_name = self.refine_model_name if self._refine_ids else None
+            self._start_human_guard_background(YOLO, np, device, use_half)
             self.state.imgsz = self.imgsz
             self.state.half_precision = use_half
             self.state.device = "cuda" if device != "cpu" and use_half else "cpu"
@@ -318,7 +402,7 @@ class PipelineWorker(threading.Thread):
                 result = results[0]
 
                 crossing_this_frame = False
-                pending_crossing_events: list[tuple[int, str, str, float, int, float | None, str | None]] = []
+                pending_crossing_events: list[tuple[int, str, str, float, int, float | None, str | None, float | None, float | None]] = []
                 refines_used_this_frame = 0
                 boxes = result.boxes
                 self.state.detections_current_frame = int(len(boxes)) if boxes is not None else 0
@@ -377,12 +461,39 @@ class PipelineWorker(threading.Thread):
                         self._flow_calibrator.add(track_id, anchor, width, height, frame_index)
                         self._labels.update(track_id, current_label, confidence_f)
                         stable_label, class_certainty, class_hits = self._labels.stable_label(track_id, current_label)
-
-                        direction = counter.update(track_id, anchor, width, height, frame_index=frame_index)
-                        self.state.rejected_outside_road = counter.rejected_outside_road
                         display_label = self._class_policy.display_label(
                             current_label, stable_label, class_certainty, class_hits, confidence_f
                         )
+
+                        # V0.5.23 Human-vs-Motorcycle Guard. The supplied camera
+                        # frame shows a pedestrian receiving a tall/narrow
+                        # MOTORCYCLE box. Verify suspicious two-wheel tracks with
+                        # a person-aware pretrained model before they reach the
+                        # crossing counter. Real riders are retained when the
+                        # verifier still sees competitive two-wheel evidence.
+                        if track_id in self._human_rejected_tracks:
+                            self._draw_detection(cv2, frame, rect, track_id, "PERSON-GUARD", confidence_f, anchor, class_certainty, raw_track_id)
+                            continue
+                        suspect_human = (
+                            display_label in TWO_WHEEL_LABELS
+                            and is_person_like_two_wheel_box(rect)
+                            and (counter.road_zone is None or counter.road_zone.contains_with_margin(anchor, width, height, 0.02))
+                        )
+                        last_guard = self._human_guard_last_check.get(track_id, -10_000)
+                        if suspect_human and frame_index - last_guard >= self.human_guard_check_interval:
+                            self._human_guard_last_check[track_id] = frame_index
+                            decision = self._verify_human_candidate(frame, rect, display_label, confidence_f, device, use_half)
+                            if decision is not None and decision.reject:
+                                self._human_rejected_tracks.add(track_id)
+                                self.state.human_guard_rejections += 1
+                                self._draw_detection(cv2, frame, rect, track_id, "PERSON-GUARD", decision.person_confidence, anchor, class_certainty, raw_track_id)
+                                continue
+
+                        direction = counter.update(track_id, anchor, width, height, frame_index=frame_index)
+                        self.state.rejected_outside_road = counter.rejected_outside_road
+                        self.state.fast_confirm_rescues = counter.fast_confirm_rescues
+                        self.state.rescue_validation_rejections = counter.rejected_rescue_validation
+                        self.state.adaptive_cooldown_releases = counter.adaptive_cooldown_releases
                         self._draw_detection(
                             cv2,
                             frame,
@@ -422,6 +533,17 @@ class PipelineWorker(threading.Thread):
                             refined_conf = refined[1] if refined is not None else 0.0
                             event_confidence = max(confidence_f, policy_conf, refined_conf)
 
+                            if event_label in TWO_WHEEL_LABELS and track_id not in self._human_rejected_tracks:
+                                decision = self._verify_human_candidate(frame, rect, event_label, event_confidence, device, use_half)
+                                if decision is not None and decision.reject:
+                                    self._human_rejected_tracks.add(track_id)
+                                    self.state.human_guard_rejections += 1
+                                    counter.revoke_last_crossing(track_id, direction)
+                                    self.state.in_count = counter.in_count
+                                    self.state.out_count = counter.out_count
+                                    self._draw_detection(cv2, frame, rect, track_id, "PERSON-GUARD", decision.person_confidence, anchor, class_certainty, raw_track_id)
+                                    continue
+
                             self.state.total_count += 1
                             self.state.counts_by_type[event_label] = self.state.counts_by_type.get(event_label, 0) + 1
                             self.state.in_count = counter.in_count
@@ -432,7 +554,10 @@ class PipelineWorker(threading.Thread):
                             self.state.rejected_outside_road = counter.rejected_outside_road
                             source_time_seconds = ((frame_index - 1) / self.state.source_fps) if self.state.source_fps > 0 else None
                             crossing_method = counter.crossing_mode_for(track_id)
-                            pending_crossing_events.append((track_id, event_label, direction, event_confidence, frame_index, source_time_seconds, crossing_method))
+                            crossing_point = counter.crossing_point_for(track_id)
+                            crossing_x = (crossing_point[0] / width) if crossing_point is not None and width > 0 else None
+                            crossing_y = (crossing_point[1] / height) if crossing_point is not None and height > 0 else None
+                            pending_crossing_events.append((track_id, event_label, direction, event_confidence, frame_index, source_time_seconds, crossing_method, crossing_x, crossing_y))
                 elif boxes is not None and len(boxes) > 0:
                     # Ultralytics can return valid detections before ByteTrack confirms a
                     # persistent ID. Older builds hid these boxes completely because all
@@ -480,14 +605,18 @@ class PipelineWorker(threading.Thread):
                         "rejected_unconfirmed_side": counter.rejected_unconfirmed_side,
                         "rejected_cooldown": counter.rejected_cooldown,
                         "road_edge_rescues": counter.road_edge_rescues,
+                        "fast_confirm_rescues": counter.fast_confirm_rescues,
+                        "rescue_validation_rejections": counter.rejected_rescue_validation,
+                        "adaptive_cooldown_releases": counter.adaptive_cooldown_releases,
+                        "human_guard_rejections": self.state.human_guard_rejections,
                     }, separators=(",", ":")) + "\n")
                 if pending_crossing_events:
                     snapshot = self._save_crossing_snapshot(cv2, frame, frame_index)
-                    for event_track_id, event_label, event_direction, event_confidence, event_frame_index, event_source_time, event_method in pending_crossing_events:
+                    for event_track_id, event_label, event_direction, event_confidence, event_frame_index, event_source_time, event_method, event_crossing_x, event_crossing_y in pending_crossing_events:
                         self._event_dispatcher.submit(
                             self._event_payload(
                                 event_track_id, event_label, event_direction, event_confidence, snapshot,
-                                event_frame_index, event_source_time, event_method,
+                                event_frame_index, event_source_time, event_method, event_crossing_x, event_crossing_y,
                             )
                         )
                 self.state.processed_frames += 1
@@ -653,7 +782,7 @@ class PipelineWorker(threading.Thread):
         rt = f"x{self.state.realtime_factor:.2f}" if self.state.source_fps > 0 else "live"
         cv2.putText(
             frame,
-            f"DET {self.state.detections_current_frame} | UNTRACKED {self.state.untracked_detections} | TRACK {self.state.active_tracks} | ROAD {self.state.road_tracks_current_frame} | TOTAL {self.state.total_count} | IN {counter.in_count} | OUT {counter.out_count} | FPS {self.state.fps:.1f} ({rt}) | {self.state.inference_ms:.0f}ms | {'HYBRID' if self.hybrid_mode else 'DIRECT'} {Path(self.detector_model_name).name} | ROI {self.detection_roi_mode.upper()} | DIRECT-X {counter.direct_crossings} | INTERP {counter.interpolated_crossings} | RESCUE {counter.rescued_crossings} | ROAD-REJECT {counter.rejected_outside_road} | CONFIRM-REJECT {counter.rejected_unconfirmed_side} | COOL-REJECT {counter.rejected_cooldown} | ROAD-EDGE+ {counter.road_edge_rescues}",
+            f"DET {self.state.detections_current_frame} | UNTRACKED {self.state.untracked_detections} | TRACK {self.state.active_tracks} | ROAD {self.state.road_tracks_current_frame} | TOTAL {self.state.total_count} | IN {counter.in_count} | OUT {counter.out_count} | FPS {self.state.fps:.1f} ({rt}) | {self.state.inference_ms:.0f}ms | {'HYBRID' if self.hybrid_mode else 'DIRECT'} {Path(self.detector_model_name).name} | ROI {self.detection_roi_mode.upper()} | DIRECT-X {counter.direct_crossings} | INTERP {counter.interpolated_crossings} | RESCUE {counter.rescued_crossings} | ROAD-REJECT {counter.rejected_outside_road} | CONFIRM-REJECT {counter.rejected_unconfirmed_side} | COOL-REJECT {counter.rejected_cooldown} | COOL-REL {counter.adaptive_cooldown_releases} | FAST-CONF {counter.fast_confirm_rescues} | RESCUE-X {counter.rejected_rescue_validation} | HUMAN-X {self.state.human_guard_rejections} | ROAD-EDGE+ {counter.road_edge_rescues}",
             (20, 32),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.62,
@@ -675,7 +804,7 @@ class PipelineWorker(threading.Thread):
         except Exception:
             return None
 
-    def _event_payload(self, track_id: int, label: str, direction: str, confidence: float, snapshot: str | None, source_frame_index: int | None = None, source_time_seconds: float | None = None, crossing_method: str | None = None) -> dict:
+    def _event_payload(self, track_id: int, label: str, direction: str, confidence: float, snapshot: str | None, source_frame_index: int | None = None, source_time_seconds: float | None = None, crossing_method: str | None = None, crossing_x: float | None = None, crossing_y: float | None = None) -> dict:
         return {
             "camera_id": self.payload.camera_id,
             "session_id": self.payload.session_id,
@@ -688,6 +817,8 @@ class PipelineWorker(threading.Thread):
             "source_frame_index": source_frame_index,
             "source_time_seconds": round(float(source_time_seconds), 4) if source_time_seconds is not None else None,
             "crossing_method": crossing_method,
+            "crossing_x": round(float(crossing_x), 6) if crossing_x is not None else None,
+            "crossing_y": round(float(crossing_y), 6) if crossing_y is not None else None,
         }
 
     def _notify_finished(self) -> None:
@@ -695,6 +826,7 @@ class PipelineWorker(threading.Thread):
             "status": self.state.status,
             "total_vehicles": self.state.total_count,
             "average_fps": self.state.fps,
+            "human_guard_rejections": self.state.human_guard_rejections,
             "source_fps": self.state.source_fps or None,
             "source_duration_seconds": self.state.source_duration_seconds or None,
             "last_error": self.state.last_error,
@@ -708,6 +840,21 @@ class PipelineWorker(threading.Thread):
                     timeout=4.0,
                 )
                 response.raise_for_status()
+                try:
+                    result = response.json()
+                    self.state.persisted_events = int(result.get("persisted_events", self.state.persisted_events))
+                    self.state.deduplicated_events = int(result.get("dedup_suppressed_events", self.state.deduplicated_events))
+                    # Once the session is closed, make the dashboard counters
+                    # reflect durable DB truth instead of pre-dedup worker candidates.
+                    if "persisted_events" in result:
+                        self.state.total_count = int(result.get("persisted_events", self.state.total_count))
+                        self.state.in_count = int(result.get("persisted_in", self.state.in_count))
+                        self.state.out_count = int(result.get("persisted_out", self.state.out_count))
+                        counts = result.get("persisted_by_type")
+                        if isinstance(counts, dict):
+                            self.state.counts_by_type = {key: int(counts.get(key, 0)) for key in self.state.counts_by_type}
+                except Exception:
+                    pass
                 return
             except Exception as exc:
                 self.state.last_error = f"Session finish notification attempt {attempt} failed: {exc}"

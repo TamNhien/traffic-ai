@@ -20,7 +20,7 @@ def test_root_metadata() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["name"] == "Traffic AI"
-    assert payload["version"] == "0.5.21"
+    assert payload["version"] == "0.5.23"
     assert payload["docs"] == "/docs"
     assert payload["health"] == "/api/health"
 
@@ -116,3 +116,42 @@ def test_benchmark_payload_contains_gate_snapshot() -> None:
     assert payload["geometry"]["line_y2"] == 0.55
     assert payload["geometry"]["road_x4"] == 0.04
     assert payload["mark_count"] == 3
+
+
+def test_benchmark_clone_compatibility_same_video_same_line() -> None:
+    from app.api.routes import _benchmark_clone_compatibility
+    from app.models.all_models import CountingBenchmark
+
+    common = dict(
+        camera_id=1, name="B", source_url="/data/videos/clip1.mp4",
+        line_x1=0.31, line_y1=0.81, line_x2=0.84, line_y2=0.55,
+        road_x1=0.20, road_y1=0.16, road_x2=0.80, road_y2=0.16,
+        road_x3=0.96, road_y3=0.98, road_x4=0.04, road_y4=0.98,
+        tolerance_seconds=0.75,
+    )
+    source = CountingBenchmark(id=1, session_id=119, **common)
+    target = CountingBenchmark(id=2, session_id=120, **common)
+    ok, reason = _benchmark_clone_compatibility(source, target)
+    assert ok is True
+    assert reason == "ok"
+
+
+def test_benchmark_clone_compatibility_rejects_different_line() -> None:
+    from app.api.routes import _benchmark_clone_compatibility
+    from app.models.all_models import CountingBenchmark
+
+    source = CountingBenchmark(
+        id=1, camera_id=1, session_id=119, name="B1", source_url="/data/videos/clip1.mp4",
+        line_x1=0.31, line_y1=0.81, line_x2=0.84, line_y2=0.55,
+        road_x1=0.20, road_y1=0.16, road_x2=0.80, road_y2=0.16,
+        road_x3=0.96, road_y3=0.98, road_x4=0.04, road_y4=0.98, tolerance_seconds=0.75,
+    )
+    target = CountingBenchmark(
+        id=2, camera_id=1, session_id=120, name="B2", source_url="/data/videos/clip1.mp4",
+        line_x1=0.40, line_y1=0.81, line_x2=0.84, line_y2=0.55,
+        road_x1=0.20, road_y1=0.16, road_x2=0.80, road_y2=0.16,
+        road_x3=0.96, road_y3=0.98, road_x4=0.04, road_y4=0.98, tolerance_seconds=0.75,
+    )
+    ok, reason = _benchmark_clone_compatibility(source, target)
+    assert ok is False
+    assert "vạch đếm" in reason
