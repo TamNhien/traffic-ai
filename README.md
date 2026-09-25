@@ -1,3 +1,240 @@
+# Traffic AI V0.5.24 — Rider-aware Human Guard 2.0 🛵🧍🎯
+
+V0.5.24 sửa lỗi được xác nhận trực tiếp từ clip và file nén `camera_1(1).rar` người dùng cung cấp.
+
+## Kết quả kiểm tra dữ liệu thực tế
+
+- clip màn hình dài khoảng **45.43 giây** cho thấy `Human Guard` tăng từ khoảng **100 → 107** trong khi tổng đếm gần như chỉ **61 → 62**;
+- file RAR có **86 snapshot AI Overlay**;
+- `frame_519` và đặc biệt `frame_1739` cho thấy **người đang ngồi/lái xe máy thật bị gắn `PERSON-GUARD`**, nên track xe bị loại khỏi event crossing;
+- nguyên nhân source V0.5.23: một track bị PERSON-dominant ở một/ít frame có thể bị đưa vào tập reject lâu dài; đồng thời crop verifier chỉ coi trọng two-wheel evidence chồng trực tiếp lên box mục tiêu nên dễ bỏ qua **thân xe nằm thấp hơn người lái**.
+
+### Sai trước đây
+
+```text
+Rider + scooter thật
+      ↓
+Detector box MOTORCYCLE cao/hẹp quanh người lái
+      ↓
+Verifier thấy PERSON mạnh
+      ↓
+không thấy motorcycle vì thân xe nằm thấp hơn box
+      ↓
+PERSON-GUARD
+      ↓
+track bị khóa
+      ↓
+xe thật cắt vạch nhưng KHÔNG ĐẾM ❌
+```
+
+## Human Guard 2.0 mới
+
+```text
+Candidate motorcycle/bicycle
+      ↓
+PERSON evidence
+      +
+DIRECT two-wheel evidence
+      +
+NEARBY-LOWER two-wheel evidence
+      +
+motion của track
+      ↓
+┌───────────────────────────────┐
+│ Rider evidence rõ            │ → RIDER → GIỮ XE ✅
+│ Person dominate nhiều lần    │ → PEDESTRIAN → CHẶN ✅
+└───────────────────────────────┘
+```
+
+### 1. Crop rider-aware
+
+Crop kiểm tra mở rộng mạnh hơn xuống phía dưới để bao cả scooter/motorcycle dưới thân người lái. Hai-wheel evidence không còn bắt buộc phải chồng trực tiếp >=18% với box MOTORCYCLE ban đầu; evidence ở **vùng rider envelope phía dưới** cũng được tính nếu nằm đúng quan hệ hình học người-ngồi-trên-xe.
+
+### 2. Không permanent-reject chỉ vì một frame
+
+V0.5.24 dùng `HumanGuardTrackPolicy`:
+
+```text
+1 frame PERSON mạnh
+→ PENDING
+
+2 lần PERSON-dominant liên tiếp
+→ REJECT pedestrian
+```
+
+Mặc định:
+
+```env
+AI_HUMAN_GUARD_REQUIRED_STRIKES=2
+AI_HUMAN_GUARD_CHECK_INTERVAL=8
+```
+
+### 3. Rider có thể cứu lại track đã từng bị reject
+
+Nếu vài frame đầu chưa thấy rõ xe nhưng frame sau bắt được scooter/motorcycle nằm dưới người:
+
+```text
+PERSON-GUARD
+    ↓
+Rider evidence xuất hiện
+    ↓
+RELEASE TRACK
+    ↓
+xe tiếp tục được đếm
+```
+
+### 4. Track bị Guard vẫn giữ trajectory
+
+Đây là thay đổi quan trọng. V0.5.23 `continue` sớm nên track bị Guard không đi qua `counter.update()` và mất lịch sử trước/sau vạch. V0.5.24 vẫn cho track đi qua geometry engine, nhưng **chỉ chặn/revoke VehicleEvent khi crossing xảy ra mà track vẫn được xác nhận là pedestrian**.
+
+Nhờ vậy rider được cứu ngay ở sát vạch vẫn còn đầy đủ quỹ đạo để đếm.
+
+### 5. Telemetry mới
+
+```text
+HUMAN-X  = pedestrian thật bị chặn
+RIDER+   = track rider được giữ/cứu khỏi Human Guard
+```
+
+Frontend hiển thị thêm:
+
+```text
+Human Guard ... · Rider giữ ...
+```
+
+`Human Guard` cao bất thường trong khi `Rider giữ=0` là tín hiệu cần kiểm tra lại verifier.
+
+
+## Cập nhật trên máy
+
+Chép full source V0.5.24 đè vào:
+
+```text
+D:\LienThongDH\DoAn\traffic-ai
+```
+
+Giữ nguyên:
+
+```text
+.env
+gateway\certs\
+videos\
+models\
+snapshots\
+datasets\
+training-runs\
+```
+
+Không dùng `docker compose down -v`. Sau đó:
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+.\scripts\test.ps1
+```
+
+Mong muốn có:
+
+```text
+[Traffic AI] Rider-aware Human Guard 2.0 V0.5.24
+[OK] Rider-aware Human Guard 2.0 V0.5.24
+[SUCCESS] All Traffic AI tests passed.
+```
+
+Nếu PASS:
+
+```powershell
+.\scripts\start.ps1
+.\scripts\verify-database.ps1
+```
+
+Database mong muốn:
+
+```text
+0038_rider_guard_v0524
+schema_version = 0.5.24
+```
+
+Phát hành vẫn một lệnh:
+
+```powershell
+.\scripts\publish.ps1
+```
+
+```text
+→ test → build → push GitHub → tag v0.5.24 → GitHub Actions → Release
+```
+
+---
+
+## Database
+
+```text
+0037_integrity_v0523
+        ↓
+0038_rider_guard_v0524
+schema_version = 0.5.24
+```
+
+Migration chỉ nâng schema version; không xóa dataset/model/session/benchmark/149 Ground Truth.
+
+## Cấu hình mới
+
+```env
+AI_HUMAN_GUARD=1
+AI_HUMAN_GUARD_MODEL=yolo26s.pt
+AI_HUMAN_GUARD_IMGSZ=512
+AI_HUMAN_GUARD_CHECK_INTERVAL=8
+AI_HUMAN_GUARD_CONF=0.08
+AI_HUMAN_GUARD_REQUIRED_STRIKES=2
+```
+
+`start.ps1` tự nâng default cũ `AI_HUMAN_GUARD_CHECK_INTERVAL=12 → 8`; custom value khác 12 được giữ nguyên.
+
+## Cách test đúng
+
+Giữ nguyên clip/vạch/Road Zone và chạy lại clip. Quan sát:
+
+```text
+Rider thật đi qua vạch:
+RIDER+ tăng hoặc giữ ổn định
+Xe máy phải tăng ✅
+
+Người đi bộ qua vạch:
+HUMAN-X tăng
+Xe máy KHÔNG tăng ✅
+```
+
+Sau khi session hoàn tất, tạo benchmark mới và sao chép 149 GT cũ để so với baseline V0.5.22:
+
+```text
+GT          149
+AI          158
+Khớp        133
+Lọt          16
+Dư           25
+Recall      89.3%
+Precision   84.2%
+F1          86.6%
+```
+
+Mục tiêu V0.5.24 là giảm **false negative do Rider bị Human Guard khóa** mà không mở lại lỗi người đi bộ bị tính thành xe máy.
+
+## Kiểm thử bổ sung V0.5.24
+
+```text
+Python compile                                  PASS
+AI Service tests                               79/79 PASS
+Backend tests (SQLite test mode)               17/17 PASS
+Standalone pedestrian reject                   PASS
+Nearby motorcycle below PERSON → rider keep    PASS
+Weak nearby noise does not rescue pedestrian   PASS
+Temporal two-strike pedestrian confirmation    PASS
+Rejected track can be released by rider proof  PASS
+```
+
+---
+
 # V0.5.23-R1 — Legacy test contract hotfix
 
 Bản R1 không đổi AI runtime, database, model, dataset hay migration. Hotfix chỉ sửa `scripts/test.ps1` để các contract legacy kiểm tra **ý nghĩa tương thích** thay vì bắt cứng chuỗi giao diện của engine cũ.

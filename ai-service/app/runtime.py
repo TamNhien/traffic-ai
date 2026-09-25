@@ -32,6 +32,7 @@ class PipelineState:
     road_tracks_current_frame: int = 0
     suppressed_class_duplicates_current_frame: int = 0
     human_guard_rejections: int = 0
+    rider_guard_rescues: int = 0
     human_guard_checks: int = 0
     human_guard_ready: bool = False
     fast_confirm_rescues: int = 0

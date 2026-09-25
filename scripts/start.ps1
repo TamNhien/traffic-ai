@@ -87,6 +87,7 @@ Set-EnvDefaultUpgrade "AI_GATE_MIN_NORMAL_RATIO" "0.12" "0.10"
 Set-EnvDefaultUpgrade "AI_GATE_ROI_MARGIN" "0.22" "0.16"
 Set-EnvDefaultUpgrade "AI_BICYCLE_CERTAINTY" "0.76" "0.80"
 Set-EnvDefaultUpgrade "AI_BICYCLE_MIN_HITS" "4" "5"
+Set-EnvDefaultUpgrade "AI_HUMAN_GUARD_CHECK_INTERVAL" "12" "8"
 
 # V0.5.14: detector quét toàn khung; Road Zone chỉ còn nhiệm vụ quyết định ĐẾM.
 # Chỉ migrate đúng một lần để người dùng vẫn có thể chủ động chuyển lại road/gate sau đó.
@@ -147,8 +148,9 @@ Ensure-EnvSetting "AI_GATE_RESCUE_MIN_SIDE_RATIO" "0.010"
 Ensure-EnvSetting "AI_HUMAN_GUARD" "1"
 Ensure-EnvSetting "AI_HUMAN_GUARD_MODEL" "yolo26s.pt"
 Ensure-EnvSetting "AI_HUMAN_GUARD_IMGSZ" "512"
-Ensure-EnvSetting "AI_HUMAN_GUARD_CHECK_INTERVAL" "12"
+Ensure-EnvSetting "AI_HUMAN_GUARD_CHECK_INTERVAL" "8"
 Ensure-EnvSetting "AI_HUMAN_GUARD_CONF" "0.08"
+Ensure-EnvSetting "AI_HUMAN_GUARD_REQUIRED_STRIKES" "2"
 Ensure-EnvSetting "AI_REFINE_AT_CROSSING" "1"
 Ensure-EnvSetting "AI_REFINE_MODEL_NAME" "yolo26m.pt"
 Ensure-EnvSetting "AI_REFINE_IMGSZ" "640"
@@ -239,7 +241,7 @@ if (-not $dashboardOk -or -not $apiOk) {
 }
 
 Write-Host ""
-Write-Host "[OK] Traffic AI V0.5.23 đã khởi động." -ForegroundColor Green
+Write-Host "[OK] Traffic AI V0.5.24 đã khởi động." -ForegroundColor Green
 Write-Host "Dashboard : https://traffic-ai.test:8443"
 Write-Host "API Docs  : https://traffic-ai.test:8444/docs"
 Write-Host "PostgreSQL: 127.0.0.1:5445 / traffic_ai_db"

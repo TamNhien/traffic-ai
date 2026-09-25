@@ -300,18 +300,18 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.23") { throw "VERSION phải là 0.5.23, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0037_integrity_v0523.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0037_integrity_v0523.py." }
+  if ($version -ne "0.5.24") { throw "VERSION phải là 0.5.24, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0038_rider_guard_v0524.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0038_rider_guard_v0524.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0037_integrity_v0523"' -or $migrationText -notmatch 'down_revision = "0036_gt_reuse_v0522"' -or $migrationText -notmatch "value='0.5.23'") {
-    throw "Migration 0037_integrity_v0523 không đúng contract V0.5.23."
+  if ($migrationText -notmatch 'revision = "0038_rider_guard_v0524"' -or $migrationText -notmatch 'down_revision = "0037_integrity_v0523"' -or $migrationText -notmatch "value='0.5.24'") {
+    throw "Migration 0038_rider_guard_v0524 không đúng contract V0.5.24."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
 
 function Assert-AlembicRevisionSafetyContract {
-  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.23" -ForegroundColor Cyan
+  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.24" -ForegroundColor Cyan
   $versionsDir = Join-Path $root "backend\alembic\versions"
   $bad = @()
   Get-ChildItem $versionsDir -Filter "*.py" | ForEach-Object {
@@ -335,7 +335,7 @@ function Assert-AlembicRevisionSafetyContract {
   if ($v17 -notmatch 'revision = "0017_ai_test_dep_v053"') {
     throw "Migration V0.5.3 chưa dùng revision ID rút gọn an toàn."
   }
-  Write-Host "[OK] Alembic revision-length safety V0.5.23" -ForegroundColor Green
+  Write-Host "[OK] Alembic revision-length safety V0.5.24" -ForegroundColor Green
 }
 
 
@@ -919,6 +919,35 @@ function Assert-DatasetControlsVisibilityV0510R1Contract {
   Write-Host "[OK] Dataset controls visibility V0.5.10-R1" -ForegroundColor Green
 }
 
+function Assert-RiderAwareHumanGuardV0524Contract {
+  Write-Host "`n[Traffic AI] Rider-aware Human Guard 2.0 V0.5.24" -ForegroundColor Cyan
+  $worker = Get-Content (Join-Path $root "ai-service\app\worker.py") -Raw -Encoding UTF8
+  $human = Get-Content (Join-Path $root "ai-service\app\human_guard.py") -Raw -Encoding UTF8
+  $runtime = Get-Content (Join-Path $root "ai-service\app\runtime.py") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  $envExample = Get-Content (Join-Path $root ".env.example") -Raw -Encoding UTF8
+  $humanTests = Get-Content (Join-Path $root "ai-service\tests\test_human_guard.py") -Raw -Encoding UTF8
+  if ($human -notmatch 'nearby_two_wheel_support' -or $human -notmatch 'HumanGuardTrackPolicy' -or $human -notmatch 'rider_supported') {
+    throw "V0.5.24 thiếu rider-aware evidence / temporal Human Guard policy."
+  }
+  if ($worker -notmatch 'Rider-aware Human Guard 2.0' -or $worker -notmatch 'rider_guard_rescues' -or $worker -notmatch 'velocity=velocity') {
+    throw "Worker V0.5.24 chưa giữ rider thật hoặc chưa truyền motion evidence."
+  }
+  if ($worker -match '_human_rejected_tracks') {
+    throw "Worker V0.5.24 còn permanent reject set kiểu V0.5.23."
+  }
+  if ($runtime -notmatch 'rider_guard_rescues' -or $frontend -notmatch 'Rider giữ') {
+    throw "V0.5.24 thiếu telemetry rider rescue trên runtime/frontend."
+  }
+  if ($envExample -notmatch 'AI_HUMAN_GUARD_REQUIRED_STRIKES=2') {
+    throw "V0.5.24 thiếu temporal confirmation config cho Human Guard."
+  }
+  if ($humanTests -notmatch 'nearby_motorcycle_below_person_rescues_real_rider' -or $humanTests -notmatch 'release_previously_rejected_track') {
+    throw "V0.5.24 thiếu regression test rider thật / release track."
+  }
+  Write-Host "[OK] Rider-aware Human Guard 2.0 V0.5.24" -ForegroundColor Green
+}
+
 function Assert-LegacySemanticCompatibilityV0523R1 {
   Write-Host "`n[Traffic AI] Legacy semantic contract compatibility V0.5.23-R1" -ForegroundColor Cyan
   $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
@@ -974,6 +1003,7 @@ Assert-BenchmarkGateOverlayV0520Contract
 Assert-CrossingEngineV0521Contract
 Assert-GroundTruthReuseV0522Contract
 Assert-BenchmarkIntegrityCrossingV0523Contract
+Assert-RiderAwareHumanGuardV0524Contract
 Assert-LegacySemanticCompatibilityV0523R1
 
 Write-Host "`n[Traffic AI] Road Zone + Frame Browser V0.5.11" -ForegroundColor Cyan

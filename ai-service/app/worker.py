@@ -17,7 +17,15 @@ from app.counting import CountingLine, LineCrossingCounter, RoadZone
 from app.dedup import single_heavy_vehicle_plan
 from app.flow_calibration import FlowCalibrator
 from app.gate_roi import gate_roi_for_line, road_zone_roi
-from app.human_guard import TWO_WHEEL_LABELS, human_dominates_two_wheel_candidate, is_person_like_two_wheel_box
+from app.human_guard import (
+    TWO_WHEEL_LABELS,
+    HumanGuardTrackPolicy,
+    box_iou,
+    coverage_of_target,
+    human_dominates_two_wheel_candidate,
+    is_person_like_two_wheel_box,
+    nearby_two_wheel_support,
+)
 from app.schemas import PipelineStart
 from app.tracking import TrackContinuityResolver, motion_leading_anchor
 
@@ -50,8 +58,9 @@ class PipelineWorker(threading.Thread):
         self._human_guard_model = None
         self._human_guard_ids: list[int] = []
         self._human_guard_thread: threading.Thread | None = None
-        self._human_rejected_tracks: set[int] = set()
         self._human_guard_last_check: dict[int, int] = {}
+        self._human_guard_policy = HumanGuardTrackPolicy(required_strikes=max(1, int(os.getenv("AI_HUMAN_GUARD_REQUIRED_STRIKES", "2"))))
+        self._human_rider_tracks_seen: set[int] = set()
         self._flow_calibrator = FlowCalibrator(
             history_frames=int(os.getenv("AI_FLOW_CALIBRATION_HISTORY_FRAMES", "1200")),
             per_track_points=int(os.getenv("AI_FLOW_CALIBRATION_POINTS_PER_TRACK", "180")),
@@ -184,16 +193,25 @@ class PipelineWorker(threading.Thread):
         self._human_guard_thread = threading.Thread(target=load_guard, daemon=True, name=f"human-guard-{self.payload.camera_id}")
         self._human_guard_thread.start()
 
-    def _verify_human_candidate(self, frame, rect, target_label: str, target_confidence: float, device, use_half: bool):
+    def _verify_human_candidate(self, frame, rect, target_label: str, target_confidence: float, device, use_half: bool, velocity=(0.0, 0.0)):
         if self._human_guard_model is None or not self._human_guard_ids or target_label not in TWO_WHEEL_LABELS:
             return None
         try:
+            from math import hypot
+
             h, w = frame.shape[:2]
             x1, y1, x2, y2 = [float(v) for v in rect]
-            pad_x = max(18, int((x2 - x1) * 0.40))
-            pad_y = max(18, int((y2 - y1) * 0.28))
-            ix1, iy1 = max(0, int(x1) - pad_x), max(0, int(y1) - pad_y)
-            ix2, iy2 = min(w, int(x2) + pad_x), min(h, int(y2) + pad_y)
+            target_w = max(1.0, x2 - x1)
+            target_h = max(1.0, y2 - y1)
+            # V0.5.24: expand much farther below the PERSON-like candidate. In
+            # the supplied camera snapshots the rider torso receives the tall
+            # MOTORCYCLE box while the physical scooter sits below it.
+            pad_left = max(20, int(target_w * 0.72))
+            pad_right = max(20, int(target_w * 0.72))
+            pad_top = max(16, int(target_h * 0.22))
+            pad_bottom = max(28, int(target_h * 1.05))
+            ix1, iy1 = max(0, int(x1) - pad_left), max(0, int(y1) - pad_top)
+            ix2, iy2 = min(w, int(x2) + pad_right), min(h, int(y2) + pad_bottom)
             crop = frame[iy1:iy2, ix1:ix2]
             if crop.size == 0 or crop.shape[0] < 40 or crop.shape[1] < 28:
                 return None
@@ -207,22 +225,29 @@ class PipelineWorker(threading.Thread):
             best_person = None
             best_person_conf = 0.0
             best_vehicle_conf = 0.0
-            from app.human_guard import box_iou, coverage_of_target
+            best_nearby_vehicle_conf = 0.0
             boxes = predictions[0].boxes
+            crop_h, crop_w = crop.shape[:2]
             for box, cls_id, conf in zip(boxes.xyxy.cpu().tolist(), boxes.cls.int().cpu().tolist(), boxes.conf.cpu().tolist()):
                 label = str(predictions[0].names[int(cls_id)])
                 evidence = tuple(map(float, box))
                 overlap = max(box_iou(target_crop, evidence), coverage_of_target(target_crop, evidence))
-                if overlap < 0.18:
+                if label == "person":
+                    if overlap >= 0.18 and float(conf) > best_person_conf:
+                        best_person = evidence
+                        best_person_conf = float(conf)
                     continue
-                if label == "person" and float(conf) > best_person_conf:
-                    best_person = evidence
-                    best_person_conf = float(conf)
-                elif label in TWO_WHEEL_LABELS:
-                    best_vehicle_conf = max(best_vehicle_conf, float(conf))
+                if label in TWO_WHEEL_LABELS:
+                    if overlap >= 0.18:
+                        best_vehicle_conf = max(best_vehicle_conf, float(conf))
+                    elif nearby_two_wheel_support(target_crop, evidence, crop_w, crop_h):
+                        best_nearby_vehicle_conf = max(best_nearby_vehicle_conf, float(conf))
             self.state.human_guard_checks += 1
+            diagonal = max(hypot(w, h), 1.0)
+            speed_ratio = hypot(float(velocity[0]), float(velocity[1])) / diagonal
             return human_dominates_two_wheel_candidate(
-                target_crop, target_label, float(target_confidence), best_person, best_person_conf, best_vehicle_conf
+                target_crop, target_label, float(target_confidence), best_person, best_person_conf,
+                best_vehicle_conf, best_nearby_vehicle_conf, speed_ratio,
             )
         except Exception:
             return None
@@ -465,41 +490,50 @@ class PipelineWorker(threading.Thread):
                             current_label, stable_label, class_certainty, class_hits, confidence_f
                         )
 
-                        # V0.5.23 Human-vs-Motorcycle Guard. The supplied camera
-                        # frame shows a pedestrian receiving a tall/narrow
-                        # MOTORCYCLE box. Verify suspicious two-wheel tracks with
-                        # a person-aware pretrained model before they reach the
-                        # crossing counter. Real riders are retained when the
-                        # verifier still sees competitive two-wheel evidence.
-                        if track_id in self._human_rejected_tracks:
-                            self._draw_detection(cv2, frame, rect, track_id, "PERSON-GUARD", confidence_f, anchor, class_certainty, raw_track_id)
-                            continue
+                        # V0.5.24 Rider-aware Human Guard 2.0.
+                        #
+                        # V0.5.23 could permanently reject a real rider after one
+                        # PERSON-dominant crop. The supplied camera_1 archive shows
+                        # exactly that (for example frame_1739: a rider/scooter is
+                        # drawn as PERSON-GUARD). We now collect nearby *lower*
+                        # two-wheel evidence, require temporal confirmation for a
+                        # pedestrian, and can release a previously rejected track
+                        # when rider evidence appears. Rejected tracks still feed
+                        # the geometry counter so a later rider recovery does not
+                        # lose its pre-crossing trajectory; only event emission is
+                        # blocked/revoked.
                         suspect_human = (
                             display_label in TWO_WHEEL_LABELS
                             and is_person_like_two_wheel_box(rect)
                             and (counter.road_zone is None or counter.road_zone.contains_with_margin(anchor, width, height, 0.02))
                         )
                         last_guard = self._human_guard_last_check.get(track_id, -10_000)
-                        if suspect_human and frame_index - last_guard >= self.human_guard_check_interval:
+                        if suspect_human and frame_index - last_guard >= self.human_guard_check_interval and not self._human_guard_policy.is_rider(track_id):
                             self._human_guard_last_check[track_id] = frame_index
-                            decision = self._verify_human_candidate(frame, rect, display_label, confidence_f, device, use_half)
-                            if decision is not None and decision.reject:
-                                self._human_rejected_tracks.add(track_id)
+                            was_rejected = self._human_guard_policy.is_rejected(track_id)
+                            decision = self._verify_human_candidate(
+                                frame, rect, display_label, confidence_f, device, use_half, velocity=velocity
+                            )
+                            action = self._human_guard_policy.observe(track_id, decision)
+                            if action in {"rider", "released"}:
+                                if track_id not in self._human_rider_tracks_seen:
+                                    self.state.rider_guard_rescues += 1
+                                    self._human_rider_tracks_seen.add(track_id)
+                            if action == "rejected" and not was_rejected:
                                 self.state.human_guard_rejections += 1
-                                self._draw_detection(cv2, frame, rect, track_id, "PERSON-GUARD", decision.person_confidence, anchor, class_certainty, raw_track_id)
-                                continue
 
                         direction = counter.update(track_id, anchor, width, height, frame_index=frame_index)
                         self.state.rejected_outside_road = counter.rejected_outside_road
                         self.state.fast_confirm_rescues = counter.fast_confirm_rescues
                         self.state.rescue_validation_rejections = counter.rejected_rescue_validation
                         self.state.adaptive_cooldown_releases = counter.adaptive_cooldown_releases
+                        overlay_label = "PERSON-GUARD" if self._human_guard_policy.is_rejected(track_id) else display_label
                         self._draw_detection(
                             cv2,
                             frame,
                             rect,
                             track_id,
-                            display_label,
+                            overlay_label,
                             confidence_f,
                             anchor,
                             class_certainty,
@@ -533,15 +567,28 @@ class PipelineWorker(threading.Thread):
                             refined_conf = refined[1] if refined is not None else 0.0
                             event_confidence = max(confidence_f, policy_conf, refined_conf)
 
-                            if event_label in TWO_WHEEL_LABELS and track_id not in self._human_rejected_tracks:
-                                decision = self._verify_human_candidate(frame, rect, event_label, event_confidence, device, use_half)
-                                if decision is not None and decision.reject:
-                                    self._human_rejected_tracks.add(track_id)
+                            if event_label in TWO_WHEEL_LABELS:
+                                # Re-check every two-wheel track exactly at the
+                                # crossing, even one previously protected as a
+                                # rider. One ambiguous PERSON-only frame is still
+                                # only a pending strike, while strong pedestrian
+                                # evidence can block a false rider rescue.
+                                was_rejected = self._human_guard_policy.is_rejected(track_id)
+                                decision = self._verify_human_candidate(
+                                    frame, rect, event_label, event_confidence, device, use_half, velocity=velocity
+                                )
+                                action = self._human_guard_policy.observe(track_id, decision)
+                                if action in {"rider", "released"}:
+                                    if track_id not in self._human_rider_tracks_seen:
+                                        self.state.rider_guard_rescues += 1
+                                        self._human_rider_tracks_seen.add(track_id)
+                                if action == "rejected" and not was_rejected:
                                     self.state.human_guard_rejections += 1
+                                if self._human_guard_policy.is_rejected(track_id):
                                     counter.revoke_last_crossing(track_id, direction)
                                     self.state.in_count = counter.in_count
                                     self.state.out_count = counter.out_count
-                                    self._draw_detection(cv2, frame, rect, track_id, "PERSON-GUARD", decision.person_confidence, anchor, class_certainty, raw_track_id)
+                                    self._draw_detection(cv2, frame, rect, track_id, "PERSON-GUARD", event_confidence, anchor, class_certainty, raw_track_id)
                                     continue
 
                             self.state.total_count += 1
@@ -609,6 +656,7 @@ class PipelineWorker(threading.Thread):
                         "rescue_validation_rejections": counter.rejected_rescue_validation,
                         "adaptive_cooldown_releases": counter.adaptive_cooldown_releases,
                         "human_guard_rejections": self.state.human_guard_rejections,
+                        "rider_guard_rescues": self.state.rider_guard_rescues,
                     }, separators=(",", ":")) + "\n")
                 if pending_crossing_events:
                     snapshot = self._save_crossing_snapshot(cv2, frame, frame_index)
@@ -782,7 +830,7 @@ class PipelineWorker(threading.Thread):
         rt = f"x{self.state.realtime_factor:.2f}" if self.state.source_fps > 0 else "live"
         cv2.putText(
             frame,
-            f"DET {self.state.detections_current_frame} | UNTRACKED {self.state.untracked_detections} | TRACK {self.state.active_tracks} | ROAD {self.state.road_tracks_current_frame} | TOTAL {self.state.total_count} | IN {counter.in_count} | OUT {counter.out_count} | FPS {self.state.fps:.1f} ({rt}) | {self.state.inference_ms:.0f}ms | {'HYBRID' if self.hybrid_mode else 'DIRECT'} {Path(self.detector_model_name).name} | ROI {self.detection_roi_mode.upper()} | DIRECT-X {counter.direct_crossings} | INTERP {counter.interpolated_crossings} | RESCUE {counter.rescued_crossings} | ROAD-REJECT {counter.rejected_outside_road} | CONFIRM-REJECT {counter.rejected_unconfirmed_side} | COOL-REJECT {counter.rejected_cooldown} | COOL-REL {counter.adaptive_cooldown_releases} | FAST-CONF {counter.fast_confirm_rescues} | RESCUE-X {counter.rejected_rescue_validation} | HUMAN-X {self.state.human_guard_rejections} | ROAD-EDGE+ {counter.road_edge_rescues}",
+            f"DET {self.state.detections_current_frame} | UNTRACKED {self.state.untracked_detections} | TRACK {self.state.active_tracks} | ROAD {self.state.road_tracks_current_frame} | TOTAL {self.state.total_count} | IN {counter.in_count} | OUT {counter.out_count} | FPS {self.state.fps:.1f} ({rt}) | {self.state.inference_ms:.0f}ms | {'HYBRID' if self.hybrid_mode else 'DIRECT'} {Path(self.detector_model_name).name} | ROI {self.detection_roi_mode.upper()} | DIRECT-X {counter.direct_crossings} | INTERP {counter.interpolated_crossings} | RESCUE {counter.rescued_crossings} | ROAD-REJECT {counter.rejected_outside_road} | CONFIRM-REJECT {counter.rejected_unconfirmed_side} | COOL-REJECT {counter.rejected_cooldown} | COOL-REL {counter.adaptive_cooldown_releases} | FAST-CONF {counter.fast_confirm_rescues} | RESCUE-X {counter.rejected_rescue_validation} | HUMAN-X {self.state.human_guard_rejections} | RIDER+ {self.state.rider_guard_rescues} | ROAD-EDGE+ {counter.road_edge_rescues}",
             (20, 32),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.62,
