@@ -140,6 +140,9 @@ Ensure-EnvSetting "AI_GATE_COOLDOWN_FRAMES" "60"
 Ensure-EnvSetting "AI_ROAD_ZONE_PROBE_RATIO" "0.018"
 Ensure-EnvSetting "AI_ROAD_ANCHOR_MARGIN_RATIO" "0.012"
 Ensure-EnvSetting "AI_GATE_FAST_CONFIRM_DISTANCE_RATIO" "0.018"
+Ensure-EnvSetting "AI_GATE_BRACKET_CONFIRM" "1"
+Ensure-EnvSetting "AI_GATE_BRACKET_CONFIRM_MIN_NORMAL_RATIO" "0.55"
+Ensure-EnvSetting "AI_GATE_BRACKET_CONFIRM_MAX_GAP" "2"
 Ensure-EnvSetting "AI_GATE_ADAPTIVE_COOLDOWN" "1"
 Ensure-EnvSetting "AI_GATE_COOLDOWN_RELEASE_RATIO" "0.055"
 Ensure-EnvSetting "AI_GATE_RESCUE_MIN_NORMAL_RATIO" "0.28"
@@ -151,6 +154,7 @@ Ensure-EnvSetting "AI_HUMAN_GUARD_IMGSZ" "512"
 Ensure-EnvSetting "AI_HUMAN_GUARD_CHECK_INTERVAL" "8"
 Ensure-EnvSetting "AI_HUMAN_GUARD_CONF" "0.08"
 Ensure-EnvSetting "AI_HUMAN_GUARD_REQUIRED_STRIKES" "2"
+Ensure-EnvSetting "AI_HUMAN_GUARD_PENDING_MAX_FRAMES" "12"
 Ensure-EnvSetting "AI_REFINE_AT_CROSSING" "1"
 Ensure-EnvSetting "AI_REFINE_MODEL_NAME" "yolo26m.pt"
 Ensure-EnvSetting "AI_REFINE_IMGSZ" "640"
@@ -241,7 +245,7 @@ if (-not $dashboardOk -or -not $apiOk) {
 }
 
 Write-Host ""
-Write-Host "[OK] Traffic AI V0.5.24 đã khởi động." -ForegroundColor Green
+Write-Host "[OK] Traffic AI V0.5.25 đã khởi động." -ForegroundColor Green
 Write-Host "Dashboard : https://traffic-ai.test:8443"
 Write-Host "API Docs  : https://traffic-ai.test:8444/docs"
 Write-Host "PostgreSQL: 127.0.0.1:5445 / traffic_ai_db"

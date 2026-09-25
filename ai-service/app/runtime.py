@@ -33,9 +33,13 @@ class PipelineState:
     suppressed_class_duplicates_current_frame: int = 0
     human_guard_rejections: int = 0
     rider_guard_rescues: int = 0
+    human_guard_pending_crossings: int = 0
+    human_guard_deferred_commits: int = 0
+    human_guard_pending_drops: int = 0
     human_guard_checks: int = 0
     human_guard_ready: bool = False
     fast_confirm_rescues: int = 0
+    bracket_confirm_rescues: int = 0
     rescue_validation_rejections: int = 0
     adaptive_cooldown_releases: int = 0
     crossing_signature_duplicates: int = 0

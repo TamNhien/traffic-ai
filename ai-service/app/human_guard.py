@@ -202,11 +202,19 @@ def human_dominates_two_wheel_candidate(
 
 
 class HumanGuardTrackPolicy:
-    """Temporal confirmation for pedestrian rejection and rider recovery."""
+    """Temporal confirmation for pedestrian rejection and rider recovery.
+
+    V0.5.25 counts *distinct source frames*, not verifier calls. The worker can
+    legitimately ask the guard once during normal tracking and again when the
+    same frame produces a crossing. Those two calls must never become two
+    pedestrian strikes. Even strong/hard PERSON evidence therefore needs the
+    configured number of distinct-frame observations before rejection.
+    """
 
     def __init__(self, required_strikes: int = 2) -> None:
         self.required_strikes = max(1, int(required_strikes))
         self.strikes: dict[int, int] = {}
+        self.last_strike_frame: dict[int, int] = {}
         self.rejected: set[int] = set()
         self.riders: set[int] = set()
 
@@ -216,25 +224,51 @@ class HumanGuardTrackPolicy:
     def is_rider(self, track_id: int) -> bool:
         return int(track_id) in self.riders
 
-    def observe(self, track_id: int, decision: HumanGuardDecision | None) -> str:
+    def status(self, track_id: int) -> str:
+        tid = int(track_id)
+        if tid in self.rejected:
+            return "rejected"
+        if tid in self.riders:
+            return "rider"
+        if self.strikes.get(tid, 0) > 0:
+            return "pending"
+        return "keep"
+
+    def observe(
+        self,
+        track_id: int,
+        decision: HumanGuardDecision | None,
+        *,
+        frame_index: int | None = None,
+    ) -> str:
         tid = int(track_id)
         if decision is None:
-            return "rejected" if tid in self.rejected else ("rider" if tid in self.riders else "keep")
+            return self.status(tid)
         if decision.rider_supported:
             was_rejected = tid in self.rejected
             self.rejected.discard(tid)
             self.strikes.pop(tid, None)
+            self.last_strike_frame.pop(tid, None)
             self.riders.add(tid)
             return "released" if was_rejected else "rider"
         if decision.reject:
             self.riders.discard(tid)
+            frame = int(frame_index) if frame_index is not None else None
+            if frame is not None and self.last_strike_frame.get(tid) == frame:
+                # Same source frame may be inspected by both the periodic guard
+                # and the crossing guard. Reuse the strike instead of counting
+                # a second observation from identical pixels.
+                return self.status(tid)
             count = self.strikes.get(tid, 0) + 1
             self.strikes[tid] = count
-            if decision.hard_reject or count >= self.required_strikes:
+            if frame is not None:
+                self.last_strike_frame[tid] = frame
+            if count >= self.required_strikes:
                 self.rejected.add(tid)
                 return "rejected"
             return "pending"
         self.strikes.pop(tid, None)
+        self.last_strike_frame.pop(tid, None)
         return "keep"
 
 

@@ -1,45 +1,21 @@
 * text=auto
-
-# Windows PowerShell scripts are kept CRLF so copying a release over an
-# existing Windows clone never causes "LF will be replaced by CRLF" warnings.
 *.ps1 text eol=crlf
-*.bat text eol=crlf
-*.cmd text eol=crlf
-
-# Source/config files are canonical LF across Windows, Linux and GitHub Actions.
-*.sh text eol=lf
-Dockerfile text eol=lf
-*.yml text eol=lf
-*.yaml text eol=lf
 *.py text eol=lf
+*.json text eol=lf
 *.js text eol=lf
 *.jsx text eol=lf
 *.css text eol=lf
 *.html text eol=lf
-*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
 *.md text eol=lf
-*.txt text eol=lf
+*.sh text eol=lf
 *.ini text eol=lf
 *.conf text eol=lf
 *.mako text eol=lf
 *.svg text eol=lf
 *.webmanifest text eol=lf
+Dockerfile text eol=lf
 .env.example text eol=lf
-.gitattributes text eol=lf
-.dockerignore text eol=lf
-.gitignore text eol=lf
 .nvmrc text eol=lf
 VERSION text eol=lf
-
-# Binary/runtime assets must never receive newline conversion.
-*.png binary
-*.jpg binary
-*.jpeg binary
-*.ico binary
-*.webp binary
-*.pt binary
-*.mp4 binary
-*.avi binary
-*.mkv binary
-*.db binary
-*.sqlite binary

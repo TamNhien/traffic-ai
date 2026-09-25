@@ -16,7 +16,7 @@ from app.sources import inspect_source, list_video_sources, read_source_preview,
 from app.training import auto_label, dataset_stats, extract_frames, prepare_dataset, purge_dataset, reset_dataset_labels, training_registry
 from app.annotation import accept_safe_annotations, get_annotation, get_annotation_image, list_annotations, save_annotation
 
-APP_VERSION = '0.5.24'
+APP_VERSION = '0.5.25'
 app = FastAPI(title='Traffic AI Service', version=APP_VERSION)
 SNAPSHOT_DIR = Path(os.getenv('SNAPSHOT_DIR', '/tmp/traffic-ai-snapshots'))
 SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
@@ -45,7 +45,7 @@ def health() -> dict:
         'status': 'ready',
         'service': 'ai-service',
         'version': APP_VERSION,
-        'pipeline': 'yolo26s-bytetrack-hybrid-crossing-v6',
+        'pipeline': 'yolo26s-bytetrack-hybrid-crossing-v7.2',
         'model': os.getenv('AI_MODEL_NAME', 'yolo26s.pt'),
         'device': os.getenv('AI_DEVICE', 'auto'),
         'performance': {

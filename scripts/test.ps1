@@ -300,18 +300,18 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.24") { throw "VERSION phải là 0.5.24, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0038_rider_guard_v0524.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0038_rider_guard_v0524.py." }
+  if ($version -ne "0.5.25") { throw "VERSION phải là 0.5.25, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0039_guard_tx_v0525.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0039_guard_tx_v0525.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0038_rider_guard_v0524"' -or $migrationText -notmatch 'down_revision = "0037_integrity_v0523"' -or $migrationText -notmatch "value='0.5.24'") {
-    throw "Migration 0038_rider_guard_v0524 không đúng contract V0.5.24."
+  if ($migrationText -notmatch 'revision = "0039_guard_tx_v0525"' -or $migrationText -notmatch 'down_revision = "0038_rider_guard_v0524"' -or $migrationText -notmatch "value='0.5.25'") {
+    throw "Migration 0039_guard_tx_v0525 không đúng contract V0.5.25."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
 
 function Assert-AlembicRevisionSafetyContract {
-  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.24" -ForegroundColor Cyan
+  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.25" -ForegroundColor Cyan
   $versionsDir = Join-Path $root "backend\alembic\versions"
   $bad = @()
   Get-ChildItem $versionsDir -Filter "*.py" | ForEach-Object {
@@ -335,7 +335,7 @@ function Assert-AlembicRevisionSafetyContract {
   if ($v17 -notmatch 'revision = "0017_ai_test_dep_v053"') {
     throw "Migration V0.5.3 chưa dùng revision ID rút gọn an toàn."
   }
-  Write-Host "[OK] Alembic revision-length safety V0.5.24" -ForegroundColor Green
+  Write-Host "[OK] Alembic revision-length safety V0.5.25" -ForegroundColor Green
 }
 
 
@@ -948,6 +948,43 @@ function Assert-RiderAwareHumanGuardV0524Contract {
   Write-Host "[OK] Rider-aware Human Guard 2.0 V0.5.24" -ForegroundColor Green
 }
 
+function Assert-TransactionalHumanGuardV0525Contract {
+  Write-Host "`n[Traffic AI] Transactional Human Guard 2.1 + Crossing Engine 7.2 V0.5.25" -ForegroundColor Cyan
+  $worker = Get-Content (Join-Path $root "ai-service\app\worker.py") -Raw -Encoding UTF8
+  $human = Get-Content (Join-Path $root "ai-service\app\human_guard.py") -Raw -Encoding UTF8
+  $counting = Get-Content (Join-Path $root "ai-service\app\counting.py") -Raw -Encoding UTF8
+  $runtime = Get-Content (Join-Path $root "ai-service\app\runtime.py") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  $envExample = Get-Content (Join-Path $root ".env.example") -Raw -Encoding UTF8
+  $humanTests = Get-Content (Join-Path $root "ai-service\tests\test_human_guard.py") -Raw -Encoding UTF8
+  $countingTests = Get-Content (Join-Path $root "ai-service\tests\test_counting.py") -Raw -Encoding UTF8
+  if ($human -notmatch 'last_strike_frame' -or $human -notmatch 'frame_index' -or $human -notmatch 'Same source frame') {
+    throw "V0.5.25 chưa khóa strike theo source-frame riêng biệt."
+  }
+  if ($worker -notmatch '_pending_guard_crossings' -or $worker -notmatch '_commit_guard_crossing' -or $worker -notmatch '_drop_guard_crossing' -or $worker -notmatch 'snapshot_frame=guard_snapshot' -or $worker -notmatch 'guard_snapshot = frame.copy') {
+    throw "V0.5.25 thiếu transaction buffer cho crossing hai bánh đang PENDING."
+  }
+  if ($worker -notmatch '_human_guard_last_observation' -or $worker -notmatch 'same-frame cache' -or $worker -notmatch 'human_guard_pending_max_frames') {
+    throw "V0.5.25 chưa chống double-check cùng frame hoặc thiếu bounded pending timeout."
+  }
+  if ($counting -notmatch 'bracket_confirm_rescues' -or $counting -notmatch 'bracket_confirm_min_normal_ratio' -or $counting -notmatch 'Crossing Engine 7.2') {
+    throw "V0.5.25 thiếu Bracket Confirm của Crossing Engine 7.2."
+  }
+  if ($runtime -notmatch 'human_guard_pending_crossings' -or $runtime -notmatch 'human_guard_deferred_commits' -or $runtime -notmatch 'bracket_confirm_rescues') {
+    throw "Runtime V0.5.25 thiếu telemetry Guard transaction / bracket confirm."
+  }
+  if ($frontend -notmatch 'Crossing Engine 7.2' -or $frontend -notmatch 'Guard chờ' -or $frontend -notmatch 'Bracket-confirm') {
+    throw "Frontend V0.5.25 thiếu telemetry Transactional Guard / Crossing 7.2."
+  }
+  if ($envExample -notmatch 'AI_HUMAN_GUARD_PENDING_MAX_FRAMES=12' -or $envExample -notmatch 'AI_GATE_BRACKET_CONFIRM=1') {
+    throw "V0.5.25 thiếu cấu hình guard transaction / bracket confirm."
+  }
+  if ($humanTests -notmatch 'same_source_frame_cannot_create_two_human_guard_strikes' -or $countingTests -notmatch 'v72_bracket_confirm_accepts_strong_finite_crossing') {
+    throw "V0.5.25 thiếu regression tests cho double-strike hoặc bracket-confirm."
+  }
+  Write-Host "[OK] Transactional Human Guard 2.1 + Crossing Engine 7.2 V0.5.25" -ForegroundColor Green
+}
+
 function Assert-LegacySemanticCompatibilityV0523R1 {
   Write-Host "`n[Traffic AI] Legacy semantic contract compatibility V0.5.23-R1" -ForegroundColor Cyan
   $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
@@ -1004,6 +1041,7 @@ Assert-CrossingEngineV0521Contract
 Assert-GroundTruthReuseV0522Contract
 Assert-BenchmarkIntegrityCrossingV0523Contract
 Assert-RiderAwareHumanGuardV0524Contract
+Assert-TransactionalHumanGuardV0525Contract
 Assert-LegacySemanticCompatibilityV0523R1
 
 Write-Host "`n[Traffic AI] Road Zone + Frame Browser V0.5.11" -ForegroundColor Cyan

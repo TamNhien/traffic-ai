@@ -4,6 +4,7 @@ import os
 import json
 import threading
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
@@ -33,6 +34,19 @@ VEHICLE_CLASSES = {"bicycle", "car", "motorcycle", "bus", "truck"}
 REFINE_VEHICLE_CLASSES = {"bicycle", "car", "motorcycle", "bus", "truck"}
 AMBIGUOUS_CLASSES = {"bicycle", "motorcycle", "car", "bus", "truck"}
 
+@dataclass(slots=True)
+class _PendingGuardCrossing:
+    track_id: int
+    label: str
+    direction: str
+    confidence: float
+    frame_index: int
+    source_time_seconds: float | None
+    crossing_method: str | None
+    crossing_x: float | None
+    crossing_y: float | None
+    snapshot_frame: object
+
 
 class PipelineWorker(threading.Thread):
     def __init__(self, payload: PipelineStart, state, on_finished: Callable[[int], None]) -> None:
@@ -59,8 +73,12 @@ class PipelineWorker(threading.Thread):
         self._human_guard_ids: list[int] = []
         self._human_guard_thread: threading.Thread | None = None
         self._human_guard_last_check: dict[int, int] = {}
+        self._human_guard_last_observation: dict[int, tuple[int, str, object | None]] = {}
         self._human_guard_policy = HumanGuardTrackPolicy(required_strikes=max(1, int(os.getenv("AI_HUMAN_GUARD_REQUIRED_STRIKES", "2"))))
         self._human_rider_tracks_seen: set[int] = set()
+        self._pending_guard_crossings: dict[int, _PendingGuardCrossing] = {}
+        self._committed_in_count = 0
+        self._committed_out_count = 0
         self._flow_calibrator = FlowCalibrator(
             history_frames=int(os.getenv("AI_FLOW_CALIBRATION_HISTORY_FRAMES", "1200")),
             per_track_points=int(os.getenv("AI_FLOW_CALIBRATION_POINTS_PER_TRACK", "180")),
@@ -98,8 +116,9 @@ class PipelineWorker(threading.Thread):
         self.human_guard_enabled = os.getenv("AI_HUMAN_GUARD", "1").strip().lower() not in {"0", "false", "no"}
         self.human_guard_model_name = os.getenv("AI_HUMAN_GUARD_MODEL", self.recall_model_name)
         self.human_guard_imgsz = int(os.getenv("AI_HUMAN_GUARD_IMGSZ", "512"))
-        self.human_guard_check_interval = max(3, int(os.getenv("AI_HUMAN_GUARD_CHECK_INTERVAL", "12")))
+        self.human_guard_check_interval = max(1, int(os.getenv("AI_HUMAN_GUARD_CHECK_INTERVAL", "8")))
         self.human_guard_conf = float(os.getenv("AI_HUMAN_GUARD_CONF", "0.08"))
+        self.human_guard_pending_max_frames = max(2, int(os.getenv("AI_HUMAN_GUARD_PENDING_MAX_FRAMES", "12")))
         self.warmup = os.getenv("AI_WARMUP", "1").strip().lower() not in {"0", "false", "no"}
         self.video_pace = os.getenv("AI_VIDEO_PACE", "1").strip().lower() not in {"0", "false", "no"}
         self.iou = float(os.getenv("AI_IOU", "0.55"))
@@ -252,6 +271,89 @@ class PipelineWorker(threading.Thread):
         except Exception:
             return None
 
+    def _observe_human_guard(
+        self,
+        track_id: int,
+        frame_index: int,
+        frame,
+        rect,
+        label: str,
+        confidence: float,
+        device,
+        use_half: bool,
+        *,
+        velocity=(0.0, 0.0),
+        force: bool = False,
+    ):
+        """Run Human Guard at most once for one track/source-frame.
+
+        V0.5.24 could inspect the same pixels in the periodic branch and again
+        at crossing time. V0.5.25 caches that observation so one source frame
+        can contribute at most one strike. A forced crossing/follow-up check
+        bypasses the interval, but never the same-frame cache.
+        """
+        tid = int(track_id)
+        frame_idx = int(frame_index)
+        cached = self._human_guard_last_observation.get(tid)
+        if cached is not None and cached[0] == frame_idx:
+            return cached[1], cached[2]
+
+        last_guard = self._human_guard_last_check.get(tid, -10_000)
+        if not force and frame_idx - last_guard < self.human_guard_check_interval:
+            return self._human_guard_policy.status(tid), None
+
+        self._human_guard_last_check[tid] = frame_idx
+        was_rejected = self._human_guard_policy.is_rejected(tid)
+        decision = self._verify_human_candidate(
+            frame, rect, label, confidence, device, use_half, velocity=velocity
+        )
+        action = self._human_guard_policy.observe(tid, decision, frame_index=frame_idx)
+        self._human_guard_last_observation[tid] = (frame_idx, action, decision)
+
+        if action in {"rider", "released"} and tid not in self._human_rider_tracks_seen:
+            self.state.rider_guard_rescues += 1
+            self._human_rider_tracks_seen.add(tid)
+        if action == "rejected" and not was_rejected:
+            self.state.human_guard_rejections += 1
+        return action, decision
+
+    def _record_committed_crossing(self, label: str, direction: str, crossing_method: str | None) -> None:
+        self.state.total_count += 1
+        self.state.counts_by_type[label] = self.state.counts_by_type.get(label, 0) + 1
+        if direction == "in":
+            self._committed_in_count += 1
+        elif direction == "out":
+            self._committed_out_count += 1
+        self.state.in_count = self._committed_in_count
+        self.state.out_count = self._committed_out_count
+        if crossing_method == "direct":
+            self.state.direct_crossings += 1
+        elif crossing_method == "interpolated":
+            self.state.interpolated_crossings += 1
+        elif crossing_method == "rescued":
+            self.state.rescued_crossings += 1
+
+    def _commit_guard_crossing(self, cv2, pending: _PendingGuardCrossing) -> None:
+        snapshot = self._save_crossing_snapshot(cv2, pending.snapshot_frame, pending.frame_index)
+        self._record_committed_crossing(pending.label, pending.direction, pending.crossing_method)
+        self._event_dispatcher.submit(
+            self._event_payload(
+                pending.track_id, pending.label, pending.direction, pending.confidence, snapshot,
+                pending.frame_index, pending.source_time_seconds, pending.crossing_method,
+                pending.crossing_x, pending.crossing_y,
+            )
+        )
+        self.state.human_guard_deferred_commits += 1
+        self._pending_guard_crossings.pop(int(pending.track_id), None)
+        self.state.human_guard_pending_crossings = len(self._pending_guard_crossings)
+
+    def _drop_guard_crossing(self, counter: LineCrossingCounter, pending: _PendingGuardCrossing, *, expired: bool = False) -> None:
+        counter.revoke_last_crossing(pending.track_id, pending.direction)
+        self._pending_guard_crossings.pop(int(pending.track_id), None)
+        self.state.human_guard_pending_crossings = len(self._pending_guard_crossings)
+        if expired:
+            self.state.human_guard_pending_drops += 1
+
     @staticmethod
     def _looks_like_custom_model(model_name: str) -> bool:
         name = Path(str(model_name)).name.lower()
@@ -259,6 +361,7 @@ class PipelineWorker(threading.Thread):
 
     def run(self) -> None:
         cap = None
+        counter = None
         loop_started = None
         trace_file = None
         try:
@@ -352,6 +455,9 @@ class PipelineWorker(threading.Thread):
                 rescue_min_normal_ratio=float(os.getenv("AI_GATE_RESCUE_MIN_NORMAL_RATIO", "0.28")),
                 rescue_max_jump_ratio=float(os.getenv("AI_GATE_RESCUE_MAX_JUMP_RATIO", "0.26")),
                 rescue_min_side_distance_ratio=float(os.getenv("AI_GATE_RESCUE_MIN_SIDE_RATIO", "0.010")),
+                bracket_confirm=os.getenv("AI_GATE_BRACKET_CONFIRM", "1").strip().lower() not in {"0", "false", "no"},
+                bracket_confirm_min_normal_ratio=float(os.getenv("AI_GATE_BRACKET_CONFIRM_MIN_NORMAL_RATIO", "0.55")),
+                bracket_confirm_max_gap_frames=int(os.getenv("AI_GATE_BRACKET_CONFIRM_MAX_GAP", "2")),
             )
 
             self._event_dispatcher.start()
@@ -490,44 +596,46 @@ class PipelineWorker(threading.Thread):
                             current_label, stable_label, class_certainty, class_hits, confidence_f
                         )
 
-                        # V0.5.24 Rider-aware Human Guard 2.0.
-                        #
-                        # V0.5.23 could permanently reject a real rider after one
-                        # PERSON-dominant crop. The supplied camera_1 archive shows
-                        # exactly that (for example frame_1739: a rider/scooter is
-                        # drawn as PERSON-GUARD). We now collect nearby *lower*
-                        # two-wheel evidence, require temporal confirmation for a
-                        # pedestrian, and can release a previously rejected track
-                        # when rider evidence appears. Rejected tracks still feed
-                        # the geometry counter so a later rider recovery does not
-                        # lose its pre-crossing trajectory; only event emission is
-                        # blocked/revoked.
+                        # V0.5.24 Rider-aware Human Guard 2.0 compatibility is preserved.
+                        # V0.5.25 Transactional Human Guard 2.1.
+                        # A pending two-wheel crossing is resolved on a *later*
+                        # source frame before it is allowed into the DB. This also
+                        # forces a quick follow-up observation instead of waiting
+                        # the normal periodic interval.
+                        buffered = self._pending_guard_crossings.get(track_id)
+                        if buffered is not None:
+                            action, _ = self._observe_human_guard(
+                                track_id, frame_index, frame, rect, buffered.label, confidence_f,
+                                device, use_half, velocity=velocity, force=True,
+                            )
+                            if action == "rejected":
+                                self._drop_guard_crossing(counter, buffered)
+                            elif action in {"rider", "released", "keep"}:
+                                self._commit_guard_crossing(cv2, buffered)
+
+                        # Rider-aware screening still runs periodically before the
+                        # gate. _observe_human_guard caches same-frame results, so
+                        # the crossing branch cannot accidentally turn one frame
+                        # into two strikes.
                         suspect_human = (
                             display_label in TWO_WHEEL_LABELS
                             and is_person_like_two_wheel_box(rect)
                             and (counter.road_zone is None or counter.road_zone.contains_with_margin(anchor, width, height, 0.02))
                         )
-                        last_guard = self._human_guard_last_check.get(track_id, -10_000)
-                        if suspect_human and frame_index - last_guard >= self.human_guard_check_interval and not self._human_guard_policy.is_rider(track_id):
-                            self._human_guard_last_check[track_id] = frame_index
-                            was_rejected = self._human_guard_policy.is_rejected(track_id)
-                            decision = self._verify_human_candidate(
-                                frame, rect, display_label, confidence_f, device, use_half, velocity=velocity
+                        if suspect_human and not self._human_guard_policy.is_rider(track_id):
+                            self._observe_human_guard(
+                                track_id, frame_index, frame, rect, display_label, confidence_f,
+                                device, use_half, velocity=velocity, force=False,
                             )
-                            action = self._human_guard_policy.observe(track_id, decision)
-                            if action in {"rider", "released"}:
-                                if track_id not in self._human_rider_tracks_seen:
-                                    self.state.rider_guard_rescues += 1
-                                    self._human_rider_tracks_seen.add(track_id)
-                            if action == "rejected" and not was_rejected:
-                                self.state.human_guard_rejections += 1
 
                         direction = counter.update(track_id, anchor, width, height, frame_index=frame_index)
                         self.state.rejected_outside_road = counter.rejected_outside_road
                         self.state.fast_confirm_rescues = counter.fast_confirm_rescues
+                        self.state.bracket_confirm_rescues = counter.bracket_confirm_rescues
                         self.state.rescue_validation_rejections = counter.rejected_rescue_validation
                         self.state.adaptive_cooldown_releases = counter.adaptive_cooldown_releases
-                        overlay_label = "PERSON-GUARD" if self._human_guard_policy.is_rejected(track_id) else display_label
+                        guard_status = self._human_guard_policy.status(track_id)
+                        overlay_label = "PERSON-GUARD" if guard_status == "rejected" else ("HUMAN?" if guard_status == "pending" else display_label)
                         self._draw_detection(
                             cv2,
                             frame,
@@ -567,44 +675,52 @@ class PipelineWorker(threading.Thread):
                             refined_conf = refined[1] if refined is not None else 0.0
                             event_confidence = max(confidence_f, policy_conf, refined_conf)
 
-                            if event_label in TWO_WHEEL_LABELS:
-                                # Re-check every two-wheel track exactly at the
-                                # crossing, even one previously protected as a
-                                # rider. One ambiguous PERSON-only frame is still
-                                # only a pending strike, while strong pedestrian
-                                # evidence can block a false rider rescue.
-                                was_rejected = self._human_guard_policy.is_rejected(track_id)
-                                decision = self._verify_human_candidate(
-                                    frame, rect, event_label, event_confidence, device, use_half, velocity=velocity
-                                )
-                                action = self._human_guard_policy.observe(track_id, decision)
-                                if action in {"rider", "released"}:
-                                    if track_id not in self._human_rider_tracks_seen:
-                                        self.state.rider_guard_rescues += 1
-                                        self._human_rider_tracks_seen.add(track_id)
-                                if action == "rejected" and not was_rejected:
-                                    self.state.human_guard_rejections += 1
-                                if self._human_guard_policy.is_rejected(track_id):
-                                    counter.revoke_last_crossing(track_id, direction)
-                                    self.state.in_count = counter.in_count
-                                    self.state.out_count = counter.out_count
-                                    self._draw_detection(cv2, frame, rect, track_id, "PERSON-GUARD", event_confidence, anchor, class_certainty, raw_track_id)
-                                    continue
-
-                            self.state.total_count += 1
-                            self.state.counts_by_type[event_label] = self.state.counts_by_type.get(event_label, 0) + 1
-                            self.state.in_count = counter.in_count
-                            self.state.out_count = counter.out_count
-                            self.state.direct_crossings = counter.direct_crossings
-                            self.state.interpolated_crossings = counter.interpolated_crossings
-                            self.state.rescued_crossings = counter.rescued_crossings
-                            self.state.rejected_outside_road = counter.rejected_outside_road
                             source_time_seconds = ((frame_index - 1) / self.state.source_fps) if self.state.source_fps > 0 else None
                             crossing_method = counter.crossing_mode_for(track_id)
                             crossing_point = counter.crossing_point_for(track_id)
                             crossing_x = (crossing_point[0] / width) if crossing_point is not None and width > 0 else None
                             crossing_y = (crossing_point[1] / height) if crossing_point is not None and height > 0 else None
-                            pending_crossing_events.append((track_id, event_label, direction, event_confidence, frame_index, source_time_seconds, crossing_method, crossing_x, crossing_y))
+
+                            if event_label in TWO_WHEEL_LABELS:
+                                action, _ = self._observe_human_guard(
+                                    track_id, frame_index, frame, rect, event_label, event_confidence,
+                                    device, use_half, velocity=velocity, force=True,
+                                )
+                                if action == "rejected":
+                                    counter.revoke_last_crossing(track_id, direction)
+                                    self._draw_detection(
+                                        cv2, frame, rect, track_id, "PERSON-GUARD", event_confidence,
+                                        anchor, class_certainty, raw_track_id,
+                                    )
+                                    continue
+                                if action == "pending":
+                                    # Do not increment dashboard totals and do not
+                                    # dispatch to backend yet. Keep the original
+                                    # crossing frame/time/point in RAM; a later
+                                    # distinct frame will COMMIT or DROP it.
+                                    guard_snapshot = frame.copy()
+                                    self._draw_overlay(cv2, guard_snapshot, counter)
+                                    self._pending_guard_crossings[track_id] = _PendingGuardCrossing(
+                                        track_id=track_id,
+                                        label=event_label,
+                                        direction=direction,
+                                        confidence=event_confidence,
+                                        frame_index=frame_index,
+                                        source_time_seconds=source_time_seconds,
+                                        crossing_method=crossing_method,
+                                        crossing_x=crossing_x,
+                                        crossing_y=crossing_y,
+                                        snapshot_frame=guard_snapshot,
+                                    )
+                                    self.state.human_guard_pending_crossings = len(self._pending_guard_crossings)
+                                    continue
+
+                            self._record_committed_crossing(event_label, direction, crossing_method)
+                            self.state.rejected_outside_road = counter.rejected_outside_road
+                            pending_crossing_events.append((
+                                track_id, event_label, direction, event_confidence, frame_index,
+                                source_time_seconds, crossing_method, crossing_x, crossing_y,
+                            ))
                 elif boxes is not None and len(boxes) > 0:
                     # Ultralytics can return valid detections before ByteTrack confirms a
                     # persistent ID. Older builds hid these boxes completely because all
@@ -619,6 +735,17 @@ class PipelineWorker(threading.Thread):
                         rect = (rx1 + offset_x, ry1 + offset_y, rx2 + offset_x, ry2 + offset_y)
                         label = str(result.names[int(cls_id)])
                         self._draw_raw_detection(cv2, frame, rect, label, float(confidence))
+
+                # Fail closed only for guard transactions that never receive a
+                # second semantic observation (for example a track disappears
+                # immediately after the line). Normal pending crossings resolve
+                # on the very next distinct frame.
+                expired_guard_crossings = [
+                    pending for pending in self._pending_guard_crossings.values()
+                    if frame_index - pending.frame_index >= self.human_guard_pending_max_frames
+                ]
+                for pending in expired_guard_crossings:
+                    self._drop_guard_crossing(counter, pending, expired=True)
 
                 calibration_stats = self._flow_calibrator.stats()
                 self.state.calibration_samples = calibration_stats["sample_count"]
@@ -653,10 +780,14 @@ class PipelineWorker(threading.Thread):
                         "rejected_cooldown": counter.rejected_cooldown,
                         "road_edge_rescues": counter.road_edge_rescues,
                         "fast_confirm_rescues": counter.fast_confirm_rescues,
+                        "bracket_confirm_rescues": counter.bracket_confirm_rescues,
                         "rescue_validation_rejections": counter.rejected_rescue_validation,
                         "adaptive_cooldown_releases": counter.adaptive_cooldown_releases,
                         "human_guard_rejections": self.state.human_guard_rejections,
                         "rider_guard_rescues": self.state.rider_guard_rescues,
+                        "human_guard_pending_crossings": self.state.human_guard_pending_crossings,
+                        "human_guard_deferred_commits": self.state.human_guard_deferred_commits,
+                        "human_guard_pending_drops": self.state.human_guard_pending_drops,
                     }, separators=(",", ":")) + "\n")
                 if pending_crossing_events:
                     snapshot = self._save_crossing_snapshot(cv2, frame, frame_index)
@@ -697,6 +828,12 @@ class PipelineWorker(threading.Thread):
             self.state.status = "error"
             self.state.last_error = str(exc)
         finally:
+            # No ambiguous two-wheel crossing may leak into persistence at
+            # shutdown. If the source ended before a second semantic frame,
+            # revoke the provisional geometry crossing and record a timeout drop.
+            if counter is not None and self._pending_guard_crossings:
+                for pending in list(self._pending_guard_crossings.values()):
+                    self._drop_guard_crossing(counter, pending, expired=True)
             if trace_file is not None:
                 try:
                     trace_file.close()
@@ -830,7 +967,7 @@ class PipelineWorker(threading.Thread):
         rt = f"x{self.state.realtime_factor:.2f}" if self.state.source_fps > 0 else "live"
         cv2.putText(
             frame,
-            f"DET {self.state.detections_current_frame} | UNTRACKED {self.state.untracked_detections} | TRACK {self.state.active_tracks} | ROAD {self.state.road_tracks_current_frame} | TOTAL {self.state.total_count} | IN {counter.in_count} | OUT {counter.out_count} | FPS {self.state.fps:.1f} ({rt}) | {self.state.inference_ms:.0f}ms | {'HYBRID' if self.hybrid_mode else 'DIRECT'} {Path(self.detector_model_name).name} | ROI {self.detection_roi_mode.upper()} | DIRECT-X {counter.direct_crossings} | INTERP {counter.interpolated_crossings} | RESCUE {counter.rescued_crossings} | ROAD-REJECT {counter.rejected_outside_road} | CONFIRM-REJECT {counter.rejected_unconfirmed_side} | COOL-REJECT {counter.rejected_cooldown} | COOL-REL {counter.adaptive_cooldown_releases} | FAST-CONF {counter.fast_confirm_rescues} | RESCUE-X {counter.rejected_rescue_validation} | HUMAN-X {self.state.human_guard_rejections} | RIDER+ {self.state.rider_guard_rescues} | ROAD-EDGE+ {counter.road_edge_rescues}",
+            f"DET {self.state.detections_current_frame} | UNTRACKED {self.state.untracked_detections} | TRACK {self.state.active_tracks} | ROAD {self.state.road_tracks_current_frame} | TOTAL {self.state.total_count} | IN {self.state.in_count} | OUT {self.state.out_count} | FPS {self.state.fps:.1f} ({rt}) | {self.state.inference_ms:.0f}ms | {'HYBRID' if self.hybrid_mode else 'DIRECT'} {Path(self.detector_model_name).name} | ROI {self.detection_roi_mode.upper()} | DIRECT-X {self.state.direct_crossings} | INTERP {self.state.interpolated_crossings} | RESCUE {self.state.rescued_crossings} | ROAD-REJECT {counter.rejected_outside_road} | CONFIRM-REJECT {counter.rejected_unconfirmed_side} | COOL-REJECT {counter.rejected_cooldown} | COOL-REL {counter.adaptive_cooldown_releases} | FAST-CONF {counter.fast_confirm_rescues} | BRACKET+ {counter.bracket_confirm_rescues} | RESCUE-X {counter.rejected_rescue_validation} | HUMAN-X {self.state.human_guard_rejections} | RIDER+ {self.state.rider_guard_rescues} | GUARD-PENDING {self.state.human_guard_pending_crossings} | ROAD-EDGE+ {counter.road_edge_rescues}",
             (20, 32),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.62,

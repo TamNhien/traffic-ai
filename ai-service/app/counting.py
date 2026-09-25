@@ -238,6 +238,9 @@ class LineCrossingCounter:
         rescue_min_normal_ratio: float = 0.0,
         rescue_max_jump_ratio: float = 0.0,
         rescue_min_side_distance_ratio: float = 0.0,
+        bracket_confirm: bool = False,
+        bracket_confirm_min_normal_ratio: float = 0.55,
+        bracket_confirm_max_gap_frames: int = 2,
     ) -> None:
         self.line = line
         self.road_zone = road_zone
@@ -260,6 +263,9 @@ class LineCrossingCounter:
         self.rescue_min_normal_ratio = max(0.0, min(1.0, float(rescue_min_normal_ratio)))
         self.rescue_max_jump_ratio = max(0.0, float(rescue_max_jump_ratio))
         self.rescue_min_side_distance_ratio = max(0.0, float(rescue_min_side_distance_ratio))
+        self.bracket_confirm = bool(bracket_confirm)
+        self.bracket_confirm_min_normal_ratio = max(0.0, min(1.0, float(bracket_confirm_min_normal_ratio)))
+        self.bracket_confirm_max_gap_frames = max(1, int(bracket_confirm_max_gap_frames))
         self._tracks: dict[int, _TrackGateState] = {}
         self.in_count = 0
         self.out_count = 0
@@ -273,6 +279,7 @@ class LineCrossingCounter:
         self.rejected_cooldown = 0
         self.road_edge_rescues = 0
         self.fast_confirm_rescues = 0
+        self.bracket_confirm_rescues = 0
         self.rejected_rescue_validation = 0
         self.adaptive_cooldown_releases = 0
         self._last_crossing_point: dict[int, Point] = {}
@@ -350,9 +357,34 @@ class LineCrossingCounter:
             self.fast_confirm_distance_ratio > 0.0
             and abs(distance) >= max(dead_band * 2.2, scale * self.fast_confirm_distance_ratio)
         )
+        # Crossing Engine 7.2: if two nearby observations themselves form a
+        # strong finite-segment bracket, requiring yet another destination-side
+        # sample can lose a real vehicle that disappears immediately after the
+        # line. This rescue is deliberately narrow: short gap, visible-segment
+        # intersection and strongly normal motion. Road-zone and motion guards
+        # below still have to pass before the crossing is accepted.
+        bracket_destination = False
+        if (
+            self.bracket_confirm
+            and observation_gap <= self.bracket_confirm_max_gap_frames
+            and observation_gap <= self.interpolation_gap_frames
+        ):
+            quick_crossing = segment_crossing_point(
+                previous.point, anchor, a, b, segment_margin=self.segment_margin
+            )
+            quick_dx = anchor[0] - previous.point[0]
+            quick_dy = anchor[1] - previous.point[1]
+            quick_len = max(hypot(quick_dx, quick_dy), 1e-6)
+            quick_normal_ratio = abs(distance - previous.distance) / quick_len
+            bracket_destination = (
+                quick_crossing is not None
+                and quick_normal_ratio >= self.bracket_confirm_min_normal_ratio
+            )
         if observation_gap <= self.interpolation_gap_frames and state.side_streak < self.side_confirm_samples:
             if strong_destination:
                 self.fast_confirm_rescues += 1
+            elif bracket_destination:
+                self.bracket_confirm_rescues += 1
             else:
                 self.rejected_unconfirmed_side += 1
                 return None

@@ -302,3 +302,34 @@ def test_crossing_can_be_revoked_by_downstream_human_guard() -> None:
     counter.revoke_last_crossing(1104, "in")
     assert counter.in_count == 0
     assert counter.total_crossings == 0
+
+
+def test_crossing_engine_v72_bracket_confirm_accepts_strong_finite_crossing() -> None:
+    counter = LineCrossingCounter(
+        CountingLine(0.1, 0.5, 0.9, 0.5),
+        side_confirm_samples=2,
+        fast_confirm_distance_ratio=0.0,
+        bracket_confirm=True,
+        bracket_confirm_min_normal_ratio=0.55,
+        bracket_confirm_max_gap_frames=2,
+        startup_grace_frames=0,
+    )
+    assert counter.update(1201, (50, 44), 100, 100, 10) is None
+    assert counter.update(1201, (50, 56), 100, 100, 11) == "in"
+    assert counter.bracket_confirm_rescues == 1
+
+
+def test_crossing_engine_v72_bracket_confirm_does_not_accept_parallel_jitter() -> None:
+    counter = LineCrossingCounter(
+        CountingLine(0.1, 0.5, 0.9, 0.5),
+        side_confirm_samples=2,
+        fast_confirm_distance_ratio=0.0,
+        bracket_confirm=True,
+        bracket_confirm_min_normal_ratio=0.80,
+        bracket_confirm_max_gap_frames=2,
+        startup_grace_frames=0,
+    )
+    assert counter.update(1202, (15, 49), 100, 100, 10) is None
+    # Large lateral movement with only a tiny normal component must stay rejected.
+    assert counter.update(1202, (85, 51), 100, 100, 11) is None
+    assert counter.bracket_confirm_rescues == 0

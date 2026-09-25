@@ -3,75 +3,72 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - 'v*.*.*'
   workflow_dispatch:
 
 permissions:
   contents: write
 
-concurrency:
-  group: release-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
-  release:
-    name: Verify and create GitHub Release
-    runs-on: ubuntu-24.04
+  verify-and-release:
+    runs-on: ubuntu-latest
+    env:
+      AI_DATASET_ROOT: ${{ runner.temp }}/traffic-ai/datasets
+      AI_TRAINING_ROOT: ${{ runner.temp }}/traffic-ai/training-runs
+      AI_MODEL_ROOT: ${{ runner.temp }}/traffic-ai/models
+      VIDEO_DIR: ${{ runner.temp }}/traffic-ai/videos
+      DATABASE_URL_OVERRIDE: "sqlite+pysqlite:///:memory:"
+      AI_SERVICE_URL: "http://127.0.0.1:8001"
     steps:
-      - name: Checkout
+      - name: Checkout source
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - name: Verify VERSION matches tag
-        if: startsWith(github.ref, 'refs/tags/v')
-        shell: bash
-        run: |
-          expected="${GITHUB_REF_NAME#v}"
-          actual="$(tr -d '\r\n ' < VERSION)"
-          if [ "$actual" != "$expected" ]; then
-            echo "VERSION=$actual does not match tag=$GITHUB_REF_NAME" >&2
-            exit 1
-          fi
-
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
-          python-version: '3.14.7'
+          python-version: '3.14'
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements-test.txt
+            ai-service/requirements-test.txt
 
-      - name: Test backend
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '26.10.0'
+          cache: npm
+          cache-dependency-path: frontend/package.json
+
+      - name: Verify VERSION matches tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          version="$(tr -d '\r\n' < VERSION)"
+          tag="${GITHUB_REF_NAME}"
+          test "$tag" = "v$version" || {
+            echo "VERSION=$version does not match tag=$tag" >&2
+            exit 1
+          }
+
+      - name: Backend tests
         working-directory: backend
-        env:
-          DATABASE_URL_OVERRIDE: "sqlite+pysqlite:///:memory:"
-          AI_SERVICE_URL: http://127.0.0.1:8001
-          PYTHONPATH: .
         run: |
           python -m pip install --upgrade pip==26.2.1
           python -m pip install -r requirements-test.txt
           python -m compileall -q app tests alembic
           python -m pytest -q
 
-      - name: Test AI service
+      - name: AI service tests
         working-directory: ai-service
-        env:
-          PYTHONPATH: .
-          AI_DATASET_ROOT: ${{ runner.temp }}/traffic-ai/datasets
-          AI_TRAINING_ROOT: ${{ runner.temp }}/traffic-ai/training-runs
-          AI_MODEL_ROOT: ${{ runner.temp }}/traffic-ai/models
-          VIDEO_DIR: ${{ runner.temp }}/traffic-ai/videos
         run: |
-          python -m pip install --upgrade pip==26.2.1
+          mkdir -p "$AI_DATASET_ROOT" "$AI_TRAINING_ROOT" "$AI_MODEL_ROOT" "$VIDEO_DIR"
           python -m pip install -r requirements-test.txt
           python -m compileall -q app tests
           python -m pytest -q
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: '26.10.0'
-          package-manager-cache: false
-
-      - name: Build frontend
+      - name: Frontend build
         working-directory: frontend
         run: |
           npm install -g npm@12.1.0
@@ -79,37 +76,31 @@ jobs:
           npm audit --audit-level=high
           npm run build
 
-      - name: Validate Docker Compose
+      - name: Build release artifacts
+        if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
-          cp .env.example .env
-          docker compose -f docker-compose.yml -f docker-compose.gpu.yml config --quiet
-
-      - name: Build release archives
-        if: startsWith(github.ref, 'refs/tags/v')
-        shell: bash
-        run: |
-          mkdir -p dist
-          git archive --format=zip --prefix="traffic-ai-${GITHUB_REF_NAME}/" -o "dist/traffic-ai-${GITHUB_REF_NAME}.zip" HEAD
-          git archive --format=tar.gz --prefix="traffic-ai-${GITHUB_REF_NAME}/" -o "dist/traffic-ai-${GITHUB_REF_NAME}.tar.gz" HEAD
-          cp README.md "dist/traffic-ai-${GITHUB_REF_NAME}-README.md"
-          (cd dist && sha256sum traffic-ai-${GITHUB_REF_NAME}.zip traffic-ai-${GITHUB_REF_NAME}.tar.gz traffic-ai-${GITHUB_REF_NAME}-README.md > SHA256SUMS.txt)
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          prefix="traffic-ai-$tag/"
+          mkdir -p dist-release
+          git archive --format=zip --prefix="$prefix" -o "dist-release/traffic-ai-$tag.zip" "$tag"
+          git archive --format=tar.gz --prefix="$prefix" -o "dist-release/traffic-ai-$tag.tar.gz" "$tag"
+          cp README.md "dist-release/traffic-ai-$tag-README.md"
+          (
+            cd dist-release
+            sha256sum "traffic-ai-$tag.zip" "traffic-ai-$tag.tar.gz" "traffic-ai-$tag-README.md" > SHA256SUMS.txt
+          )
 
       - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            echo "Release $GITHUB_REF_NAME already exists."
-            exit 0
-          fi
-          gh release create "$GITHUB_REF_NAME" \
-            "dist/traffic-ai-${GITHUB_REF_NAME}.zip" \
-            "dist/traffic-ai-${GITHUB_REF_NAME}.tar.gz" \
-            "dist/traffic-ai-${GITHUB_REF_NAME}-README.md" \
-            "dist/SHA256SUMS.txt" \
-            --title "Traffic AI $GITHUB_REF_NAME" \
-            --notes-file "dist/traffic-ai-${GITHUB_REF_NAME}-README.md" \
-            --verify-tag
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Traffic AI ${{ github.ref_name }}
+          body_path: README.md
+          fail_on_unmatched_files: true
+          files: |
+            dist-release/traffic-ai-${{ github.ref_name }}.zip
+            dist-release/traffic-ai-${{ github.ref_name }}.tar.gz
+            dist-release/traffic-ai-${{ github.ref_name }}-README.md
+            dist-release/SHA256SUMS.txt

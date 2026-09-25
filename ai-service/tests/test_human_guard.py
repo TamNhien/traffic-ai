@@ -117,3 +117,30 @@ def test_rider_evidence_can_release_previously_rejected_track() -> None:
     assert policy.observe(11, rider) == "released"
     assert policy.is_rejected(11) is False
     assert policy.is_rider(11) is True
+
+
+def test_same_source_frame_cannot_create_two_human_guard_strikes() -> None:
+    policy = HumanGuardTrackPolicy(required_strikes=2)
+    decision = human_dominates_two_wheel_candidate(
+        (100, 100, 160, 240), "motorcycle", 0.45, (101, 99, 160, 241), 0.92,
+        vehicle_evidence_confidence=0.0, nearby_vehicle_evidence_confidence=0.0, speed_ratio=0.0002,
+    )
+    assert decision.reject is True
+    assert policy.observe(21, decision, frame_index=100) == "pending"
+    assert policy.observe(21, decision, frame_index=100) == "pending"
+    assert policy.is_rejected(21) is False
+    assert policy.observe(21, decision, frame_index=101) == "rejected"
+    assert policy.is_rejected(21) is True
+
+
+def test_hard_person_evidence_still_needs_distinct_frames() -> None:
+    policy = HumanGuardTrackPolicy(required_strikes=2)
+    decision = human_dominates_two_wheel_candidate(
+        (100, 100, 160, 240), "motorcycle", 0.35, (100, 100, 160, 240), 0.96,
+        vehicle_evidence_confidence=0.0, nearby_vehicle_evidence_confidence=0.0, speed_ratio=0.0,
+    )
+    assert decision.reject is True
+    assert decision.hard_reject is True
+    assert policy.observe(22, decision, frame_index=200) == "pending"
+    assert policy.is_rejected(22) is False
+    assert policy.observe(22, decision, frame_index=201) == "rejected"

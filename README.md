@@ -1,3 +1,277 @@
+# Traffic AI V0.5.25 — Transactional Human Guard 2.1 + Crossing Engine 7.2 🛵🧍🎯
+
+V0.5.25 tiếp tục trực tiếp từ lần benchmark V0.5.24 trên clip thật:
+
+```text
+Ground Truth        149
+AI đếm              138
+Khớp                120
+Lọt                  29
+Đếm dư               18
+Recall              80.5%
+Precision           87.0%
+F1                  83.6%
+Class đúng          96.7%
+Human Guard            34
+Rider giữ             151
+```
+
+Kết quả này cho thấy model phân loại không phải nút thắt chính. V0.5.25 tập trung vào hai lỗi runtime đã xác định trong source V0.5.24: **Human Guard có thể kiểm tra cùng một frame hai lần** và **crossing hai bánh còn ở trạng thái PENDING vẫn có thể được phát event ngay**; đồng thời Crossing Engine 7.2 bổ sung một rescue hình học hẹp cho các track cắt vạch hữu hạn rõ nhưng biến mất ngay sau vạch.
+
+## 1. Human Guard strike giờ bắt buộc là frame khác nhau
+
+V0.5.24 có thể chạy verifier ở nhánh periodic và chạy lại ở nhánh crossing trên cùng một source frame. Nếu cả hai lần đều PERSON-dominant, một frame có thể vô tình tạo đủ 2 strike.
+
+V0.5.25 thêm `last_strike_frame` + same-frame observation cache:
+
+```text
+Frame 100 · periodic check
+→ PERSON dominate
+→ strike 1
+
+Frame 100 · crossing check lại
+→ dùng lại kết quả frame 100
+→ vẫn strike 1 ✅
+
+Frame 101 · PERSON vẫn dominate
+→ strike 2
+→ HUMAN-X
+```
+
+Ngay cả evidence PERSON rất mạnh (`hard_reject`) cũng không được bỏ qua nguyên tắc **distinct source frames** khi `AI_HUMAN_GUARD_REQUIRED_STRIKES=2`.
+
+## 2. Transactional crossing — PENDING không còn lọt DB
+
+V0.5.24 có cửa sổ logic:
+
+```text
+crossing thật
+→ Human Guard = PENDING
+→ chưa REJECTED
+→ VehicleEvent vẫn có thể được submit ❌
+```
+
+V0.5.25 đổi thành transaction buffer:
+
+```text
+MOTORCYCLE / BICYCLE crossing
+            ↓
+       Human Guard
+            ↓
+  ┌─────────┼─────────┐
+  ↓         ↓         ↓
+RIDER      KEEP     PENDING
+  ↓         ↓         ↓
+COMMIT     COMMIT    giữ RAM
+                      ↓
+             frame khác kế tiếp
+                ┌─────┴─────┐
+                ↓           ↓
+              RIDER       HUMAN
+                ↓           ↓
+              COMMIT       DROP
+                ↓           ↓
+              DB +1      revoke gate
+```
+
+Khi PENDING, hệ thống giữ nguyên:
+
+- source frame crossing;
+- source timecode;
+- crossing method;
+- crossing point;
+- snapshot frame gốc.
+
+Nhưng **không tăng tổng xe và không gửi backend** cho đến khi semantic guard giải quyết xong.
+
+Telemetry mới:
+
+```text
+Guard chờ      = crossing đang nằm trong transaction buffer
+Guard xác nhận = crossing PENDING sau đó được xác nhận/giữ và commit
+Guard timeout  = track biến mất trước khi có frame xác nhận thứ hai → fail-closed
+```
+
+Mặc định:
+
+```env
+AI_HUMAN_GUARD_PENDING_MAX_FRAMES=12
+```
+
+## 3. Crossing Engine 7.2 — Bracket Confirm
+
+Benchmark V0.5.24 báo nhiều xe thật bị lọt vì `Crossing chưa đủ xác nhận phía sau vạch`. V0.5.25 không bỏ side-confirm toàn cục. Thay vào đó chỉ rescue khi hai observation gần nhau đã tự tạo một crossing hình học rất rõ:
+
+```text
+sample A          sample B
+   ●----------------●
+          ↓
+   cắt finite gate thật
+          +
+   motion chủ yếu vuông góc vạch
+          +
+   gap rất ngắn
+          ↓
+     BRACKET-CONFIRM ✅
+```
+
+Sau rescue này, các guard cũ vẫn phải pass:
+
+```text
+finite visible segment
+Road Zone
+minimum crossing motion
+normal-motion ratio
+cooldown
+rescue validation
+```
+
+Cấu hình:
+
+```env
+AI_GATE_BRACKET_CONFIRM=1
+AI_GATE_BRACKET_CONFIRM_MIN_NORMAL_RATIO=0.55
+AI_GATE_BRACKET_CONFIRM_MAX_GAP=2
+```
+
+Telemetry:
+
+```text
+Bracket-confirm / BRACKET+
+```
+
+## 4. Không đổi `best.pt`
+
+Giữ nguyên model/dataset hiện tại. V0.5.25 không train lại vì benchmark V0.5.24 vẫn cho `Class đúng 96.7%`; thay đổi nằm ở event transaction và crossing runtime.
+
+## 5. Database
+
+Migration mới:
+
+```text
+0038_rider_guard_v0524
+        ↓
+0039_guard_tx_v0525
+schema_version = 0.5.25
+```
+
+Migration chỉ nâng schema version, không xóa session, benchmark, Ground Truth, dataset, model hay video.
+
+## 6. Cập nhật trên máy
+
+Chép full source V0.5.25 đè vào:
+
+```text
+D:\LienThongDH\DoAn\traffic-ai
+```
+
+Giữ nguyên:
+
+```text
+.env
+gateway\certs\
+videos\
+models\
+snapshots\
+datasets\
+training-runs\
+```
+
+Không dùng `docker compose down -v`.
+
+Sau đó:
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 |
+    Unblock-File
+
+.\scripts\test.ps1
+```
+
+Mong muốn có:
+
+```text
+[Traffic AI] Transactional Human Guard 2.1 + Crossing Engine 7.2 V0.5.25
+[OK] Transactional Human Guard 2.1 + Crossing Engine 7.2 V0.5.25
+[SUCCESS] All Traffic AI tests passed.
+```
+
+Nếu PASS:
+
+```powershell
+.\scripts\start.ps1
+.\scripts\verify-database.ps1
+```
+
+Database mong muốn:
+
+```text
+0039_guard_tx_v0525
+schema_version = 0.5.25
+```
+
+Sau đó `Ctrl + F5`, chạy lại **chính clip + chính vạch + chính Road Zone** của benchmark V0.5.24 và bấm **Đối chiếu lại** với 149 GT cũ.
+
+### Cần gửi lại các số này
+
+```text
+Ground truth
+AI đếm
+Khớp
+Lọt không đếm
+Đếm dư
+Recall
+Precision
+F1
+Human Guard
+Rider giữ
+Guard xác nhận
+Guard timeout
+Bracket-confirm
+```
+
+Mục tiêu của lượt test này là xác nhận 3 việc riêng biệt:
+
+```text
+1. người đi bộ không còn lọt event khi crossing mới chỉ PENDING
+2. rider thật frame_519 / frame_1739 vẫn không bị same-frame double strike
+3. số lỗi "chưa đủ xác nhận phía sau vạch" giảm nhờ Bracket Confirm
+```
+
+## 7. Phát hành vẫn một lệnh
+
+Sau khi benchmark thực tế ổn:
+
+```powershell
+.\scripts\publish.ps1
+```
+
+```text
+→ test
+→ build
+→ commit/push GitHub
+→ tag v0.5.25
+→ GitHub Actions
+→ GitHub Release
+→ upload ZIP/README/checksums
+```
+
+## Kiểm thử bổ sung V0.5.25
+
+```text
+Same source frame cannot create two strikes          PASS
+Hard PERSON evidence still needs distinct frames    PASS
+Rider recovery policy remains compatible            PASS
+Bracket-confirm strong finite crossing               PASS
+Bracket-confirm rejects lateral/parallel jitter      PASS
+Pending crossing transaction static contract         PASS
+Python compile                                       PASS
+```
+
+---
+
 # Traffic AI V0.5.24 — Rider-aware Human Guard 2.0 🛵🧍🎯
 
 V0.5.24 sửa lỗi được xác nhận trực tiếp từ clip và file nén `camera_1(1).rar` người dùng cung cấp.
