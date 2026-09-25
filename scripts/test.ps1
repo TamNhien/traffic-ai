@@ -300,18 +300,18 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.25") { throw "VERSION phải là 0.5.25, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0039_guard_tx_v0525.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0039_guard_tx_v0525.py." }
+  if ($version -ne "0.5.26") { throw "VERSION phải là 0.5.26, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0040_class_refiner_v0526.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0040_class_refiner_v0526.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0039_guard_tx_v0525"' -or $migrationText -notmatch 'down_revision = "0038_rider_guard_v0524"' -or $migrationText -notmatch "value='0.5.25'") {
-    throw "Migration 0039_guard_tx_v0525 không đúng contract V0.5.25."
+  if ($migrationText -notmatch 'revision = "0040_class_refiner_v0526"' -or $migrationText -notmatch 'down_revision = "0039_guard_tx_v0525"' -or $migrationText -notmatch "value='0.5.26'") {
+    throw "Migration 0040_class_refiner_v0526 không đúng contract V0.5.26."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
 
 function Assert-AlembicRevisionSafetyContract {
-  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.25" -ForegroundColor Cyan
+  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.26" -ForegroundColor Cyan
   $versionsDir = Join-Path $root "backend\alembic\versions"
   $bad = @()
   Get-ChildItem $versionsDir -Filter "*.py" | ForEach-Object {
@@ -335,7 +335,7 @@ function Assert-AlembicRevisionSafetyContract {
   if ($v17 -notmatch 'revision = "0017_ai_test_dep_v053"') {
     throw "Migration V0.5.3 chưa dùng revision ID rút gọn an toàn."
   }
-  Write-Host "[OK] Alembic revision-length safety V0.5.25" -ForegroundColor Green
+  Write-Host "[OK] Alembic revision-length safety V0.5.26" -ForegroundColor Green
 }
 
 
@@ -866,7 +866,18 @@ function Assert-StrictGateV058Contract {
   if ($trackHigh -gt 0.10 -or $newTrack -gt 0.10 -or $trackBuffer -lt 120 -or $envText -notmatch 'AI_GATE_ENDPOINT_MARGIN=0.035') {
     throw "V0.5.8 thiếu tracker/ROI tuning tương thích cho xe nhanh."
   }
-  if ($startText -notmatch 'Set-EnvDefaultUpgrade "AI_GATE_ROI_MARGIN" "0.22" "0.16"' -or $startText -notmatch 'Ensure-EnvSetting "AI_GATE_SEGMENT_MARGIN" "0.0"' -or $startText -notmatch 'Ensure-EnvSetting "AI_REFINE_MAX_PER_FRAME" "1"') {
+  # V0.5.8 originally introduced AI_REFINE_MAX_PER_FRAME=1. Later releases may
+  # raise that default as long as they preserve an explicit migration from the
+  # historical value. V0.5.26 upgrades 1 -> 2, so accept either the original
+  # V0.5.8 setting or the forward-compatible migration + current setting.
+  $hasLegacyRefineDefault = $startText -match 'Ensure-EnvSetting "AI_REFINE_MAX_PER_FRAME" "1"'
+  $hasForwardRefineUpgrade = (
+    $startText -match 'Set-EnvDefaultUpgrade "AI_REFINE_MAX_PER_FRAME" "1" "2"' -and
+    $startText -match 'Ensure-EnvSetting "AI_REFINE_MAX_PER_FRAME" "2"'
+  )
+  if ($startText -notmatch 'Set-EnvDefaultUpgrade "AI_GATE_ROI_MARGIN" "0.22" "0.16"' -or
+      $startText -notmatch 'Ensure-EnvSetting "AI_GATE_SEGMENT_MARGIN" "0.0"' -or
+      (-not $hasLegacyRefineDefault -and -not $hasForwardRefineUpgrade)) {
     throw "V0.5.8 thiếu nâng cấp .env runtime từ tuning cũ sang Strict Gate."
   }
   Write-Host "[OK] Strict Gate + fast crossing V0.5.8" -ForegroundColor Green
@@ -985,6 +996,41 @@ function Assert-TransactionalHumanGuardV0525Contract {
   Write-Host "[OK] Transactional Human Guard 2.1 + Crossing Engine 7.2 V0.5.25" -ForegroundColor Green
 }
 
+function Assert-TargetAwareClassRefinerV0526Contract {
+  Write-Host "`n[Traffic AI] Target-aware Class Refiner 3.0 + Video Start Rescue V0.5.26" -ForegroundColor Cyan
+  $worker = Get-Content (Join-Path $root "ai-service\app\worker.py") -Raw -Encoding UTF8
+  $classification = Get-Content (Join-Path $root "ai-service\app\classification.py") -Raw -Encoding UTF8
+  $runtime = Get-Content (Join-Path $root "ai-service\app\runtime.py") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  $benchmarking = Get-Content (Join-Path $root "backend\app\benchmarking.py") -Raw -Encoding UTF8
+  $envExample = Get-Content (Join-Path $root ".env.example") -Raw -Encoding UTF8
+  $classTests = Get-Content (Join-Path $root "ai-service\tests\test_classification.py") -Raw -Encoding UTF8
+  $hybridTests = Get-Content (Join-Path $root "ai-service\tests\test_hybrid_recall.py") -Raw -Encoding UTF8
+  $benchmarkTests = Get-Content (Join-Path $root "backend\tests\test_benchmarking.py") -Raw -Encoding UTF8
+  if ($classification -notmatch 'select_target_refinement' -or $classification -notmatch 'bicycle_refine_override_conf' -or $classification -notmatch 'truck_refine_override_conf') {
+    throw "V0.5.26 thiếu target-aware refiner hoặc bicycle/truck override policy."
+  }
+  if ($worker -notmatch 'startup_grace_frames_for_source' -or $worker -notmatch 'AI_VIDEO_STARTUP_GRACE_FRAMES' -or $worker -notmatch '_observe_class_refiner' -or $worker -notmatch 'AI_CLASS_REFINE_HEAVY_INTERVAL') {
+    throw "V0.5.26 thiếu video-start rescue hoặc periodic class refinement cho xe tải/xe đạp."
+  }
+  if ($runtime -notmatch 'bicycle_class_rescues' -or $runtime -notmatch 'truck_class_rescues' -or $runtime -notmatch 'video_start_rescues') {
+    throw "Runtime V0.5.26 thiếu telemetry class rescue/video-start."
+  }
+  if ($benchmarking -notmatch 'class_mismatch_items' -or $frontend -notmatch 'Sai loại phương tiện' -or $frontend -notmatch 'Xe đạp cứu' -or $frontend -notmatch 'Xe tải cứu' -or $frontend -notmatch 'Video-start') {
+    throw "Benchmark/frontend V0.5.26 thiếu class mismatch hoặc class-rescue telemetry."
+  }
+  if ($envExample -notmatch 'AI_VIDEO_STARTUP_GRACE_FRAMES=0' -or $envExample -notmatch 'AI_REFINE_MAX_PER_FRAME=2' -or $envExample -notmatch 'AI_BICYCLE_REFINE_OVERRIDE_CONF=0.58' -or $envExample -notmatch 'AI_TRUCK_REFINE_OVERRIDE_CONF=0.48') {
+    throw "V0.5.26 thiếu cấu hình Target-aware Class Refiner / video-start."
+  }
+  if ($classTests -notmatch 'target_refiner_ignores_high_confidence_neighbor' -or $classTests -notmatch 'refiner_can_rescue_bicycle_from_motorcycle_biased_primary' -or $classTests -notmatch 'target_refiner_can_promote_small_car_shaped_truck' -or $hybridTests -notmatch 'local_video_has_no_startup_grace_but_rtsp_keeps_guard') {
+    throw "V0.5.26 thiếu regression test cho bicycle/truck target refine hoặc source-aware startup grace."
+  }
+  if ($benchmarkTests -notmatch 'class_mismatch_items') {
+    throw "V0.5.26 thiếu benchmark regression cho class mismatch timecode."
+  }
+  Write-Host "[OK] Target-aware Class Refiner 3.0 + Video Start Rescue V0.5.26" -ForegroundColor Green
+}
+
 function Assert-LegacySemanticCompatibilityV0523R1 {
   Write-Host "`n[Traffic AI] Legacy semantic contract compatibility V0.5.23-R1" -ForegroundColor Cyan
   $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
@@ -1042,6 +1088,7 @@ Assert-GroundTruthReuseV0522Contract
 Assert-BenchmarkIntegrityCrossingV0523Contract
 Assert-RiderAwareHumanGuardV0524Contract
 Assert-TransactionalHumanGuardV0525Contract
+Assert-TargetAwareClassRefinerV0526Contract
 Assert-LegacySemanticCompatibilityV0523R1
 
 Write-Host "`n[Traffic AI] Road Zone + Frame Browser V0.5.11" -ForegroundColor Cyan

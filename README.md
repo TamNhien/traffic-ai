@@ -1,3 +1,272 @@
+# Traffic AI V0.5.26 — Target-aware Class Refiner 3.0 + Video Start Rescue 🚚🚲🎯
+
+V0.5.26 tiếp tục từ benchmark thật của V0.5.25 trên cùng `clip1.mp4` / GT 149:
+
+```text
+Ground truth       149
+AI đếm             146
+Khớp               128
+Lọt                  21
+Đếm dư               18
+Recall              85.9%
+Precision           87.7%
+F1                  86.8%
+Class đúng          96.9%
+```
+
+Bản này tập trung vào hai lỗi được nhìn thấy trực tiếp trong snapshot người dùng gửi:
+
+- **Xe đạp thật bị gắn nhãn `motorcycle`** gần vạch đếm.
+- **Xe tải/van giao hàng nhỏ bị detector pretrained gắn nhãn `car`**. Việc đổi class không được phép tự tạo lượt đếm: xe vẫn chỉ được cộng khi track thực sự cắt vạch hợp lệ.
+
+Ngoài ra benchmark có GT thật ở khoảng `00:00.160`; startup grace 12 frame cũ có thể chặn crossing hợp lệ của video local. V0.5.26 tách startup policy giữa file video và RTSP.
+
+## 1. Target-aware Class Refiner 3.0
+
+V0.5.25 lấy detection có confidence cao nhất trong crop mở rộng. Trong giao thông đông, crop có thể chứa một xe máy đậu bên cạnh và refiner vô tình sửa class theo **xe khác**.
+
+V0.5.26 dùng geometry match theo chính track mục tiêu:
+
+```text
+tracked box
+   + IoU
+   + target coverage
+   + evidence coverage
+   + center distance
+          ↓
+TARGET MATCH
+          ↓
+best.pt mới được quyền sửa class
+```
+
+Detection không thuộc box mục tiêu bị loại dù confidence cao hơn.
+
+## 2. Cứu xe đạp bị gọi là xe máy
+
+Policy cũ ưu tiên an toàn theo hướng `motorcycle`, nên nếu detector chính liên tục gọi một xe đạp là xe máy thì custom `best.pt` gần như không thể sửa lại.
+
+V0.5.26 cho phép **target-matched custom refiner** override trong cùng family hai bánh:
+
+```text
+YOLO26s: motorcycle
+      ↓
+track ổn định
+      ↓
+best.pt target-match: bicycle đủ mạnh
+      ↓
+BIKE+
+      ↓
+bicycle
+```
+
+Mặc định:
+
+```ini
+AI_BICYCLE_REFINE_OVERRIDE_CONF=0.58
+AI_CLASS_REFINE_INTERVAL=10
+AI_CLASS_REFINE_GATE_DISTANCE_RATIO=0.11
+```
+
+## 3. Cứu xe tải nhỏ bị gọi là car
+
+Xe tải/van nhỏ nhìn từ camera cao có thể giống COCO `car`. V0.5.26 cho phép target-aware refiner promote:
+
+```text
+car → truck
+```
+
+với threshold riêng:
+
+```ini
+AI_TRUCK_REFINE_OVERRIDE_CONF=0.48
+AI_HEAVY_REFINE_OVERRIDE_CONF=0.54
+AI_CLASS_REFINE_HEAVY_INTERVAL=45
+```
+
+Chiều ngược `truck/bus → car` vẫn cần evidence mạnh hơn để tránh làm mất xe tải thật.
+
+**Quan trọng:** sửa `car → truck` chỉ sửa loại phương tiện. Bộ đếm vẫn bắt buộc geometry cắt vạch + Road Zone + cooldown/guard hợp lệ. Xe tải đang đứng/chạy phía trên vạch sẽ **không** bị cộng cưỡng bức.
+
+## 4. Refine trước crossing + cache class
+
+Xe bốn bánh được kiểm tra định kỳ khi nằm trong Road Zone để overlay có thể hiện `truck` trước khi chạm vạch. Xe hai bánh chỉ refine gần counting line để giữ FPS.
+
+Kết quả refine được cache theo track và tái dùng ở crossing, tránh gọi `best.pt` hai lần trên cùng frame.
+
+```ini
+AI_REFINE_MAX_PER_FRAME=2
+AI_CLASS_OVERRIDE_TTL_FRAMES=180
+AI_REFINE_TARGET_MIN_IOU=0.08
+AI_REFINE_TARGET_MIN_COVERAGE=0.16
+```
+
+`start.ps1` chỉ nâng default cũ:
+
+```text
+AI_REFINE_MAX_PER_FRAME 1 → 2
+```
+
+Nếu người dùng đã tự chỉnh giá trị khác thì script không ghi đè.
+
+## 5. Video Start Rescue
+
+Video local và RTSP không còn dùng chung startup grace.
+
+```ini
+AI_VIDEO_STARTUP_GRACE_FRAMES=0
+AI_GATE_STARTUP_GRACE_FRAMES=12
+```
+
+- **Video local / benchmark:** đếm được crossing thật ngay từ đầu clip.
+- **RTSP/live:** vẫn giữ 12 frame startup guard để tránh state/tracker khởi tạo gây event giả.
+
+Telemetry mới `Video-start` cho biết crossing nào được cứu nhờ chính sách này.
+
+## 6. Benchmark hiện rõ sai loại xe theo timecode
+
+Report ngoài `Class đúng %` còn có danh sách:
+
+```text
+Sai loại phương tiện
+00:xx.xxx · IN/OUT · GT Xe đạp → AI Xe máy
+00:yy.yyy · IN/OUT · GT Xe tải → AI Ô tô
+```
+
+Nhờ vậy lần test tiếp theo có thể xác nhận trực tiếp `BIKE+` / `TRUCK+`, không phải suy luận từ tổng số.
+
+## 7. Telemetry V0.5.26
+
+Dashboard thêm:
+
+```text
+Class refine
+Xe đạp cứu
+Xe tải cứu
+Video-start
+```
+
+và overlay runtime:
+
+```text
+CLASS-R
+BIKE+
+TRUCK+
+START+
+```
+
+Các telemetry V0.5.25 vẫn giữ nguyên: `Bracket-confirm`, `Human Guard`, `Rider giữ`, `Guard chờ`, `Guard xác nhận`, `Guard timeout`.
+
+## 8. Kiểm thử V0.5.26
+
+Đã chạy trong môi trường build hiện tại:
+
+```text
+Python compile                                  ✅
+AI Service unit tests                    92/92 ✅
+Backend unit tests                       17/17 ✅
+Benchmark regression                      7/7 ✅
+Target refiner bỏ neighbor sai                  ✅
+Bicycle motorcycle→bicycle rescue               ✅
+Small truck car→truck rescue                     ✅
+Local video startup grace = 0                    ✅
+RTSP startup grace vẫn = 12                      ✅
+Alembic single head 0040_class_refiner_v0526    ✅
+Frontend main.jsx JSX syntax                     ✅
+```
+
+Host kiểm thử hiện tại chỉ có Node 22 và không có Docker/PowerShell, trong khi project khóa Node 26.10 + Docker Desktop. Vì vậy `test.ps1`, Docker full build và Vite production build phải được xác nhận trên máy Windows của dự án.
+
+## 9. Database
+
+Migration:
+
+```text
+0039_guard_tx_v0525
+        ↓
+0040_class_refiner_v0526
+```
+
+Mong muốn:
+
+```text
+0040_class_refiner_v0526
+schema_version = 0.5.26
+```
+
+Migration chỉ cập nhật schema version, không xóa dữ liệu.
+
+## 10. Cập nhật trên máy
+
+Chép source V0.5.26 đè vào:
+
+```text
+D:\LienThongDH\DoAn\traffic-ai
+```
+
+Giữ nguyên:
+
+```text
+.env
+gateway\certs\
+videos\
+models\
+snapshots\
+datasets\
+training-runs\
+```
+
+Không dùng:
+
+```powershell
+docker compose down -v
+```
+
+Chạy:
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 |
+    Unblock-File
+
+.\scripts\test.ps1
+```
+
+Cần thấy:
+
+```text
+[Traffic AI] Target-aware Class Refiner 3.0 + Video Start Rescue V0.5.26
+[OK] Target-aware Class Refiner 3.0 + Video Start Rescue V0.5.26
+[SUCCESS] All Traffic AI tests passed.
+```
+
+Sau đó:
+
+```powershell
+.\scripts\start.ps1
+.\scripts\verify-database.ps1
+```
+
+Rồi `Ctrl + F5` và chạy lại đúng benchmark GT 149.
+
+## 11. Phát hành một lệnh
+
+Khi test/benchmark đạt yêu cầu:
+
+```powershell
+.\scripts\publish.ps1
+```
+
+Pipeline phát hành vẫn là:
+
+```text
+test → build → commit/push → tag v0.5.26 → GitHub Actions → GitHub Release
+```
+
+---
+
+# Lịch sử V0.5.25
+
 # Traffic AI V0.5.25 — Transactional Human Guard 2.1 + Crossing Engine 7.2 🛵🧍🎯
 
 V0.5.25 tiếp tục trực tiếp từ lần benchmark V0.5.24 trên clip thật:
@@ -1782,3 +2051,9 @@ Sau khi chạy ổn:
 - Video Benchmark vẽ vạch vàng, vùng xanh và mũi tên `IN` / `OUT`.
 - `IN` là hướng từ phía signed-side âm sang signed-side dương của vạch; `OUT` là chiều ngược lại, đúng cùng logic với `ai-service/app/counting.py`.
 - Dùng `I` / `O` để đánh GT sau khi nhìn xe cắt đúng vạch hiển thị.
+
+## V0.5.26-R1 - test contract hotfix
+
+- Sửa regression trong `scripts/test.ps1`: contract lịch sử V0.5.8 trước đây ghim cứng `AI_REFINE_MAX_PER_FRAME=1`, trong khi V0.5.26 hợp lệ đã nâng default `1 -> 2` cho Target-aware Class Refiner 3.0.
+- Contract V0.5.8 giờ chấp nhận cả default lịch sử `1` hoặc migration forward-compatible `Set-EnvDefaultUpgrade "AI_REFINE_MAX_PER_FRAME" "1" "2"` + current default `2`.
+- Không đổi runtime counting/classification, model, database schema hay VERSION; đây chỉ là hotfix cho bộ kiểm thử để không chặn một cấu hình V0.5.26 hợp lệ.

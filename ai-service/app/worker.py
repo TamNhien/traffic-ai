@@ -13,8 +13,14 @@ import httpx2 as httpx
 
 from app.async_tasks import EventDispatcher, LatestFrameEncoder
 from app.benchmark_trace import trace_path
-from app.classification import TrackLabelSmoother, VehicleClassPolicy
-from app.counting import CountingLine, LineCrossingCounter, RoadZone
+from app.classification import (
+    RefineCandidate,
+    TrackLabelSmoother,
+    VehicleClassPolicy,
+    select_target_refinement,
+    vehicle_family,
+)
+from app.counting import CountingLine, LineCrossingCounter, RoadZone, signed_distance
 from app.dedup import single_heavy_vehicle_plan
 from app.flow_calibration import FlowCalibrator
 from app.gate_roi import gate_roi_for_line, road_zone_roi
@@ -33,6 +39,13 @@ from app.tracking import TrackContinuityResolver, motion_leading_anchor
 VEHICLE_CLASSES = {"bicycle", "car", "motorcycle", "bus", "truck"}
 REFINE_VEHICLE_CLASSES = {"bicycle", "car", "motorcycle", "bus", "truck"}
 AMBIGUOUS_CLASSES = {"bicycle", "motorcycle", "car", "bus", "truck"}
+
+
+def startup_grace_frames_for_source(source_type: str) -> int:
+    if str(source_type).strip().lower() == "video":
+        return max(0, int(os.getenv("AI_VIDEO_STARTUP_GRACE_FRAMES", "0")))
+    return max(0, int(os.getenv("AI_GATE_STARTUP_GRACE_FRAMES", "12")))
+
 
 @dataclass(slots=True)
 class _PendingGuardCrossing:
@@ -65,8 +78,17 @@ class PipelineWorker(threading.Thread):
             bicycle_hits=int(os.getenv("AI_BICYCLE_MIN_HITS", "5")),
             strong_bicycle_certainty=float(os.getenv("AI_BICYCLE_STRONG_CERTAINTY", "0.90")),
             strong_bicycle_hits=int(os.getenv("AI_BICYCLE_STRONG_HITS", "8")),
+            bicycle_refine_override_conf=float(os.getenv("AI_BICYCLE_REFINE_OVERRIDE_CONF", "0.58")),
+            truck_refine_override_conf=float(os.getenv("AI_TRUCK_REFINE_OVERRIDE_CONF", "0.48")),
+            heavy_refine_override_conf=float(os.getenv("AI_HEAVY_REFINE_OVERRIDE_CONF", "0.54")),
         )
         self._refiner_model = None
+        self._class_refine_last_check: dict[int, int] = {}
+        self._class_refine_last_observation: dict[int, tuple[int, tuple[str, float] | None]] = {}
+        self._class_refine_overrides: dict[int, tuple[str, float, int]] = {}
+        self._bicycle_class_rescue_tracks: set[int] = set()
+        self._truck_class_rescue_tracks: set[int] = set()
+        self._video_start_rescue_tracks: set[int] = set()
         self._refine_ids: list[int] = []
         self._refiner_thread: threading.Thread | None = None
         self._human_guard_model = None
@@ -110,9 +132,15 @@ class PipelineWorker(threading.Thread):
         self.refine_at_crossing = os.getenv("AI_REFINE_AT_CROSSING", "1").strip().lower() not in {"0", "false", "no"}
         self.refine_model_name = os.getenv("AI_REFINE_MODEL_NAME", "yolo26m.pt")
         self.refine_imgsz = int(os.getenv("AI_REFINE_IMGSZ", "640"))
-        self.refine_max_per_frame = max(0, int(os.getenv("AI_REFINE_MAX_PER_FRAME", "1")))
+        self.refine_max_per_frame = max(0, int(os.getenv("AI_REFINE_MAX_PER_FRAME", "2")))
         self.refine_max_lag = max(0.0, float(os.getenv("AI_REFINE_MAX_LAG", "0.35")))
         self.refine_background_warmup = os.getenv("AI_REFINE_BACKGROUND_WARMUP", "1").strip().lower() not in {"0", "false", "no"}
+        self.class_refine_interval = max(1, int(os.getenv("AI_CLASS_REFINE_INTERVAL", "10")))
+        self.class_refine_heavy_interval = max(1, int(os.getenv("AI_CLASS_REFINE_HEAVY_INTERVAL", "45")))
+        self.class_refine_gate_distance_ratio = max(0.01, float(os.getenv("AI_CLASS_REFINE_GATE_DISTANCE_RATIO", "0.11")))
+        self.class_override_ttl_frames = max(8, int(os.getenv("AI_CLASS_OVERRIDE_TTL_FRAMES", "180")))
+        self.refine_target_min_iou = max(0.0, float(os.getenv("AI_REFINE_TARGET_MIN_IOU", "0.08")))
+        self.refine_target_min_coverage = max(0.0, float(os.getenv("AI_REFINE_TARGET_MIN_COVERAGE", "0.16")))
         self.human_guard_enabled = os.getenv("AI_HUMAN_GUARD", "1").strip().lower() not in {"0", "false", "no"}
         self.human_guard_model_name = os.getenv("AI_HUMAN_GUARD_MODEL", self.recall_model_name)
         self.human_guard_imgsz = int(os.getenv("AI_HUMAN_GUARD_IMGSZ", "512"))
@@ -354,6 +382,87 @@ class PipelineWorker(threading.Thread):
         if expired:
             self.state.human_guard_pending_drops += 1
 
+    def _class_override_for(self, track_id: int, frame_index: int, primary_label: str) -> tuple[str, float] | None:
+        entry = self._class_refine_overrides.get(int(track_id))
+        if entry is None:
+            return None
+        label, confidence, observed_frame = entry
+        if int(frame_index) - int(observed_frame) > self.class_override_ttl_frames:
+            self._class_refine_overrides.pop(int(track_id), None)
+            return None
+        if vehicle_family(label) != vehicle_family(primary_label):
+            self._class_refine_overrides.pop(int(track_id), None)
+            return None
+        return str(label), float(confidence)
+
+    def _remember_class_refinement(
+        self,
+        track_id: int,
+        frame_index: int,
+        current_label: str,
+        stable_label: str,
+        certainty: float,
+        hits: int,
+        base_display_label: str,
+        refined: tuple[str, float] | None,
+    ) -> tuple[str, float] | None:
+        if refined is None:
+            return self._class_override_for(track_id, frame_index, base_display_label)
+        resolved_label, resolved_conf = self._class_policy.final_label(
+            current_label, stable_label, certainty, hits, refined
+        )
+        if vehicle_family(resolved_label) != vehicle_family(base_display_label):
+            return self._class_override_for(track_id, frame_index, base_display_label)
+
+        self._class_refine_overrides[int(track_id)] = (
+            str(resolved_label), float(resolved_conf), int(frame_index)
+        )
+        if resolved_label == "bicycle" and base_display_label != "bicycle" and int(track_id) not in self._bicycle_class_rescue_tracks:
+            self._bicycle_class_rescue_tracks.add(int(track_id))
+            self.state.bicycle_class_rescues += 1
+        if resolved_label == "truck" and base_display_label != "truck" and int(track_id) not in self._truck_class_rescue_tracks:
+            self._truck_class_rescue_tracks.add(int(track_id))
+            self.state.truck_class_rescues += 1
+        return str(resolved_label), float(resolved_conf)
+
+    def _observe_class_refiner(
+        self,
+        track_id: int,
+        frame_index: int,
+        frame,
+        rect,
+        target_label: str,
+        device,
+        use_half: bool,
+        *,
+        force: bool = False,
+    ) -> tuple[tuple[str, float] | None, bool]:
+        """Run target-aware class refinement with per-track/frame caching.
+
+        Returns (refinement, did_infer). A same-frame crossing reuses a pre-gate
+        refinement instead of spending a second best.pt inference.
+        """
+        tid = int(track_id)
+        frame_idx = int(frame_index)
+        cached = self._class_refine_last_observation.get(tid)
+        if cached is not None and cached[0] == frame_idx:
+            return cached[1], False
+
+        last = self._class_refine_last_check.get(tid, -100000)
+        interval = self.class_refine_heavy_interval if vehicle_family(target_label) == "four-wheel" else self.class_refine_interval
+        if not force and frame_idx - last < interval:
+            return None, False
+        if self._refiner_model is None or not self._refine_ids:
+            return None, False
+
+        self._class_refine_last_check[tid] = frame_idx
+        self.state.class_refine_checks += 1
+        refined = self._refine_crossing_label(
+            frame, rect, device, use_half, self._refine_ids, target_label=target_label
+        )
+        self._class_refine_last_observation[tid] = (frame_idx, refined)
+        return refined, True
+
     @staticmethod
     def _looks_like_custom_model(model_name: str) -> bool:
         name = Path(str(model_name)).name.lower()
@@ -435,6 +544,11 @@ class PipelineWorker(threading.Thread):
                 self.payload.road_x1, self.payload.road_y1, self.payload.road_x2, self.payload.road_y2,
                 self.payload.road_x3, self.payload.road_y3, self.payload.road_x4, self.payload.road_y4,
             )
+            # Local benchmark/video files must not suppress a real crossing that
+            # happens in the first few frames (the supplied GT contains a valid
+            # crossing at 00:00.160). Live RTSP still keeps startup grace to
+            # avoid counting stale tracker initialization around the gate.
+            startup_grace_frames = startup_grace_frames_for_source(self.payload.source_type)
             counter = LineCrossingCounter(
                 CountingLine(self.payload.line_x1, self.payload.line_y1, self.payload.line_x2, self.payload.line_y2),
                 road_zone=road_zone,
@@ -445,7 +559,7 @@ class PipelineWorker(threading.Thread):
                 interpolation_gap_frames=int(os.getenv("AI_GATE_INTERPOLATION_GAP", "3")),
                 min_perpendicular_ratio=float(os.getenv("AI_GATE_MIN_NORMAL_RATIO", "0.10")),
                 min_crossing_motion_ratio=float(os.getenv("AI_GATE_MIN_MOTION_RATIO", "0.004")),
-                startup_grace_frames=int(os.getenv("AI_GATE_STARTUP_GRACE_FRAMES", "12")),
+                startup_grace_frames=startup_grace_frames,
                 side_confirm_samples=int(os.getenv("AI_GATE_SIDE_CONFIRM_SAMPLES", "2")),
                 crossing_cooldown_frames=int(os.getenv("AI_GATE_COOLDOWN_FRAMES", "60")),
                 road_anchor_margin_ratio=float(os.getenv("AI_ROAD_ANCHOR_MARGIN_RATIO", "0.012")),
@@ -592,9 +706,53 @@ class PipelineWorker(threading.Thread):
                         self._flow_calibrator.add(track_id, anchor, width, height, frame_index)
                         self._labels.update(track_id, current_label, confidence_f)
                         stable_label, class_certainty, class_hits = self._labels.stable_label(track_id, current_label)
-                        display_label = self._class_policy.display_label(
+                        base_display_label = self._class_policy.display_label(
                             current_label, stable_label, class_certainty, class_hits, confidence_f
                         )
+                        display_label = base_display_label
+                        cached_class = self._class_override_for(track_id, frame_index, base_display_label)
+                        if cached_class is not None:
+                            display_label = cached_class[0]
+
+                        # V0.5.26 Target-aware Class Refiner 3.0. Heavy vehicles
+                        # are rare enough to verify periodically even before they
+                        # reach the gate, so the small delivery truck is shown as
+                        # TRUCK instead of a permanent COCO `car`. Two-wheel
+                        # tracks are refined only near the line to preserve FPS;
+                        # this is where a bicycle/motorcycle mistake affects the
+                        # persisted benchmark class.
+                        line_a, line_b = counter.line.denormalize(width, height)
+                        gate_distance_ratio = abs(signed_distance(anchor, line_a, line_b)) / max(1.0, min(width, height))
+                        track_on_road = (
+                            counter.road_zone is None
+                            or counter.road_zone.contains_with_margin(anchor, width, height, 0.02)
+                        )
+                        lag_allows_class_refine = (
+                            self.payload.source_type != "video"
+                            or self.state.playback_lag_seconds <= self.refine_max_lag
+                        )
+                        family = vehicle_family(display_label)
+                        pre_refine_candidate = track_on_road and (
+                            family == "four-wheel"
+                            or (family == "two-wheel" and gate_distance_ratio <= self.class_refine_gate_distance_ratio)
+                        )
+                        if (
+                            self.refine_at_crossing
+                            and pre_refine_candidate
+                            and lag_allows_class_refine
+                            and refines_used_this_frame < self.refine_max_per_frame
+                        ):
+                            class_refined, did_refine = self._observe_class_refiner(
+                                track_id, frame_index, frame, rect, display_label, device, use_half, force=False
+                            )
+                            if did_refine:
+                                refines_used_this_frame += 1
+                            remembered = self._remember_class_refinement(
+                                track_id, frame_index, current_label, stable_label, class_certainty,
+                                class_hits, base_display_label, class_refined,
+                            )
+                            if remembered is not None:
+                                display_label = remembered[0]
 
                         # V0.5.24 Rider-aware Human Guard 2.0 compatibility is preserved.
                         # V0.5.25 Transactional Human Guard 2.1.
@@ -650,19 +808,48 @@ class PipelineWorker(threading.Thread):
 
                         if direction:
                             crossing_this_frame = True
+                            if (
+                                self.payload.source_type == "video"
+                                and frame_index <= int(os.getenv("AI_GATE_STARTUP_GRACE_FRAMES", "12"))
+                                and int(track_id) not in self._video_start_rescue_tracks
+                            ):
+                                self._video_start_rescue_tracks.add(int(track_id))
+                                self.state.video_start_rescues += 1
                             refined = None
-                            refine_budget_available = refines_used_this_frame < self.refine_max_per_frame
                             lag_allows_refine = (
                                 self.payload.source_type != "video"
                                 or self.state.playback_lag_seconds <= self.refine_max_lag
                             )
-                            needs_refine = self.refine_at_crossing and refine_budget_available and lag_allows_refine and (
-                                display_label in AMBIGUOUS_CLASSES
-                                and (display_label in {"bicycle", "motorcycle", "bus", "truck"} or class_certainty < 0.82 or class_hits < 4)
-                            )
-                            if needs_refine:
-                                refined = self._refine_crossing_label(frame, rect, device, use_half, self._refine_ids)
-                                refines_used_this_frame += 1
+                            # Reuse a same-frame pre-gate refinement first. If none
+                            # exists, every supported vehicle class (including a
+                            # high-certainty CAR) is eligible for target-aware
+                            # crossing refinement. This is what lets best.pt rescue
+                            # a small truck that the recall detector calls `car`.
+                            cached_refine = self._class_refine_last_observation.get(int(track_id))
+                            if cached_refine is not None and cached_refine[0] == int(frame_index):
+                                refined = cached_refine[1]
+                            elif (
+                                self.refine_at_crossing
+                                and display_label in AMBIGUOUS_CLASSES
+                                and lag_allows_refine
+                                and refines_used_this_frame < self.refine_max_per_frame
+                            ):
+                                refined, did_refine = self._observe_class_refiner(
+                                    track_id, frame_index, frame, rect, display_label,
+                                    device, use_half, force=True,
+                                )
+                                if did_refine:
+                                    refines_used_this_frame += 1
+
+                            if refined is None:
+                                # A recent pre-gate class correction is still
+                                # valid if the crossing frame cannot spend another
+                                # refine slot. Treat it as cached semantic evidence.
+                                cached_override = self._class_override_for(
+                                    track_id, frame_index, base_display_label
+                                )
+                                if cached_override is not None:
+                                    refined = cached_override
 
                             event_label, policy_conf = self._class_policy.final_label(
                                 current_label,
@@ -671,6 +858,13 @@ class PipelineWorker(threading.Thread):
                                 class_hits,
                                 refined,
                             )
+                            remembered = self._remember_class_refinement(
+                                track_id, frame_index, current_label, stable_label, class_certainty,
+                                class_hits, base_display_label, refined,
+                            )
+                            if remembered is not None:
+                                event_label = remembered[0]
+                                policy_conf = max(policy_conf, remembered[1])
                             event_label = event_label if event_label in VEHICLE_CLASSES else "other"
                             refined_conf = refined[1] if refined is not None else 0.0
                             event_confidence = max(confidence_f, policy_conf, refined_conf)
@@ -783,6 +977,12 @@ class PipelineWorker(threading.Thread):
                         "bracket_confirm_rescues": counter.bracket_confirm_rescues,
                         "rescue_validation_rejections": counter.rejected_rescue_validation,
                         "adaptive_cooldown_releases": counter.adaptive_cooldown_releases,
+                        "class_refine_checks": self.state.class_refine_checks,
+                        "class_refine_target_matches": self.state.class_refine_target_matches,
+                        "class_refine_target_rejects": self.state.class_refine_target_rejects,
+                        "bicycle_class_rescues": self.state.bicycle_class_rescues,
+                        "truck_class_rescues": self.state.truck_class_rescues,
+                        "video_start_rescues": self.state.video_start_rescues,
                         "human_guard_rejections": self.state.human_guard_rejections,
                         "rider_guard_rescues": self.state.rider_guard_rescues,
                         "human_guard_pending_crossings": self.state.human_guard_pending_crossings,
@@ -876,14 +1076,33 @@ class PipelineWorker(threading.Thread):
         mapping = names.items() if isinstance(names, dict) else enumerate(names)
         return [int(idx) for idx, name in mapping if str(name) in labels]
 
-    def _refine_crossing_label(self, frame, rect, device, use_half: bool, refine_ids: list[int]) -> tuple[str, float] | None:
+    def _refine_crossing_label(self, frame, rect, device, use_half: bool, refine_ids: list[int], target_label: str | None = None) -> tuple[str, float] | None:
+        """Refine the *tracked target*, never an arbitrary object in its crop.
+
+        V0.5.25 selected the highest-confidence vehicle returned from the whole
+        expanded crop. In the supplied benchmark frames that crop often contains
+        roadside motorcycles next to the real bicycle or small truck. V0.5.26
+        keeps a little context, then scores every refiner box against the original
+        tracked rectangle and ignores unrelated neighbors.
+        """
         if self._refiner_model is None or not refine_ids:
             return None
         try:
             h, w = frame.shape[:2]
-            x1, y1, x2, y2 = rect
-            pad_x = max(12, int((x2 - x1) * 0.24))
-            pad_y = max(12, int((y2 - y1) * 0.24))
+            x1, y1, x2, y2 = [float(v) for v in rect]
+            target_w = max(1.0, x2 - x1)
+            target_h = max(1.0, y2 - y1)
+            family = vehicle_family(target_label or "car")
+            # Two-wheel targets need more vertical context for both wheels/rider;
+            # four-wheel targets are kept tighter so adjacent parked motorcycles
+            # cannot dominate the crop. The geometry matcher below is the final
+            # authority, so these pads affect context rather than target identity.
+            if family == "two-wheel":
+                pad_x = max(14, int(target_w * 0.34))
+                pad_y = max(14, int(target_h * 0.30))
+            else:
+                pad_x = max(12, int(target_w * 0.18))
+                pad_y = max(12, int(target_h * 0.18))
             ix1 = max(0, int(x1) - pad_x)
             iy1 = max(0, int(y1) - pad_y)
             ix2 = min(w, int(x2) + pad_x)
@@ -893,7 +1112,7 @@ class PipelineWorker(threading.Thread):
                 return None
             predictions = self._refiner_model.predict(
                 crop,
-                conf=0.08,
+                conf=0.06,
                 classes=refine_ids,
                 device=device,
                 imgsz=self.refine_imgsz,
@@ -905,13 +1124,29 @@ class PipelineWorker(threading.Thread):
             boxes = predictions[0].boxes
             if boxes is None or len(boxes) == 0:
                 return None
-            confs = boxes.conf.cpu().tolist()
-            classes = boxes.cls.int().cpu().tolist()
-            best_index = max(range(len(confs)), key=lambda idx: confs[idx])
-            label = str(predictions[0].names[int(classes[best_index])])
-            if label not in VEHICLE_CLASSES:
+
+            target_crop = (x1 - ix1, y1 - iy1, x2 - ix1, y2 - iy1)
+            candidates: list[RefineCandidate] = []
+            for box, cls_id, conf in zip(
+                boxes.xyxy.cpu().tolist(),
+                boxes.cls.int().cpu().tolist(),
+                boxes.conf.cpu().tolist(),
+            ):
+                label = str(predictions[0].names[int(cls_id)])
+                if label in VEHICLE_CLASSES:
+                    candidates.append(RefineCandidate(label, float(conf), tuple(map(float, box))))
+            match = select_target_refinement(
+                target_crop,
+                candidates,
+                min_iou=self.refine_target_min_iou,
+                min_target_coverage=self.refine_target_min_coverage,
+                target_family=family,
+            )
+            if match is None:
+                self.state.class_refine_target_rejects += 1
                 return None
-            return label, float(confs[best_index])
+            self.state.class_refine_target_matches += 1
+            return match.label, match.confidence
         except Exception:
             return None
 
@@ -967,7 +1202,7 @@ class PipelineWorker(threading.Thread):
         rt = f"x{self.state.realtime_factor:.2f}" if self.state.source_fps > 0 else "live"
         cv2.putText(
             frame,
-            f"DET {self.state.detections_current_frame} | UNTRACKED {self.state.untracked_detections} | TRACK {self.state.active_tracks} | ROAD {self.state.road_tracks_current_frame} | TOTAL {self.state.total_count} | IN {self.state.in_count} | OUT {self.state.out_count} | FPS {self.state.fps:.1f} ({rt}) | {self.state.inference_ms:.0f}ms | {'HYBRID' if self.hybrid_mode else 'DIRECT'} {Path(self.detector_model_name).name} | ROI {self.detection_roi_mode.upper()} | DIRECT-X {self.state.direct_crossings} | INTERP {self.state.interpolated_crossings} | RESCUE {self.state.rescued_crossings} | ROAD-REJECT {counter.rejected_outside_road} | CONFIRM-REJECT {counter.rejected_unconfirmed_side} | COOL-REJECT {counter.rejected_cooldown} | COOL-REL {counter.adaptive_cooldown_releases} | FAST-CONF {counter.fast_confirm_rescues} | BRACKET+ {counter.bracket_confirm_rescues} | RESCUE-X {counter.rejected_rescue_validation} | HUMAN-X {self.state.human_guard_rejections} | RIDER+ {self.state.rider_guard_rescues} | GUARD-PENDING {self.state.human_guard_pending_crossings} | ROAD-EDGE+ {counter.road_edge_rescues}",
+            f"DET {self.state.detections_current_frame} | UNTRACKED {self.state.untracked_detections} | TRACK {self.state.active_tracks} | ROAD {self.state.road_tracks_current_frame} | TOTAL {self.state.total_count} | IN {self.state.in_count} | OUT {self.state.out_count} | FPS {self.state.fps:.1f} ({rt}) | {self.state.inference_ms:.0f}ms | {'HYBRID' if self.hybrid_mode else 'DIRECT'} {Path(self.detector_model_name).name} | ROI {self.detection_roi_mode.upper()} | DIRECT-X {self.state.direct_crossings} | INTERP {self.state.interpolated_crossings} | RESCUE {self.state.rescued_crossings} | ROAD-REJECT {counter.rejected_outside_road} | CONFIRM-REJECT {counter.rejected_unconfirmed_side} | COOL-REJECT {counter.rejected_cooldown} | COOL-REL {counter.adaptive_cooldown_releases} | FAST-CONF {counter.fast_confirm_rescues} | BRACKET+ {counter.bracket_confirm_rescues} | RESCUE-X {counter.rejected_rescue_validation} | CLASS-R {self.state.class_refine_checks} | BIKE+ {self.state.bicycle_class_rescues} | TRUCK+ {self.state.truck_class_rescues} | START+ {self.state.video_start_rescues} | HUMAN-X {self.state.human_guard_rejections} | RIDER+ {self.state.rider_guard_rescues} | GUARD-PENDING {self.state.human_guard_pending_crossings} | ROAD-EDGE+ {counter.road_edge_rescues}",
             (20, 32),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.62,

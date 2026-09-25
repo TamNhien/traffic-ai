@@ -14,3 +14,12 @@ def test_pipeline_state_exposes_untracked_and_detector_telemetry() -> None:
     assert state.untracked_detections == 0
     assert state.detector_model_name is None
     assert state.hybrid_mode is False
+
+
+def test_local_video_has_no_startup_grace_but_rtsp_keeps_guard(monkeypatch) -> None:
+    from app.worker import startup_grace_frames_for_source
+
+    monkeypatch.setenv("AI_VIDEO_STARTUP_GRACE_FRAMES", "0")
+    monkeypatch.setenv("AI_GATE_STARTUP_GRACE_FRAMES", "12")
+    assert startup_grace_frames_for_source("video") == 0
+    assert startup_grace_frames_for_source("rtsp") == 12

@@ -31,6 +31,12 @@ class PipelineState:
     untracked_detections: int = 0
     road_tracks_current_frame: int = 0
     suppressed_class_duplicates_current_frame: int = 0
+    class_refine_checks: int = 0
+    class_refine_target_matches: int = 0
+    class_refine_target_rejects: int = 0
+    bicycle_class_rescues: int = 0
+    truck_class_rescues: int = 0
+    video_start_rescues: int = 0
     human_guard_rejections: int = 0
     rider_guard_rescues: int = 0
     human_guard_pending_crossings: int = 0

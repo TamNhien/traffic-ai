@@ -45,3 +45,64 @@ def test_very_strong_primary_bicycle_can_survive_without_refiner() -> None:
     policy = VehicleClassPolicy(strong_bicycle_certainty=0.90, strong_bicycle_hits=8)
     label, _ = policy.final_label("bicycle", "bicycle", 0.94, 10, None)
     assert label == "bicycle"
+
+
+def test_target_refiner_ignores_high_confidence_neighbor() -> None:
+    from app.classification import RefineCandidate, select_target_refinement
+
+    target = (40.0, 40.0, 140.0, 180.0)
+    candidates = [
+        # Unrelated parked motorcycle in the same expanded crop.
+        RefineCandidate("motorcycle", 0.96, (170.0, 45.0, 250.0, 170.0)),
+        # Lower-confidence target-matched bicycle.
+        RefineCandidate("bicycle", 0.66, (46.0, 48.0, 136.0, 176.0)),
+    ]
+    match = select_target_refinement(target, candidates)
+    assert match is not None
+    assert match.label == "bicycle"
+    assert match.confidence == 0.66
+
+
+def test_refiner_can_rescue_bicycle_from_motorcycle_biased_primary() -> None:
+    policy = VehicleClassPolicy(bicycle_refine_override_conf=0.58)
+    label, confidence = policy.final_label(
+        "motorcycle", "motorcycle", 0.96, 18, ("bicycle", 0.66)
+    )
+    assert label == "bicycle"
+    assert confidence >= 0.96
+
+
+def test_target_refiner_can_promote_small_car_shaped_truck() -> None:
+    policy = VehicleClassPolicy(truck_refine_override_conf=0.48)
+    label, confidence = policy.final_label(
+        "car", "car", 0.94, 24, ("truck", 0.53)
+    )
+    assert label == "truck"
+    assert confidence >= 0.94
+
+
+def test_weak_truck_refiner_does_not_override_stable_car() -> None:
+    policy = VehicleClassPolicy(truck_refine_override_conf=0.48)
+    label, _ = policy.final_label("car", "car", 0.94, 24, ("truck", 0.31))
+    assert label == "car"
+
+
+def test_target_refiner_stays_inside_target_vehicle_family() -> None:
+    from app.classification import RefineCandidate, select_target_refinement
+
+    target = (40.0, 40.0, 180.0, 190.0)
+    candidates = [
+        RefineCandidate("motorcycle", 0.97, (45.0, 45.0, 175.0, 185.0)),
+        RefineCandidate("truck", 0.56, (48.0, 47.0, 178.0, 188.0)),
+    ]
+    match = select_target_refinement(target, candidates, target_family="four-wheel")
+    assert match is not None
+    assert match.label == "truck"
+
+
+def test_target_refiner_rejects_unrelated_neighbor_only() -> None:
+    from app.classification import RefineCandidate, select_target_refinement
+
+    target = (40.0, 40.0, 140.0, 180.0)
+    candidates = [RefineCandidate("motorcycle", 0.99, (180.0, 40.0, 260.0, 170.0))]
+    assert select_target_refinement(target, candidates, target_family="two-wheel") is None

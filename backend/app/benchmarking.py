@@ -214,6 +214,20 @@ def match_crossings(ground_truth: Iterable[Any], ai_events: Iterable[Any], toler
     f1 = (2.0 * precision * recall / (precision + recall)) if precision + recall else 0.0
     direction_correct = sum(1 for item in matched if item["direction_correct"])
     class_correct = sum(1 for item in matched if item["class_correct"])
+    class_mismatch_items = [
+        {
+            "ground_truth_id": item["ground_truth_id"],
+            "ai_event_id": item["ai_event_id"],
+            "time": item["ground_truth_time"],
+            "ai_time": item["ai_time"],
+            "direction": item["ground_truth_direction"],
+            "ground_truth_vehicle_type": item["ground_truth_vehicle_type"],
+            "ai_vehicle_type": item["ai_vehicle_type"],
+            "tracking_id": item.get("tracking_id"),
+        }
+        for item in matched
+        if not item["class_correct"]
+    ]
 
     class_names = sorted({item.vehicle_type for item in gt} | {item.vehicle_type for item in ai})
     per_class = {}
@@ -256,6 +270,8 @@ def match_crossings(ground_truth: Iterable[Any], ai_events: Iterable[Any], toler
         "counting_f1": round(f1, 6),
         "direction_accuracy": round(direction_correct / matched_total, 6) if matched_total else None,
         "class_accuracy": round(class_correct / matched_total, 6) if matched_total else None,
+        "class_mismatches": len(class_mismatch_items),
+        "class_mismatch_items": class_mismatch_items,
         "matched_items": matched,
         "missed_items": missed,
         "false_positive_items": false_positive_items,

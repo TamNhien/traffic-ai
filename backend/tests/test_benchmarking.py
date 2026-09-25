@@ -33,6 +33,9 @@ def test_benchmark_scores_class_separately_from_counting() -> None:
     assert result["matched"] == 1
     assert result["counting_recall"] == 1.0
     assert result["class_accuracy"] == 0.0
+    assert result["class_mismatches"] == 1
+    assert result["class_mismatch_items"][0]["ground_truth_vehicle_type"] == "truck"
+    assert result["class_mismatch_items"][0]["ai_vehicle_type"] == "bus"
     assert result["per_class"]["truck"]["ground_truth"] == 1
     assert result["per_class"]["bus"]["ai"] == 1
 
