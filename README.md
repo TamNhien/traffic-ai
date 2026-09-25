@@ -1,3 +1,21 @@
+# Traffic AI V0.5.27 — Dual Refiner Consensus 4.0 + Benchmark Global Match 🚚🚲🎯
+
+V0.5.27 tập trung vào hai điểm quan sát được từ phiên V0.5.26 GT=149: class refiner chạy rất nhiều nhưng không cứu được bicycle/truck, và báo cáo benchmark có thể ghép tham lam sai cặp khi nhiều crossing nằm gần nhau.
+
+## Điểm mới
+
+- **Dual Refiner**: khi `best.pt` được kích hoạt, nó vẫn là refiner theo miền; `yolo26m.pt` chạy như second-opinion độc lập thay vì bị bỏ qua.
+- **Multi-frame consensus**: cùng-frame từ hai model chỉ tính một observation; bicycle/truck chỉ được promote khi có bằng chứng target-matched ở ít nhất 2 frame riêng biệt.
+- **Truck seen vs counted**: telemetry tách `truck_tracks_seen`, `truck_crossing_tracks` và số event `truck`. Thấy xe tải không đồng nghĩa đã đếm; chỉ track cắt vạch vàng hợp lệ mới tăng số xe tải.
+- **Benchmark Global Match**: ghép GT↔AI toàn cục theo timecode, tối đa số cặp hợp lệ rồi tối thiểu tổng sai số thời gian; class/direction được chấm độc lập, không dùng để quyết định ghép.
+- Giữ nguyên Crossing Engine 7.2, Transactional Human Guard 2.1, Video-start Rescue và các contract V0.5.26.
+
+### Ghi chú từ snapshot phiên #124
+
+Chiếc van/xe tải nhỏ màu trắng quanh `frame_17930` đã được overlay nhận là `truck`, nhưng trong chuỗi snapshot nó vẫn nằm phía trên vạch vàng và chưa cắt vạch. Vì vậy **Xe tải = 0 là đúng contract đếm** cho track đó. V0.5.27 hiển thị rõ `Xe tải thấy` và `Xe tải cắt vạch` để phân biệt nhận diện với event đếm. Một số dòng GT Xe đạp → AI Xe máy cũng nằm trong các cụm crossing sát nhau; global temporal matching giúp tránh kết luận sai loại chỉ vì cặp timecode bị ghép tham lam.
+
+---
+
 # Traffic AI V0.5.26 — Target-aware Class Refiner 3.0 + Video Start Rescue 🚚🚲🎯
 
 V0.5.26 tiếp tục từ benchmark thật của V0.5.25 trên cùng `clip1.mp4` / GT 149:

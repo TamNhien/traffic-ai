@@ -143,48 +143,85 @@ def _false_positive_diagnostics(
     return diagnostics, dict(reason_counts), dominant
 
 
-def match_crossings(ground_truth: Iterable[Any], ai_events: Iterable[Any], tolerance_seconds: float = 0.75) -> dict:
-    """Greedy one-to-one temporal matching for counting benchmarks.
+def _global_temporal_pairs(
+    gt: list[TimedCrossing], ai: list[TimedCrossing], tolerance: float
+) -> list[tuple[int, int]]:
+    """Order-preserving global one-to-one timestamp assignment.
 
-    Crossing presence is matched by nearest source-video timestamp inside the
-    tolerance window. Direction and vehicle class are scored separately so a
-    correctly detected crossing with a wrong class is not misreported as a
-    missed vehicle plus a false positive.
+    The older greedy matcher could consume a flexible AI event for an early GT
+    mark and then leave a later GT mark unmatched even though a 2-pair solution
+    existed. V0.5.27 first maximizes the number of timestamp-valid matches, then
+    minimizes the total absolute time error. Vehicle class and direction are *not*
+    used in the assignment, so class/direction accuracy remain independent metrics.
+    """
+
+    n, m = len(gt), len(ai)
+    matches = [[0] * (m + 1) for _ in range(n + 1)]
+    cost = [[0.0] * (m + 1) for _ in range(n + 1)]
+    op = [[None] * (m + 1) for _ in range(n + 1)]
+
+    for i in range(1, n + 1):
+        op[i][0] = "skip_gt"
+    for j in range(1, m + 1):
+        op[0][j] = "skip_ai"
+
+    def key(option: tuple[int, float, str]) -> tuple[int, float, int]:
+        count, total_cost, action = option
+        priority = {"match": 3, "skip_gt": 2, "skip_ai": 1}[action]
+        return count, -total_cost, priority
+
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            options: list[tuple[int, float, str]] = [
+                (matches[i - 1][j], cost[i - 1][j], "skip_gt"),
+                (matches[i][j - 1], cost[i][j - 1], "skip_ai"),
+            ]
+            delta = abs(ai[j - 1].source_time_seconds - gt[i - 1].source_time_seconds)
+            if delta <= tolerance:
+                options.append((matches[i - 1][j - 1] + 1, cost[i - 1][j - 1] + delta, "match"))
+            best = max(options, key=key)
+            matches[i][j], cost[i][j], op[i][j] = best
+
+    pairs: list[tuple[int, int]] = []
+    i, j = n, m
+    while i > 0 or j > 0:
+        action = op[i][j]
+        if action == "match":
+            pairs.append((i - 1, j - 1))
+            i -= 1
+            j -= 1
+        elif action == "skip_gt":
+            i -= 1
+        elif action == "skip_ai":
+            j -= 1
+        elif i > 0:
+            i -= 1
+        elif j > 0:
+            j -= 1
+    pairs.reverse()
+    return pairs
+
+
+def match_crossings(ground_truth: Iterable[Any], ai_events: Iterable[Any], tolerance_seconds: float = 0.75) -> dict:
+    """Global one-to-one temporal matching for counting benchmarks.
+
+    Matching maximizes valid timestamp pairs and minimizes total time error.
+    Direction and vehicle class are scored separately, never used to manufacture
+    a better class score.
     """
 
     tolerance = max(0.05, float(tolerance_seconds))
     gt = sorted((_timed(item) for item in ground_truth), key=lambda x: x.source_time_seconds)
     ai = sorted((_timed(item) for item in ai_events), key=lambda x: x.source_time_seconds)
-    unmatched_ai = set(range(len(ai)))
+    pairs = _global_temporal_pairs(gt, ai, tolerance)
+    matched_ai = {ai_index for _, ai_index in pairs}
+    matched_gt = {gt_index for gt_index, _ in pairs}
     matched: list[dict] = []
     missed: list[dict] = []
 
-    for mark in gt:
-        best_index = None
-        best_score = (inf, inf, inf)
-        for index in list(unmatched_ai):
-            event = ai[index]
-            delta = abs(event.source_time_seconds - mark.source_time_seconds)
-            if delta > tolerance:
-                continue
-            score = (
-                delta,
-                0 if event.direction == mark.direction else 1,
-                0 if event.vehicle_type == mark.vehicle_type else 1,
-            )
-            if score < best_score:
-                best_score = score
-                best_index = index
-        if best_index is None:
-            missed.append({
-                "ground_truth_id": mark.id,
-                "time": round(mark.source_time_seconds, 3),
-                "direction": mark.direction,
-                "vehicle_type": mark.vehicle_type,
-            })
-            continue
-        event = ai[best_index]
-        unmatched_ai.remove(best_index)
+    for gt_index, ai_index in pairs:
+        mark = gt[gt_index]
+        event = ai[ai_index]
         matched.append({
             "ground_truth_id": mark.id,
             "ai_event_id": event.id,
@@ -201,6 +238,17 @@ def match_crossings(ground_truth: Iterable[Any], ai_events: Iterable[Any], toler
             "crossing_method": event.crossing_method,
         })
 
+    for gt_index, mark in enumerate(gt):
+        if gt_index in matched_gt:
+            continue
+        missed.append({
+            "ground_truth_id": mark.id,
+            "time": round(mark.source_time_seconds, 3),
+            "direction": mark.direction,
+            "vehicle_type": mark.vehicle_type,
+        })
+
+    unmatched_ai = set(range(len(ai))) - matched_ai
     false_positive_events = [ai[index] for index in sorted(unmatched_ai, key=lambda i: ai[i].source_time_seconds)]
     false_positive_items, false_positive_reason_counts, dominant_false_positive_reason = _false_positive_diagnostics(
         false_positive_events, ai, matched, tolerance

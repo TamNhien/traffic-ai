@@ -84,3 +84,28 @@ def test_false_positive_analyzer_flags_duplicate_near_matched_gt() -> None:
     result = match_crossings([rich_item(2, 20.02, "in")], ai, 0.50)
     assert result["matched"] == 1
     assert result["false_positive_items"][0]["reason"] == "duplicate_near_gt"
+
+
+def test_v0527_global_temporal_matcher_avoids_greedy_pair_loss() -> None:
+    # GT#1 can match either AI event, while GT#2 can only match the later one.
+    # A nearest-first greedy pass would consume AI#12 for GT#1 and leave GT#2
+    # unmatched. Global assignment correctly keeps both valid crossings.
+    gt = [item(1, 1.0), item(2, 1.5)]
+    ai = [item(11, 0.5), item(12, 1.1)]
+    result = match_crossings(gt, ai, 0.60)
+    assert result["matched"] == 2
+    assert result["missed"] == 0
+    assert result["false_positives"] == 0
+    assert [pair["ai_event_id"] for pair in result["matched_items"]] == [11, 12]
+
+
+def test_v0527_global_matcher_does_not_use_class_to_improve_assignment() -> None:
+    gt = [item(1, 10.0, "in", "bicycle")]
+    ai = [
+        item(11, 9.90, "in", "motorcycle"),
+        item(12, 10.40, "in", "bicycle"),
+    ]
+    result = match_crossings(gt, ai, 0.50)
+    assert result["matched"] == 1
+    assert result["matched_items"][0]["ai_event_id"] == 11
+    assert result["class_mismatches"] == 1

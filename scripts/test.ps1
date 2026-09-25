@@ -300,18 +300,18 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.26") { throw "VERSION phải là 0.5.26, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0040_class_refiner_v0526.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0040_class_refiner_v0526.py." }
+  if ($version -ne "0.5.27") { throw "VERSION phải là 0.5.27, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0041_dual_refiner_v0527.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0041_dual_refiner_v0527.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0040_class_refiner_v0526"' -or $migrationText -notmatch 'down_revision = "0039_guard_tx_v0525"' -or $migrationText -notmatch "value='0.5.26'") {
-    throw "Migration 0040_class_refiner_v0526 không đúng contract V0.5.26."
+  if ($migrationText -notmatch 'revision = "0041_dual_refiner_v0527"' -or $migrationText -notmatch 'down_revision = "0040_class_refiner_v0526"' -or $migrationText -notmatch "value='0.5.27'") {
+    throw "Migration 0041_dual_refiner_v0527 không đúng contract V0.5.27."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
 
 function Assert-AlembicRevisionSafetyContract {
-  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.26" -ForegroundColor Cyan
+  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.27" -ForegroundColor Cyan
   $versionsDir = Join-Path $root "backend\alembic\versions"
   $bad = @()
   Get-ChildItem $versionsDir -Filter "*.py" | ForEach-Object {
@@ -335,7 +335,7 @@ function Assert-AlembicRevisionSafetyContract {
   if ($v17 -notmatch 'revision = "0017_ai_test_dep_v053"') {
     throw "Migration V0.5.3 chưa dùng revision ID rút gọn an toàn."
   }
-  Write-Host "[OK] Alembic revision-length safety V0.5.26" -ForegroundColor Green
+  Write-Host "[OK] Alembic revision-length safety V0.5.27" -ForegroundColor Green
 }
 
 
@@ -1031,6 +1031,43 @@ function Assert-TargetAwareClassRefinerV0526Contract {
   Write-Host "[OK] Target-aware Class Refiner 3.0 + Video Start Rescue V0.5.26" -ForegroundColor Green
 }
 
+function Assert-DualRefinerConsensusV0527Contract {
+  Write-Host "`n[Traffic AI] Dual Refiner Consensus 4.0 + Benchmark Global Match V0.5.27" -ForegroundColor Cyan
+  $worker = Get-Content (Join-Path $root "ai-service\app\worker.py") -Raw -Encoding UTF8
+  $classification = Get-Content (Join-Path $root "ai-service\app\classification.py") -Raw -Encoding UTF8
+  $runtime = Get-Content (Join-Path $root "ai-service\app\runtime.py") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  $benchmarking = Get-Content (Join-Path $root "backend\app\benchmarking.py") -Raw -Encoding UTF8
+  $envExample = Get-Content (Join-Path $root ".env.example") -Raw -Encoding UTF8
+  $classTests = Get-Content (Join-Path $root "ai-service\tests\test_classification.py") -Raw -Encoding UTF8
+  $benchmarkTests = Get-Content (Join-Path $root "backend\tests\test_benchmarking.py") -Raw -Encoding UTF8
+  if ($classification -notmatch 'RefineEvidenceAccumulator' -or $classification -notmatch 'minority_consensus') {
+    throw "V0.5.27 thiếu multi-frame refinement consensus."
+  }
+  if ($worker -notmatch 'AI_GENERAL_REFINE_MODEL_NAME' -or $worker -notmatch 'AI_DUAL_CLASS_REFINE' -or $worker -notmatch 'general_refine_checks' -or $worker -notmatch 'truck_tracks_seen' -or $worker -notmatch 'truck_crossing_tracks') {
+    throw "V0.5.27 thiếu dual refiner hoặc telemetry truck seen/crossing."
+  }
+  if ($runtime -notmatch 'domain_refine_checks' -or $runtime -notmatch 'general_refine_checks' -or $runtime -notmatch 'class_consensus_rescues' -or $runtime -notmatch 'truck_tracks_seen' -or $runtime -notmatch 'truck_crossing_tracks') {
+    throw "Runtime V0.5.27 thiếu Dual Refiner / truck diagnostics."
+  }
+  if ($benchmarking -notmatch '_global_temporal_pairs' -or $benchmarking -notmatch 'maximizes the number of timestamp-valid matches') {
+    throw "Benchmark V0.5.27 thiếu global temporal matcher."
+  }
+  if ($frontend -notmatch 'Dual Refiner Consensus 4.0' -or $frontend -notmatch 'Xe tải thấy' -or $frontend -notmatch 'Xe tải cắt vạch' -or $frontend -notmatch 'Refiner chung') {
+    throw "Frontend V0.5.27 thiếu Dual Refiner / truck detection-vs-count telemetry."
+  }
+  if ($envExample -notmatch 'AI_DUAL_CLASS_REFINE=1' -or $envExample -notmatch 'AI_GENERAL_REFINE_MODEL_NAME=yolo26m.pt' -or $envExample -notmatch 'AI_REFINE_CONSENSUS_MIN_HITS=2' -or $envExample -notmatch 'AI_TRUCK_CONSENSUS_CONF=0.52') {
+    throw "V0.5.27 thiếu cấu hình Dual Refiner Consensus."
+  }
+  if ($classTests -notmatch 'test_v0527_repeated_low_truck_evidence_can_rescue_car_track' -or $classTests -notmatch 'test_v0527_consensus_requires_distinct_frames') {
+    throw "V0.5.27 thiếu regression tests cho multi-frame class consensus."
+  }
+  if ($benchmarkTests -notmatch 'test_v0527_global_temporal_matcher_avoids_greedy_pair_loss' -or $benchmarkTests -notmatch 'test_v0527_global_matcher_does_not_use_class_to_improve_assignment') {
+    throw "V0.5.27 thiếu regression tests cho global benchmark matching."
+  }
+  Write-Host "[OK] Dual Refiner Consensus 4.0 + Benchmark Global Match V0.5.27" -ForegroundColor Green
+}
+
 function Assert-LegacySemanticCompatibilityV0523R1 {
   Write-Host "`n[Traffic AI] Legacy semantic contract compatibility V0.5.23-R1" -ForegroundColor Cyan
   $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
@@ -1089,6 +1126,7 @@ Assert-BenchmarkIntegrityCrossingV0523Contract
 Assert-RiderAwareHumanGuardV0524Contract
 Assert-TransactionalHumanGuardV0525Contract
 Assert-TargetAwareClassRefinerV0526Contract
+Assert-DualRefinerConsensusV0527Contract
 Assert-LegacySemanticCompatibilityV0523R1
 
 Write-Host "`n[Traffic AI] Road Zone + Frame Browser V0.5.11" -ForegroundColor Cyan

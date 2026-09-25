@@ -15,6 +15,7 @@ from app.async_tasks import EventDispatcher, LatestFrameEncoder
 from app.benchmark_trace import trace_path
 from app.classification import (
     RefineCandidate,
+    RefineEvidenceAccumulator,
     TrackLabelSmoother,
     VehicleClassPolicy,
     select_target_refinement,
@@ -83,13 +84,19 @@ class PipelineWorker(threading.Thread):
             heavy_refine_override_conf=float(os.getenv("AI_HEAVY_REFINE_OVERRIDE_CONF", "0.54")),
         )
         self._refiner_model = None
+        self._general_refiner_model = None
         self._class_refine_last_check: dict[int, int] = {}
         self._class_refine_last_observation: dict[int, tuple[int, tuple[str, float] | None]] = {}
         self._class_refine_overrides: dict[int, tuple[str, float, int]] = {}
         self._bicycle_class_rescue_tracks: set[int] = set()
         self._truck_class_rescue_tracks: set[int] = set()
+        self._class_consensus_rescue_tracks: set[int] = set()
+        self._truck_tracks_seen: set[int] = set()
+        self._truck_crossing_tracks: set[int] = set()
+        self._bicycle_tracks_seen: set[int] = set()
         self._video_start_rescue_tracks: set[int] = set()
         self._refine_ids: list[int] = []
+        self._general_refine_ids: list[int] = []
         self._refiner_thread: threading.Thread | None = None
         self._human_guard_model = None
         self._human_guard_ids: list[int] = []
@@ -131,6 +138,8 @@ class PipelineWorker(threading.Thread):
         self.gate_endpoint_margin = float(os.getenv("AI_GATE_ENDPOINT_MARGIN", "0.035"))
         self.refine_at_crossing = os.getenv("AI_REFINE_AT_CROSSING", "1").strip().lower() not in {"0", "false", "no"}
         self.refine_model_name = os.getenv("AI_REFINE_MODEL_NAME", "yolo26m.pt")
+        self.general_refine_model_name = os.getenv("AI_GENERAL_REFINE_MODEL_NAME", self.refine_model_name)
+        self.dual_class_refine = os.getenv("AI_DUAL_CLASS_REFINE", "1").strip().lower() not in {"0", "false", "no"}
         self.refine_imgsz = int(os.getenv("AI_REFINE_IMGSZ", "640"))
         self.refine_max_per_frame = max(0, int(os.getenv("AI_REFINE_MAX_PER_FRAME", "2")))
         self.refine_max_lag = max(0.0, float(os.getenv("AI_REFINE_MAX_LAG", "0.35")))
@@ -141,6 +150,11 @@ class PipelineWorker(threading.Thread):
         self.class_override_ttl_frames = max(8, int(os.getenv("AI_CLASS_OVERRIDE_TTL_FRAMES", "180")))
         self.refine_target_min_iou = max(0.0, float(os.getenv("AI_REFINE_TARGET_MIN_IOU", "0.08")))
         self.refine_target_min_coverage = max(0.0, float(os.getenv("AI_REFINE_TARGET_MIN_COVERAGE", "0.16")))
+        self.refine_consensus_min_hits = max(2, int(os.getenv("AI_REFINE_CONSENSUS_MIN_HITS", "2")))
+        self.refine_consensus_history_frames = max(20, int(os.getenv("AI_REFINE_CONSENSUS_HISTORY_FRAMES", "120")))
+        self.bicycle_consensus_conf = float(os.getenv("AI_BICYCLE_CONSENSUS_CONF", "0.60"))
+        self.truck_consensus_conf = float(os.getenv("AI_TRUCK_CONSENSUS_CONF", "0.52"))
+        self._refine_consensus = RefineEvidenceAccumulator(history_frames=self.refine_consensus_history_frames)
         self.human_guard_enabled = os.getenv("AI_HUMAN_GUARD", "1").strip().lower() not in {"0", "false", "no"}
         self.human_guard_model_name = os.getenv("AI_HUMAN_GUARD_MODEL", self.recall_model_name)
         self.human_guard_imgsz = int(os.getenv("AI_HUMAN_GUARD_IMGSZ", "512"))
@@ -189,32 +203,67 @@ class PipelineWorker(threading.Thread):
         if not self.refine_at_crossing or self._refiner_thread is not None:
             return
 
+        def warm_model(model, ids: list[int]) -> None:
+            if self.warmup and ids and not self._stop_event.is_set():
+                dummy = np.zeros(
+                    (min(self.refine_imgsz, self.imgsz), min(self.refine_imgsz, self.imgsz), 3),
+                    dtype=np.uint8,
+                )
+                model.predict(
+                    dummy,
+                    conf=0.10,
+                    classes=ids,
+                    device=device,
+                    imgsz=min(self.refine_imgsz, self.imgsz),
+                    half=use_half,
+                    verbose=False,
+                )
+
         def load_refiner() -> None:
+            # Primary/domain refiner. In Hybrid Recall this is the activated
+            # best.pt; otherwise it is the configured AI_REFINE_MODEL_NAME.
             try:
                 model = YOLO(self.refine_model_name)
                 ids = self._named_class_ids(model.names, REFINE_VEHICLE_CLASSES)
-                if self.warmup and ids and not self._stop_event.is_set():
-                    dummy = np.zeros((min(self.refine_imgsz, self.imgsz), min(self.refine_imgsz, self.imgsz), 3), dtype=np.uint8)
-                    model.predict(
-                        dummy,
-                        conf=0.10,
-                        classes=ids,
-                        device=device,
-                        imgsz=min(self.refine_imgsz, self.imgsz),
-                        half=use_half,
-                        verbose=False,
-                    )
+                warm_model(model, ids)
                 if not self._stop_event.is_set():
                     self._refiner_model = model
                     self._refine_ids = ids
                     self.state.refine_model_name = self.refine_model_name if ids else None
             except Exception:
-                # Refiner is optional. Main detector/tracker/counting must keep
-                # running even if the secondary classifier cannot warm up.
+                # Refiners are optional. Detector/tracker/counting must keep
+                # running even if a secondary model cannot load.
                 self._refiner_model = None
                 self._refine_ids = []
 
-        self._refiner_thread = threading.Thread(target=load_refiner, daemon=True, name=f"refiner-{self.payload.camera_id}")
+            # V0.5.27 Dual Refiner Consensus: when best.pt is activated, keep a
+            # general pretrained YOLO26m verifier as an independent second
+            # opinion. This is especially useful for rare bicycle/truck classes
+            # that may be under-represented in the custom training set.
+            self._general_refiner_model = None
+            self._general_refine_ids = []
+            self.state.general_refine_model_name = None
+            if (
+                self.dual_class_refine
+                and str(self.general_refine_model_name)
+                and Path(str(self.general_refine_model_name)).name != Path(str(self.refine_model_name)).name
+                and not self._stop_event.is_set()
+            ):
+                try:
+                    general = YOLO(self.general_refine_model_name)
+                    general_ids = self._named_class_ids(general.names, REFINE_VEHICLE_CLASSES)
+                    warm_model(general, general_ids)
+                    if not self._stop_event.is_set() and general_ids:
+                        self._general_refiner_model = general
+                        self._general_refine_ids = general_ids
+                        self.state.general_refine_model_name = self.general_refine_model_name
+                except Exception:
+                    self._general_refiner_model = None
+                    self._general_refine_ids = []
+
+        self._refiner_thread = threading.Thread(
+            target=load_refiner, daemon=True, name=f"refiner-{self.payload.camera_id}"
+        )
         self._refiner_thread.start()
 
     def _start_human_guard_background(self, YOLO, np, device, use_half: bool) -> None:
@@ -425,6 +474,39 @@ class PipelineWorker(threading.Thread):
             self.state.truck_class_rescues += 1
         return str(resolved_label), float(resolved_conf)
 
+    def _prefer_refinement_candidate(
+        self, target_label: str, candidates: list[tuple[str, float]]
+    ) -> tuple[str, float] | None:
+        valid = [(str(label), float(conf)) for label, conf in candidates if str(label) in VEHICLE_CLASSES]
+        if not valid:
+            return None
+        target = str(target_label)
+        family = vehicle_family(target)
+
+        # Prefer a credible minority-class correction over a very confident
+        # repeat of the recall-detector class. This lets YOLO26m disagree with
+        # best.pt on a bicycle/truck without the common motorcycle/car class
+        # automatically winning only because it has the larger confidence.
+        if family == "two-wheel" and target != "bicycle":
+            bicycles = [item for item in valid if item[0] == "bicycle"]
+            if bicycles:
+                candidate = max(bicycles, key=lambda item: item[1])
+                if candidate[1] >= self._class_policy.bicycle_refine_override_conf:
+                    return candidate
+        if family == "four-wheel" and target != "truck":
+            trucks = [item for item in valid if item[0] == "truck"]
+            if trucks:
+                candidate = max(trucks, key=lambda item: item[1])
+                if candidate[1] >= self._class_policy.truck_refine_override_conf:
+                    return candidate
+        if family == "four-wheel" and target != "bus":
+            buses = [item for item in valid if item[0] == "bus"]
+            if buses:
+                candidate = max(buses, key=lambda item: item[1])
+                if candidate[1] >= self._class_policy.heavy_refine_override_conf:
+                    return candidate
+        return max(valid, key=lambda item: item[1])
+
     def _observe_class_refiner(
         self,
         track_id: int,
@@ -437,10 +519,14 @@ class PipelineWorker(threading.Thread):
         *,
         force: bool = False,
     ) -> tuple[tuple[str, float] | None, bool]:
-        """Run target-aware class refinement with per-track/frame caching.
+        """Run domain + general refiners and fuse evidence across frames.
 
-        Returns (refinement, did_infer). A same-frame crossing reuses a pre-gate
-        refinement instead of spending a second best.pt inference.
+        V0.5.26 used exactly one target-aware refiner. With an activated custom
+        best.pt that means the configured YOLO26m verifier is replaced, which is
+        risky for rare classes that may have few custom examples. V0.5.27 keeps
+        best.pt as the domain opinion *and* runs an independent general verifier.
+        Repeated low-confidence bicycle/truck evidence can then reach consensus
+        across distinct source frames instead of requiring one lucky frame.
         """
         tid = int(track_id)
         frame_idx = int(frame_index)
@@ -452,16 +538,54 @@ class PipelineWorker(threading.Thread):
         interval = self.class_refine_heavy_interval if vehicle_family(target_label) == "four-wheel" else self.class_refine_interval
         if not force and frame_idx - last < interval:
             return None, False
-        if self._refiner_model is None or not self._refine_ids:
+        if self._refiner_model is None and self._general_refiner_model is None:
             return None, False
 
         self._class_refine_last_check[tid] = frame_idx
         self.state.class_refine_checks += 1
-        refined = self._refine_crossing_label(
-            frame, rect, device, use_half, self._refine_ids, target_label=target_label
+        observations: list[tuple[str, float]] = []
+        did_infer = False
+
+        if self._refiner_model is not None and self._refine_ids:
+            self.state.domain_refine_checks += 1
+            did_infer = True
+            domain = self._refine_crossing_label(
+                frame, rect, device, use_half, self._refine_ids,
+                target_label=target_label, model=self._refiner_model,
+            )
+            if domain is not None:
+                observations.append(domain)
+                self._refine_consensus.update(tid, frame_idx, domain[0], domain[1], "domain")
+
+        if self._general_refiner_model is not None and self._general_refine_ids:
+            self.state.general_refine_checks += 1
+            did_infer = True
+            general = self._refine_crossing_label(
+                frame, rect, device, use_half, self._general_refine_ids,
+                target_label=target_label, model=self._general_refiner_model,
+            )
+            if general is not None:
+                observations.append(general)
+                self._refine_consensus.update(tid, frame_idx, general[0], general[1], "general")
+
+        consensus = self._refine_consensus.minority_consensus(
+            tid,
+            frame_idx,
+            target_label,
+            min_hits=self.refine_consensus_min_hits,
+            bicycle_confidence=self.bicycle_consensus_conf,
+            truck_confidence=self.truck_consensus_conf,
         )
+        if consensus is not None:
+            if consensus[0] != str(target_label) and tid not in self._class_consensus_rescue_tracks:
+                self._class_consensus_rescue_tracks.add(tid)
+                self.state.class_consensus_rescues += 1
+            refined = consensus
+        else:
+            refined = self._prefer_refinement_candidate(target_label, observations)
+
         self._class_refine_last_observation[tid] = (frame_idx, refined)
-        return refined, True
+        return refined, did_infer
 
     @staticmethod
     def _looks_like_custom_model(model_name: str) -> bool:
@@ -580,12 +704,27 @@ class PipelineWorker(threading.Thread):
             self.state.detector_model_name = self.detector_model_name
             self.state.hybrid_mode = self.hybrid_mode
             self.state.refine_model_name = None
+            self.state.general_refine_model_name = None
             if self.refine_background_warmup:
                 self._start_refiner_background(YOLO, np, device, use_half)
             elif self.refine_at_crossing:
                 self._refiner_model = YOLO(self.refine_model_name)
                 self._refine_ids = self._named_class_ids(self._refiner_model.names, REFINE_VEHICLE_CLASSES)
                 self.state.refine_model_name = self.refine_model_name if self._refine_ids else None
+                if (
+                    self.dual_class_refine
+                    and Path(str(self.general_refine_model_name)).name != Path(str(self.refine_model_name)).name
+                ):
+                    try:
+                        self._general_refiner_model = YOLO(self.general_refine_model_name)
+                        self._general_refine_ids = self._named_class_ids(
+                            self._general_refiner_model.names, REFINE_VEHICLE_CLASSES
+                        )
+                        if self._general_refine_ids:
+                            self.state.general_refine_model_name = self.general_refine_model_name
+                    except Exception:
+                        self._general_refiner_model = None
+                        self._general_refine_ids = []
             self._start_human_guard_background(YOLO, np, device, use_half)
             self.state.imgsz = self.imgsz
             self.state.half_precision = use_half
@@ -754,6 +893,17 @@ class PipelineWorker(threading.Thread):
                             if remembered is not None:
                                 display_label = remembered[0]
 
+                        # V0.5.27 exposes detection-vs-count truth explicitly.
+                        # Seeing a truck is not the same thing as counting one:
+                        # only a truck track that later crosses the yellow line
+                        # may increment counts_by_type["truck"].
+                        if display_label == "truck" and int(track_id) not in self._truck_tracks_seen:
+                            self._truck_tracks_seen.add(int(track_id))
+                            self.state.truck_tracks_seen = len(self._truck_tracks_seen)
+                        if display_label == "bicycle" and int(track_id) not in self._bicycle_tracks_seen:
+                            self._bicycle_tracks_seen.add(int(track_id))
+                            self.state.bicycle_tracks_seen = len(self._bicycle_tracks_seen)
+
                         # V0.5.24 Rider-aware Human Guard 2.0 compatibility is preserved.
                         # V0.5.25 Transactional Human Guard 2.1.
                         # A pending two-wheel crossing is resolved on a *later*
@@ -866,6 +1016,14 @@ class PipelineWorker(threading.Thread):
                                 event_label = remembered[0]
                                 policy_conf = max(policy_conf, remembered[1])
                             event_label = event_label if event_label in VEHICLE_CLASSES else "other"
+                            if event_label == "truck":
+                                self._truck_tracks_seen.add(int(track_id))
+                                self.state.truck_tracks_seen = len(self._truck_tracks_seen)
+                                self._truck_crossing_tracks.add(int(track_id))
+                                self.state.truck_crossing_tracks = len(self._truck_crossing_tracks)
+                            elif event_label == "bicycle":
+                                self._bicycle_tracks_seen.add(int(track_id))
+                                self.state.bicycle_tracks_seen = len(self._bicycle_tracks_seen)
                             refined_conf = refined[1] if refined is not None else 0.0
                             event_confidence = max(confidence_f, policy_conf, refined_conf)
 
@@ -980,8 +1138,14 @@ class PipelineWorker(threading.Thread):
                         "class_refine_checks": self.state.class_refine_checks,
                         "class_refine_target_matches": self.state.class_refine_target_matches,
                         "class_refine_target_rejects": self.state.class_refine_target_rejects,
+                        "domain_refine_checks": self.state.domain_refine_checks,
+                        "general_refine_checks": self.state.general_refine_checks,
+                        "class_consensus_rescues": self.state.class_consensus_rescues,
                         "bicycle_class_rescues": self.state.bicycle_class_rescues,
                         "truck_class_rescues": self.state.truck_class_rescues,
+                        "bicycle_tracks_seen": self.state.bicycle_tracks_seen,
+                        "truck_tracks_seen": self.state.truck_tracks_seen,
+                        "truck_crossing_tracks": self.state.truck_crossing_tracks,
                         "video_start_rescues": self.state.video_start_rescues,
                         "human_guard_rejections": self.state.human_guard_rejections,
                         "rider_guard_rescues": self.state.rider_guard_rescues,
@@ -1076,7 +1240,7 @@ class PipelineWorker(threading.Thread):
         mapping = names.items() if isinstance(names, dict) else enumerate(names)
         return [int(idx) for idx, name in mapping if str(name) in labels]
 
-    def _refine_crossing_label(self, frame, rect, device, use_half: bool, refine_ids: list[int], target_label: str | None = None) -> tuple[str, float] | None:
+    def _refine_crossing_label(self, frame, rect, device, use_half: bool, refine_ids: list[int], target_label: str | None = None, model=None) -> tuple[str, float] | None:
         """Refine the *tracked target*, never an arbitrary object in its crop.
 
         V0.5.25 selected the highest-confidence vehicle returned from the whole
@@ -1085,7 +1249,8 @@ class PipelineWorker(threading.Thread):
         keeps a little context, then scores every refiner box against the original
         tracked rectangle and ignores unrelated neighbors.
         """
-        if self._refiner_model is None or not refine_ids:
+        active_model = model if model is not None else self._refiner_model
+        if active_model is None or not refine_ids:
             return None
         try:
             h, w = frame.shape[:2]
@@ -1110,7 +1275,7 @@ class PipelineWorker(threading.Thread):
             crop = frame[iy1:iy2, ix1:ix2]
             if crop.size == 0 or crop.shape[0] < 32 or crop.shape[1] < 32:
                 return None
-            predictions = self._refiner_model.predict(
+            predictions = active_model.predict(
                 crop,
                 conf=0.06,
                 classes=refine_ids,
@@ -1202,7 +1367,7 @@ class PipelineWorker(threading.Thread):
         rt = f"x{self.state.realtime_factor:.2f}" if self.state.source_fps > 0 else "live"
         cv2.putText(
             frame,
-            f"DET {self.state.detections_current_frame} | UNTRACKED {self.state.untracked_detections} | TRACK {self.state.active_tracks} | ROAD {self.state.road_tracks_current_frame} | TOTAL {self.state.total_count} | IN {self.state.in_count} | OUT {self.state.out_count} | FPS {self.state.fps:.1f} ({rt}) | {self.state.inference_ms:.0f}ms | {'HYBRID' if self.hybrid_mode else 'DIRECT'} {Path(self.detector_model_name).name} | ROI {self.detection_roi_mode.upper()} | DIRECT-X {self.state.direct_crossings} | INTERP {self.state.interpolated_crossings} | RESCUE {self.state.rescued_crossings} | ROAD-REJECT {counter.rejected_outside_road} | CONFIRM-REJECT {counter.rejected_unconfirmed_side} | COOL-REJECT {counter.rejected_cooldown} | COOL-REL {counter.adaptive_cooldown_releases} | FAST-CONF {counter.fast_confirm_rescues} | BRACKET+ {counter.bracket_confirm_rescues} | RESCUE-X {counter.rejected_rescue_validation} | CLASS-R {self.state.class_refine_checks} | BIKE+ {self.state.bicycle_class_rescues} | TRUCK+ {self.state.truck_class_rescues} | START+ {self.state.video_start_rescues} | HUMAN-X {self.state.human_guard_rejections} | RIDER+ {self.state.rider_guard_rescues} | GUARD-PENDING {self.state.human_guard_pending_crossings} | ROAD-EDGE+ {counter.road_edge_rescues}",
+            f"DET {self.state.detections_current_frame} | UNTRACKED {self.state.untracked_detections} | TRACK {self.state.active_tracks} | ROAD {self.state.road_tracks_current_frame} | TOTAL {self.state.total_count} | IN {self.state.in_count} | OUT {self.state.out_count} | FPS {self.state.fps:.1f} ({rt}) | {self.state.inference_ms:.0f}ms | {'HYBRID' if self.hybrid_mode else 'DIRECT'} {Path(self.detector_model_name).name} | ROI {self.detection_roi_mode.upper()} | DIRECT-X {self.state.direct_crossings} | INTERP {self.state.interpolated_crossings} | RESCUE {self.state.rescued_crossings} | ROAD-REJECT {counter.rejected_outside_road} | CONFIRM-REJECT {counter.rejected_unconfirmed_side} | COOL-REJECT {counter.rejected_cooldown} | COOL-REL {counter.adaptive_cooldown_releases} | FAST-CONF {counter.fast_confirm_rescues} | BRACKET+ {counter.bracket_confirm_rescues} | RESCUE-X {counter.rejected_rescue_validation} | CLASS-R {self.state.class_refine_checks} | GEN-R {self.state.general_refine_checks} | CONS+ {self.state.class_consensus_rescues} | BIKE+ {self.state.bicycle_class_rescues} | TRUCK+ {self.state.truck_class_rescues} | TRUCK-SEEN {self.state.truck_tracks_seen} | TRUCK-X {self.state.truck_crossing_tracks} | START+ {self.state.video_start_rescues} | HUMAN-X {self.state.human_guard_rejections} | RIDER+ {self.state.rider_guard_rescues} | GUARD-PENDING {self.state.human_guard_pending_crossings} | ROAD-EDGE+ {counter.road_edge_rescues}",
             (20, 32),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.62,

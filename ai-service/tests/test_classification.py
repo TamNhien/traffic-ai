@@ -106,3 +106,52 @@ def test_target_refiner_rejects_unrelated_neighbor_only() -> None:
     target = (40.0, 40.0, 140.0, 180.0)
     candidates = [RefineCandidate("motorcycle", 0.99, (180.0, 40.0, 260.0, 170.0))]
     assert select_target_refinement(target, candidates, target_family="two-wheel") is None
+
+
+def test_v0527_consensus_requires_distinct_frames() -> None:
+    from app.classification import RefineEvidenceAccumulator
+
+    evidence = RefineEvidenceAccumulator(history_frames=120)
+    evidence.update(7, 100, "bicycle", 0.55, "domain")
+    evidence.update(7, 100, "bicycle", 0.65, "general")
+    hits, fused, strongest = evidence.support(7, 100, "bicycle")
+    assert hits == 1
+    assert strongest == 0.65
+    assert fused == 0.65
+    assert evidence.minority_consensus(7, 100, "motorcycle", min_hits=2, bicycle_confidence=0.60) is None
+
+
+def test_v0527_repeated_low_bicycle_evidence_can_rescue_motorcycle_track() -> None:
+    from app.classification import RefineEvidenceAccumulator
+
+    evidence = RefineEvidenceAccumulator(history_frames=120)
+    evidence.update(11, 200, "bicycle", 0.38, "general")
+    evidence.update(11, 210, "bicycle", 0.39, "general")
+    result = evidence.minority_consensus(
+        11, 210, "motorcycle", min_hits=2, bicycle_confidence=0.60
+    )
+    assert result is not None
+    assert result[0] == "bicycle"
+    assert result[1] >= 0.60
+
+
+def test_v0527_repeated_low_truck_evidence_can_rescue_car_track() -> None:
+    from app.classification import RefineEvidenceAccumulator
+
+    evidence = RefineEvidenceAccumulator(history_frames=120)
+    evidence.update(12, 300, "truck", 0.31, "domain")
+    evidence.update(12, 320, "truck", 0.35, "general")
+    result = evidence.minority_consensus(
+        12, 320, "car", min_hits=2, truck_confidence=0.52
+    )
+    assert result is not None
+    assert result[0] == "truck"
+    assert result[1] >= 0.52
+
+
+def test_v0527_single_weak_truck_guess_does_not_promote_car() -> None:
+    from app.classification import RefineEvidenceAccumulator
+
+    evidence = RefineEvidenceAccumulator(history_frames=120)
+    evidence.update(13, 400, "truck", 0.44, "general")
+    assert evidence.minority_consensus(13, 400, "car", min_hits=2, truck_confidence=0.52) is None

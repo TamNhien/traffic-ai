@@ -34,8 +34,14 @@ class PipelineState:
     class_refine_checks: int = 0
     class_refine_target_matches: int = 0
     class_refine_target_rejects: int = 0
+    domain_refine_checks: int = 0
+    general_refine_checks: int = 0
+    class_consensus_rescues: int = 0
     bicycle_class_rescues: int = 0
     truck_class_rescues: int = 0
+    bicycle_tracks_seen: int = 0
+    truck_tracks_seen: int = 0
+    truck_crossing_tracks: int = 0
     video_start_rescues: int = 0
     human_guard_rejections: int = 0
     rider_guard_rescues: int = 0
@@ -76,6 +82,7 @@ class PipelineState:
     detector_model_name: str | None = None
     hybrid_mode: bool = False
     refine_model_name: str | None = None
+    general_refine_model_name: str | None = None
     imgsz: int | None = None
     half_precision: bool = False
     device: str = "unknown"

@@ -141,6 +141,91 @@ def select_target_refinement(
     return best
 
 
+class RefineEvidenceAccumulator:
+    """Fuse low-rate class-refiner observations across distinct source frames.
+
+    V0.5.27 uses this as a *minority-class rescue* rather than a replacement
+    tracker classifier. A single weak bicycle/truck guess is ignored, but
+    repeated target-matched evidence from distinct frames can accumulate enough
+    confidence to correct a stable motorcycle/car track. Multiple models on the
+    same source frame never count as multiple hits.
+    """
+
+    def __init__(self, history_frames: int = 120, max_observations: int = 96) -> None:
+        self.history_frames = max(8, int(history_frames))
+        self.max_observations = max(16, int(max_observations))
+        self._samples: dict[int, deque[tuple[int, str, float, str]]] = defaultdict(
+            lambda: deque(maxlen=self.max_observations)
+        )
+
+    def update(self, track_id: int, frame_index: int, label: str, confidence: float, source: str = "refiner") -> None:
+        if str(label) not in VEHICLE_CLASSES:
+            return
+        self._samples[int(track_id)].append(
+            (int(frame_index), str(label), max(0.0, min(1.0, float(confidence))), str(source))
+        )
+
+    def support(self, track_id: int, frame_index: int, label: str) -> tuple[int, float, float]:
+        """Return (distinct-frame hits, fused confidence, strongest single hit).
+
+        Same-frame predictions from domain/general refiners are collapsed by
+        taking the strongest confidence for the requested label. Confidence is
+        then fused as ``1 - product(1 - p)`` with a mild recency decay.
+        """
+
+        current = int(frame_index)
+        by_frame: dict[int, float] = {}
+        for observed_frame, observed_label, confidence, _source in self._samples.get(int(track_id), ()):  # pragma: no branch
+            age = current - int(observed_frame)
+            if age < 0 or age > self.history_frames or observed_label != str(label):
+                continue
+            decayed = max(0.0, min(1.0, float(confidence))) * (0.992 ** age)
+            by_frame[int(observed_frame)] = max(by_frame.get(int(observed_frame), 0.0), decayed)
+        if not by_frame:
+            return 0, 0.0, 0.0
+        miss_probability = 1.0
+        strongest = 0.0
+        for confidence in by_frame.values():
+            strongest = max(strongest, confidence)
+            miss_probability *= max(0.0, 1.0 - confidence)
+        return len(by_frame), 1.0 - miss_probability, strongest
+
+    def minority_consensus(
+        self,
+        track_id: int,
+        frame_index: int,
+        base_label: str,
+        *,
+        min_hits: int = 2,
+        bicycle_confidence: float = 0.60,
+        truck_confidence: float = 0.52,
+        bus_confidence: float = 0.62,
+    ) -> tuple[str, float] | None:
+        """Return a conservative correction supported on distinct frames.
+
+        The common class from the recall detector remains the default. Only
+        minority classes that are important in this camera (bicycle/truck/bus)
+        can be promoted by accumulated evidence.
+        """
+
+        base = str(base_label)
+        hits_required = max(2, int(min_hits))
+        if base in TWO_WHEEL_CLASSES:
+            hits, fused, _ = self.support(track_id, frame_index, "bicycle")
+            if base != "bicycle" and hits >= hits_required and fused >= float(bicycle_confidence):
+                return "bicycle", fused
+            return None
+
+        if base in HEAVY_CLASSES:
+            truck_hits, truck_fused, _ = self.support(track_id, frame_index, "truck")
+            if base != "truck" and truck_hits >= hits_required and truck_fused >= float(truck_confidence):
+                return "truck", truck_fused
+            bus_hits, bus_fused, _ = self.support(track_id, frame_index, "bus")
+            if base != "bus" and bus_hits >= hits_required and bus_fused >= float(bus_confidence):
+                return "bus", bus_fused
+        return None
+
+
 class TrackLabelSmoother:
     def __init__(self, history: int = 24) -> None:
         self.history = max(3, history)
