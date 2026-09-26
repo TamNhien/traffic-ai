@@ -20,7 +20,7 @@ def test_root_metadata() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["name"] == "Traffic AI"
-    assert payload["version"] == "0.5.30"
+    assert payload["version"] == "0.5.31"
     assert payload["docs"] == "/docs"
     assert payload["health"] == "/api/health"
 
@@ -157,5 +157,13 @@ def test_benchmark_clone_compatibility_rejects_different_line() -> None:
     assert "vạch đếm" in reason
 
 
-def test_v0530_version() -> None:
-    assert app.version == "0.5.30"
+def test_v0531_version() -> None:
+    assert app.version == "0.5.31"
+
+
+def test_v0531_startup_crossing_signature_guard_is_narrow() -> None:
+    from app.api.routes import _startup_crossing_signature_duplicate
+    assert _startup_crossing_signature_duplicate(0.36, 0.16, 0.012) is True
+    assert _startup_crossing_signature_duplicate(0.36, 0.16, 0.080) is False
+    assert _startup_crossing_signature_duplicate(1.20, 0.90, 0.010) is False
+    assert _startup_crossing_signature_duplicate(0.95, 0.10, 0.010) is False

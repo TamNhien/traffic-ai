@@ -419,3 +419,33 @@ def test_v0530_merge_track_preserves_preline_history_for_four_wheel_alias() -> N
     counter.merge_track(10, 20)
     direction = counter.update(20, (500.0, 460.0), 1000, 800, frame_index=12)
     assert direction in {"in", "out"}
+
+
+def test_v0531_crossing_frame_is_interpolated_at_physical_gate_intersection() -> None:
+    counter = LineCrossingCounter(CountingLine(0.1, 0.5, 0.9, 0.5), side_confirm_samples=1)
+    assert counter.update(1601, (50, 20), 100, 100, 100) is None
+    assert counter.update(1601, (50, 80), 100, 100, 120) == "in"
+    crossing_frame = counter.crossing_frame_for(1601)
+    assert crossing_frame is not None
+    assert abs(crossing_frame - 110.0) < 1e-6
+
+
+def test_v0531_heavy_rescue_exposes_interpolated_crossing_frame() -> None:
+    from app.counting import HeavyVehicleCrossingRescuer
+
+    rescue = HeavyVehicleCrossingRescuer(
+        CountingLine(0.1, 0.5, 0.9, 0.5),
+        history_gap_frames=90,
+        min_normal_ratio=0.20,
+    )
+    assert rescue.update(1602, (50, 20), 100, 100, 200) is None
+    assert rescue.update(1602, (50, 80), 100, 100, 240) is not None
+    crossing_frame = rescue.crossing_frame_for(1602)
+    assert crossing_frame is not None
+    assert abs(crossing_frame - 220.0) < 1e-6
+
+
+def test_v0531_external_crossing_preserves_geometric_source_frame() -> None:
+    counter = LineCrossingCounter(CountingLine(0.1, 0.5, 0.9, 0.5))
+    assert counter.register_external_crossing(1603, "out", 260, (50, 50), mode="rescued", crossing_frame=251.25)
+    assert abs((counter.crossing_frame_for(1603) or 0.0) - 251.25) < 1e-6

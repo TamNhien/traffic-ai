@@ -186,6 +186,25 @@ def segments_intersect(a: Point, b: Point, c: Point, d: Point, eps: float = 1e-6
     return segment_crossing_point(a, b, c, d, segment_margin=0.0, eps=eps) is not None
 
 
+def crossing_frame_between(start: "_GateSample", end: "_GateSample", crossing: Point) -> float:
+    """Estimate the source-frame position where a tracked segment hits the gate.
+
+    Event persistence used to stamp the *confirmation* frame. For rescued/interpolated
+    tracks that can be many frames after the physical line intersection, which turns one
+    real crossing into a benchmark miss + false-positive pair. Project the gate
+    intersection onto the observed motion segment and interpolate the frame index.
+    """
+    dx = float(end.point[0] - start.point[0])
+    dy = float(end.point[1] - start.point[1])
+    denom = dx * dx + dy * dy
+    if denom <= 1e-9 or end.frame_index <= start.frame_index:
+        return float(end.frame_index)
+    ux = float(crossing[0] - start.point[0])
+    uy = float(crossing[1] - start.point[1])
+    alpha = max(0.0, min(1.0, (ux * dx + uy * dy) / denom))
+    return float(start.frame_index) + alpha * float(end.frame_index - start.frame_index)
+
+
 @dataclass(slots=True)
 class _GateSample:
     frame_index: int
@@ -252,6 +271,7 @@ class HeavyVehicleCrossingRescuer:
         self.rejected_road = 0
         self.rejected_motion = 0
         self.rejected_segment = 0
+        self._last_crossing_frame: dict[int, float] = {}
 
     def update(
         self,
@@ -323,9 +343,13 @@ class HeavyVehicleCrossingRescuer:
                 return None
 
         state.counted_directions.add(direction)
+        self._last_crossing_frame[int(track_id)] = crossing_frame_between(previous, sample, crossing)
         self.rescues += 1
         state.history = deque([sample], maxlen=128)
         return direction, crossing
+
+    def crossing_frame_for(self, track_id: int) -> float | None:
+        return self._last_crossing_frame.get(int(track_id))
 
     def merge_track(self, source_track_id: int, target_track_id: int) -> None:
         source = int(source_track_id)
@@ -338,11 +362,14 @@ class HeavyVehicleCrossingRescuer:
         dst = self._tracks.get(target)
         if dst is None:
             self._tracks[target] = src
-            return
-        samples = list(dst.history) + list(src.history)
-        samples.sort(key=lambda sample: sample.frame_index)
-        dst.history = deque(samples[-128:], maxlen=128)
-        dst.counted_directions.update(src.counted_directions)
+        else:
+            samples = list(dst.history) + list(src.history)
+            samples.sort(key=lambda sample: sample.frame_index)
+            dst.history = deque(samples[-128:], maxlen=128)
+            dst.counted_directions.update(src.counted_directions)
+        if source in self._last_crossing_frame:
+            self._last_crossing_frame[target] = self._last_crossing_frame[source]
+            self._last_crossing_frame.pop(source, None)
 
 
 class LineCrossingCounter:
@@ -429,6 +456,7 @@ class LineCrossingCounter:
         self.rejected_rescue_validation = 0
         self.adaptive_cooldown_releases = 0
         self._last_crossing_point: dict[int, Point] = {}
+        self._last_crossing_frame: dict[int, float] = {}
 
     def update(
         self,
@@ -720,6 +748,7 @@ class LineCrossingCounter:
         state.last_count_frame = sample.frame_index
         state.max_abs_distance_since_count = 0.0
         self._last_crossing_point[int(track_id)] = crossing
+        self._last_crossing_frame[int(track_id)] = crossing_frame_between(crossing_start, crossing_end, crossing)
 
         # Crossing quality is classified from actual observation continuity.
         # DIRECT      = consecutive observations bracket the gate.
@@ -768,6 +797,7 @@ class LineCrossingCounter:
         crossing_point: Point,
         *,
         mode: str = "rescued",
+        crossing_frame: float | None = None,
     ) -> bool:
         """Register a crossing proven by a stricter secondary gate.
 
@@ -790,6 +820,7 @@ class LineCrossingCounter:
         state.last_count_frame = int(frame_index)
         state.max_abs_distance_since_count = 0.0
         self._last_crossing_point[tid] = crossing_point
+        self._last_crossing_frame[tid] = float(crossing_frame) if crossing_frame is not None else float(frame_index)
         resolved_mode = mode if mode in {"direct", "interpolated", "rescued"} else "rescued"
         self._last_crossing_mode[tid] = resolved_mode
         self._last_origin_rescue.discard(tid)
@@ -809,6 +840,9 @@ class LineCrossingCounter:
     def crossing_point_for(self, track_id: int) -> Point | None:
         return self._last_crossing_point.get(int(track_id))
 
+    def crossing_frame_for(self, track_id: int) -> float | None:
+        return self._last_crossing_frame.get(int(track_id))
+
     def revoke_last_crossing(self, track_id: int, direction: str) -> None:
         """Undo the most recent crossing when a downstream semantic guard rejects it.
 
@@ -822,6 +856,7 @@ class LineCrossingCounter:
         was_origin_rescue = track_id in self._last_origin_rescue
         self._last_origin_rescue.discard(track_id)
         self._last_crossing_point.pop(track_id, None)
+        self._last_crossing_frame.pop(track_id, None)
         if state is not None:
             state.counted_directions.discard(str(direction))
             state.armed = False
@@ -881,6 +916,9 @@ class LineCrossingCounter:
         if source in self._last_crossing_point:
             self._last_crossing_point[target] = self._last_crossing_point[source]
         self._last_crossing_point.pop(source, None)
+        if source in self._last_crossing_frame:
+            self._last_crossing_frame[target] = self._last_crossing_frame[source]
+        self._last_crossing_frame.pop(source, None)
         if source in self._last_origin_rescue:
             self._last_origin_rescue.add(target)
             self._last_origin_rescue.discard(source)

@@ -547,6 +547,20 @@ def camera_road_proposal(camera_id: int, db: Session = Depends(get_db)) -> dict:
         raise HTTPException(status_code=502, detail=f"Không lấy được đề xuất Road Zone từ AI Service: {exc}") from exc
 
 
+def _startup_crossing_signature_duplicate(
+    source_time_seconds: float,
+    other_time_seconds: float,
+    distance: float,
+) -> bool:
+    """Narrow V0.5.31 guard for one bootstrap vehicle exposed as two raw IDs."""
+    return (
+        source_time_seconds <= 1.0
+        and other_time_seconds <= 1.0
+        and abs(source_time_seconds - other_time_seconds) <= 0.45
+        and distance <= 0.040
+    )
+
+
 @router.post("/internal/events", response_model=VehicleEventRead, status_code=201)
 def internal_event(payload: VehicleEventCreate, response: Response, x_ai_token: str | None = Header(default=None), db: Session = Depends(get_db)) -> VehicleEvent:
     _assert_ai_token(x_ai_token)
@@ -624,6 +638,22 @@ def internal_event(payload: VehicleEventCreate, response: Response, x_ai_token: 
             dy = float(payload.crossing_y) - float(other.crossing_y)
             distance = (dx * dx + dy * dy) ** 0.5
             time_delta = abs(float(payload.source_time_seconds) - float(other.source_time_seconds or 0.0))
+
+            # V0.5.31 startup ghost pair guard. Local video can legitimately start
+            # with one vehicle already straddling the gate; tracker/bootstrap may
+            # briefly expose two raw IDs for that same object. Suppress only an
+            # extremely-near same-direction/same-family pair inside the first
+            # second, leaving spatially distinct simultaneous vehicles intact.
+            startup_pair = _startup_crossing_signature_duplicate(
+                float(payload.source_time_seconds),
+                float(other.source_time_seconds or 0.0),
+                distance,
+            )
+            if startup_pair:
+                response.headers["X-TrafficAI-Deduplicated"] = "1"
+                response.headers["X-TrafficAI-Dedup-Reason"] = "startup-crossing-signature"
+                return other
+
             if time_delta <= 0.22 and distance <= 0.025:
                 response.headers["X-TrafficAI-Deduplicated"] = "1"
                 response.headers["X-TrafficAI-Dedup-Reason"] = "crossing-signature"

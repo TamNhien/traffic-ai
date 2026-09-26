@@ -61,6 +61,7 @@ class _PendingGuardCrossing:
     crossing_x: float | None
     crossing_y: float | None
     snapshot_frame: object
+    observed_frame_index: int | None = None
 
 
 class PipelineWorker(threading.Thread):
@@ -437,7 +438,7 @@ class PipelineWorker(threading.Thread):
             self.state.rescued_crossings += 1
 
     def _commit_guard_crossing(self, cv2, pending: _PendingGuardCrossing) -> None:
-        snapshot = self._save_crossing_snapshot(cv2, pending.snapshot_frame, pending.frame_index)
+        snapshot = self._save_crossing_snapshot(cv2, pending.snapshot_frame, pending.observed_frame_index or pending.frame_index)
         self._record_committed_crossing(pending.label, pending.direction, pending.crossing_method)
         self._event_dispatcher.submit(
             self._event_payload(
@@ -1129,8 +1130,10 @@ class PipelineWorker(threading.Thread):
                         )
                         if direction is None and heavy_center_candidate is not None:
                             heavy_direction, heavy_crossing_point = heavy_center_candidate
+                            heavy_crossing_frame = heavy_rescuer.crossing_frame_for(track_id) if heavy_rescuer is not None else None
                             if counter.register_external_crossing(
-                                track_id, heavy_direction, frame_index, heavy_crossing_point, mode="rescued"
+                                track_id, heavy_direction, frame_index, heavy_crossing_point, mode="rescued",
+                                crossing_frame=heavy_crossing_frame,
                             ):
                                 direction = heavy_direction
                                 self._heavy_center_rescue_tracks.add(int(track_id))
@@ -1219,7 +1222,15 @@ class PipelineWorker(threading.Thread):
                             refined_conf = refined[1] if refined is not None else 0.0
                             event_confidence = max(confidence_f, policy_conf, refined_conf)
 
-                            source_time_seconds = ((frame_index - 1) / self.state.source_fps) if self.state.source_fps > 0 else None
+                            crossing_frame_float = counter.crossing_frame_for(track_id)
+                            event_frame_index = max(1, int(round(crossing_frame_float))) if crossing_frame_float is not None else frame_index
+                            source_time_seconds = (
+                                ((crossing_frame_float - 1.0) / self.state.source_fps)
+                                if crossing_frame_float is not None and self.state.source_fps > 0
+                                else (((frame_index - 1) / self.state.source_fps) if self.state.source_fps > 0 else None)
+                            )
+                            if crossing_frame_float is not None and abs(float(crossing_frame_float) - float(frame_index)) >= 0.50:
+                                self.state.crossing_time_corrections += 1
                             crossing_method = counter.crossing_mode_for(track_id)
                             crossing_point = counter.crossing_point_for(track_id)
                             crossing_x = (crossing_point[0] / width) if crossing_point is not None and width > 0 else None
@@ -1249,7 +1260,8 @@ class PipelineWorker(threading.Thread):
                                         label=event_label,
                                         direction=direction,
                                         confidence=event_confidence,
-                                        frame_index=frame_index,
+                                        frame_index=event_frame_index,
+                                        observed_frame_index=frame_index,
                                         source_time_seconds=source_time_seconds,
                                         crossing_method=crossing_method,
                                         crossing_x=crossing_x,
@@ -1262,7 +1274,7 @@ class PipelineWorker(threading.Thread):
                             self._record_committed_crossing(event_label, direction, crossing_method)
                             self.state.rejected_outside_road = counter.rejected_outside_road
                             pending_crossing_events.append((
-                                track_id, event_label, direction, event_confidence, frame_index,
+                                track_id, event_label, direction, event_confidence, event_frame_index,
                                 source_time_seconds, crossing_method, crossing_x, crossing_y,
                             ))
                 elif boxes is not None and len(boxes) > 0:
@@ -1286,7 +1298,7 @@ class PipelineWorker(threading.Thread):
                 # on the very next distinct frame.
                 expired_guard_crossings = [
                     pending for pending in self._pending_guard_crossings.values()
-                    if frame_index - pending.frame_index >= self.human_guard_pending_max_frames
+                    if frame_index - (pending.observed_frame_index or pending.frame_index) >= self.human_guard_pending_max_frames
                 ]
                 for pending in expired_guard_crossings:
                     self._drop_guard_crossing(counter, pending, expired=True)
@@ -1343,6 +1355,7 @@ class PipelineWorker(threading.Thread):
                         "heavy_stitch_recoveries": self.state.heavy_stitch_recoveries,
                         "four_wheel_duplicate_suppressed": self.state.four_wheel_duplicate_suppressed,
                         "video_start_rescues": self.state.video_start_rescues,
+                        "crossing_time_corrections": self.state.crossing_time_corrections,
                         "human_guard_rejections": self.state.human_guard_rejections,
                         "rider_guard_rescues": self.state.rider_guard_rescues,
                         "human_guard_pending_crossings": self.state.human_guard_pending_crossings,
@@ -1563,7 +1576,7 @@ class PipelineWorker(threading.Thread):
         rt = f"x{self.state.realtime_factor:.2f}" if self.state.source_fps > 0 else "live"
         cv2.putText(
             frame,
-            f"DET {self.state.detections_current_frame} | UNTRACKED {self.state.untracked_detections} | TRACK {self.state.active_tracks} | ROAD {self.state.road_tracks_current_frame} | TOTAL {self.state.total_count} | IN {self.state.in_count} | OUT {self.state.out_count} | FPS {self.state.fps:.1f} ({rt}) | {self.state.inference_ms:.0f}ms | {'HYBRID' if self.hybrid_mode else 'DIRECT'} {Path(self.detector_model_name).name} | ROI {self.detection_roi_mode.upper()} | DIRECT-X {self.state.direct_crossings} | INTERP {self.state.interpolated_crossings} | RESCUE {self.state.rescued_crossings} | ROAD-REJECT {counter.rejected_outside_road} | CONFIRM-REJECT {counter.rejected_unconfirmed_side} | COOL-REJECT {counter.rejected_cooldown} | COOL-REL {counter.adaptive_cooldown_releases} | FAST-CONF {counter.fast_confirm_rescues} | BRACKET+ {counter.bracket_confirm_rescues} | RESCUE-X {counter.rejected_rescue_validation} | CLASS-R {self.state.class_refine_checks} | GEN-R {self.state.general_refine_checks} | CONS+ {self.state.class_consensus_rescues} | BIKE+ {self.state.bicycle_class_rescues} | TRUCK+ {self.state.truck_class_rescues} | TRUCK-SEEN {self.state.truck_tracks_seen} | TRUCK-X {self.state.truck_crossing_tracks} | HEAVY-A {self.state.heavy_anchor_tracks} | HEAVY-C+ {self.state.heavy_center_rescues} | HEAVY-STITCH {self.state.heavy_stitch_recoveries} | 4W-DUP {self.state.four_wheel_duplicate_suppressed} | START+ {self.state.video_start_rescues} | HUMAN-X {self.state.human_guard_rejections} | RIDER+ {self.state.rider_guard_rescues} | GUARD-PENDING {self.state.human_guard_pending_crossings} | ROAD-EDGE+ {counter.road_edge_rescues}",
+            f"DET {self.state.detections_current_frame} | UNTRACKED {self.state.untracked_detections} | TRACK {self.state.active_tracks} | ROAD {self.state.road_tracks_current_frame} | TOTAL {self.state.total_count} | IN {self.state.in_count} | OUT {self.state.out_count} | FPS {self.state.fps:.1f} ({rt}) | {self.state.inference_ms:.0f}ms | {'HYBRID' if self.hybrid_mode else 'DIRECT'} {Path(self.detector_model_name).name} | ROI {self.detection_roi_mode.upper()} | DIRECT-X {self.state.direct_crossings} | INTERP {self.state.interpolated_crossings} | RESCUE {self.state.rescued_crossings} | ROAD-REJECT {counter.rejected_outside_road} | CONFIRM-REJECT {counter.rejected_unconfirmed_side} | COOL-REJECT {counter.rejected_cooldown} | COOL-REL {counter.adaptive_cooldown_releases} | FAST-CONF {counter.fast_confirm_rescues} | BRACKET+ {counter.bracket_confirm_rescues} | RESCUE-X {counter.rejected_rescue_validation} | CLASS-R {self.state.class_refine_checks} | GEN-R {self.state.general_refine_checks} | CONS+ {self.state.class_consensus_rescues} | BIKE+ {self.state.bicycle_class_rescues} | TRUCK+ {self.state.truck_class_rescues} | TRUCK-SEEN {self.state.truck_tracks_seen} | TRUCK-X {self.state.truck_crossing_tracks} | HEAVY-A {self.state.heavy_anchor_tracks} | HEAVY-C+ {self.state.heavy_center_rescues} | HEAVY-STITCH {self.state.heavy_stitch_recoveries} | 4W-DUP {self.state.four_wheel_duplicate_suppressed} | START+ {self.state.video_start_rescues} | TIME-SYNC {self.state.crossing_time_corrections} | HUMAN-X {self.state.human_guard_rejections} | RIDER+ {self.state.rider_guard_rescues} | GUARD-PENDING {self.state.human_guard_pending_crossings} | ROAD-EDGE+ {counter.road_edge_rescues}",
             (20, 32),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.62,

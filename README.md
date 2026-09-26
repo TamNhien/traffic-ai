@@ -1,3 +1,65 @@
+# Traffic AI V0.5.31 — Geometric Crossing Time + Startup Ghost Guard ⏱️🎯
+
+V0.5.31 được tạo từ benchmark thật V0.5.30 / GT 149. V0.5.30 đã sửa đúng semantic van/xe tải: Dashboard hiện `Xe tải = 2`, `Xe tải xác nhận = 2`, `Khóa class tải = 2`, `Xe tải cắt vạch = 2`. Tuy nhiên tổng `AI = 149` vẫn chỉ khớp `130`, còn `19 lọt + 19 dư`.
+
+Dữ liệu benchmark cho thấy một nút thắt mới nằm ở **thời điểm event** chứ không chỉ ở việc có/không có crossing. Ví dụ GT `02:39.148` bị báo lọt trong khi AI có event `02:39.920`: lệch `0.772 s`, chỉ hơn cửa sổ ghép `0.75 s` đúng `0.022 s`. Với rescued/interpolated track, runtime cũ đóng dấu thời gian ở frame *xác nhận* sau vạch thay vì frame mà trajectory thực sự cắt vạch. Điều này có thể biến một xe thật thành đồng thời `1 lọt + 1 dư`.
+
+## 1. Geometric Crossing Time
+
+Mỗi crossing giờ lưu thêm vị trí frame thực tại giao điểm giữa trajectory và finite counting line:
+
+```text
+observation trước vạch @ frame A
+            ↓
+       giao điểm thật
+            ↓
+observation sau vạch @ frame B
+
+source_time = nội suy A ↔ B tại giao điểm
+```
+
+`VehicleEvent.source_time_seconds` không còn mặc định dùng frame xác nhận `B`. Direct crossing chỉ dịch rất ít; interpolated/rescued crossing có thể dịch ngược đúng vài frame hoặc hàng chục frame. Geometry/count không đổi, chỉ timestamp persistence được đưa về thời điểm vật lý cắt vạch.
+
+Telemetry mới:
+
+```text
+Time-sync
+```
+
+chỉ tăng khi timestamp được hiệu chỉnh ít nhất `0.5 frame`.
+
+## 2. Heavy-center cũng dùng crossing time thật
+
+`HeavyVehicleCrossingRescuer` V0.5.29/V0.5.30 giờ cũng nội suy crossing frame từ center trajectory. Khi van/truck bị cứu qua gap, event giữ class/canonical track của V0.5.30 nhưng timestamp phản ánh giao điểm thật, không phải frame cuối của gap.
+
+## 3. Startup Ghost Guard
+
+Benchmark V0.5.30 vẫn còn event dư `00:00.360` trong khi đầu clip đã có crossing thật gần đó. V0.5.31 thêm một backend signature guard cực hẹp chỉ trong 1 giây đầu video:
+
+```text
+same direction + same vehicle family
++ time <= 0.45 s
++ crossing point distance <= 0.040 normalized
+→ startup-crossing-signature dedup
+```
+
+Guard này không nới cho toàn clip và không gộp hai xe cách xa nhau trên vạch.
+
+## 4. Human Guard transaction vẫn giữ đúng event-time
+
+Nếu crossing hai bánh phải chờ frame sau để xác nhận rider/pedestrian, pending transaction giữ riêng `observed_frame_index` để timeout không bị ảnh hưởng bởi timestamp nội suy; event commit cuối vẫn dùng source frame/time tại giao điểm thật.
+
+Database:
+
+```text
+0044_truck_lock_v0530
+        ↓
+0045_cross_time_v0531
+schema_version = 0.5.31
+```
+
+---
+
 # Traffic AI V0.5.30 — Truck Semantic Lock + Canonical 4W Fusion 🚚🔒
 
 V0.5.30 được tạo từ benchmark thật V0.5.29 / GT 149. Ảnh snapshot cho thấy **cùng canonical track van `#286423`** đã từng là `truck` với semantic certainty cao khi còn ở xa, nhưng ngay sát vạch lại rơi về `car`. Dashboard đồng thời hiển thị `Gộp car/truck 2172`, vì telemetry cũ cộng lại cùng một cặp box ở mọi frame nên dễ bị hiểu nhầm là số xe.
