@@ -300,18 +300,18 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.29") { throw "VERSION phải là 0.5.29, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0043_heavy_track_v0529.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0043_heavy_track_v0529.py." }
+  if ($version -ne "0.5.30") { throw "VERSION phải là 0.5.30, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0044_truck_lock_v0530.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0044_truck_lock_v0530.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0043_heavy_track_v0529"' -or $migrationText -notmatch 'down_revision = "0042_origin_heavy_v0528"' -or $migrationText -notmatch "value='0.5.29'") {
-    throw "Migration 0043_heavy_track_v0529 không đúng contract V0.5.29."
+  if ($migrationText -notmatch 'revision = "0044_truck_lock_v0530"' -or $migrationText -notmatch 'down_revision = "0043_heavy_track_v0529"' -or $migrationText -notmatch "value='0.5.30'") {
+    throw "Migration 0044_truck_lock_v0530 không đúng contract V0.5.30."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
 
 function Assert-AlembicRevisionSafetyContract {
-  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.29" -ForegroundColor Cyan
+  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.30" -ForegroundColor Cyan
   $versionsDir = Join-Path $root "backend\alembic\versions"
   $bad = @()
   Get-ChildItem $versionsDir -Filter "*.py" | ForEach-Object {
@@ -335,7 +335,7 @@ function Assert-AlembicRevisionSafetyContract {
   if ($v17 -notmatch 'revision = "0017_ai_test_dep_v053"') {
     throw "Migration V0.5.3 chưa dùng revision ID rút gọn an toàn."
   }
-  Write-Host "[OK] Alembic revision-length safety V0.5.29" -ForegroundColor Green
+  Write-Host "[OK] Alembic revision-length safety V0.5.30" -ForegroundColor Green
 }
 
 
@@ -1055,7 +1055,7 @@ function Assert-DualRefinerConsensusV0527Contract {
   }
   # Historical V0.5.27 contract must validate semantic telemetry, not a UI slogan that
   # newer releases are allowed to rename. Keep this forward-compatible with V0.5.29+.
-  if ($frontend -notmatch 'general_refine_checks' -or $frontend -notmatch 'truck_tracks_seen' -or $frontend -notmatch 'truck_crossing_tracks' -or $frontend -notmatch 'Refiner chung' -or $frontend -notmatch 'Xe tải thấy' -or $frontend -notmatch 'Xe tải cắt vạch') {
+  if ($frontend -notmatch 'general_refine_checks' -or $frontend -notmatch 'truck_tracks_seen' -or $frontend -notmatch 'truck_crossing_tracks' -or $frontend -notmatch 'Refiner chung') {
     throw "Frontend V0.5.27 thiếu Dual Refiner / truck detection-vs-count telemetry."
   }
   if ($envExample -notmatch 'AI_DUAL_CLASS_REFINE=1' -or $envExample -notmatch 'AI_GENERAL_REFINE_MODEL_NAME=yolo26m.pt' -or $envExample -notmatch 'AI_REFINE_CONSENSUS_MIN_HITS=2' -or $envExample -notmatch 'AI_TRUCK_CONSENSUS_CONF=0.52') {
@@ -1120,10 +1120,35 @@ function Assert-HeavyTrackFusionV0529Contract {
   if ($classification -notmatch 'bicycle_min_hits' -or $classification -notmatch 'bicycle_margin' -or $classification -notmatch 'bicycle_min_strongest') { throw "V0.5.29 thiếu bicycle precision consensus guard." }
   if ($worker -notmatch 'AI_HEAVY_CENTER_RESCUE' -or $worker -notmatch 'AI_STITCH_HEAVY_MAX_GAP' -or $worker -notmatch 'AI_BICYCLE_CONSENSUS_MIN_HITS') { throw "V0.5.29 thiếu runtime wiring cho heavy rescue / bicycle precision." }
   if ($runtime -notmatch 'heavy_center_rescues' -or $runtime -notmatch 'heavy_stitch_recoveries' -or $runtime -notmatch 'four_wheel_duplicate_suppressed') { throw "Runtime V0.5.29 thiếu telemetry heavy track fusion." }
-  if ($frontend -notmatch 'Heavy Track Fusion \+ Center-Gate Rescue' -or $frontend -notmatch 'Xe lớn cứu center' -or $frontend -notmatch 'Gộp car/truck') { throw "Frontend V0.5.29 thiếu telemetry Heavy Track Fusion." }
+  if ($frontend -notmatch 'heavy_center_rescues' -or $frontend -notmatch 'heavy_stitch_recoveries' -or $frontend -notmatch 'four_wheel_duplicate_suppressed') { throw "Frontend V0.5.29 thiếu telemetry Heavy Track Fusion." }
   if ($envExample -notmatch 'AI_HEAVY_CENTER_RESCUE=1' -or $envExample -notmatch 'AI_STITCH_HEAVY_MAX_GAP=90' -or $envExample -notmatch 'AI_BICYCLE_CONSENSUS_MIN_HITS=3' -or $start -notmatch 'AI_HEAVY_CENTER_HISTORY_GAP') { throw "V0.5.29 thiếu cấu hình runtime mới." }
   if ($countingTests -notmatch 'test_v0529_heavy_center_rescue_recovers_large_van' -or $trackingTests -notmatch 'test_v0529_heavy_track_can_stitch_across_longer_van_gap' -or $dedupTests -notmatch 'test_v0529_overlapping_car_truck_for_same_van_are_aliased' -or $classTests -notmatch 'test_v0529_bicycle_consensus_rejects_when_motorcycle_refiner_support_is_similar') { throw "V0.5.29 thiếu regression tests cho van/truck hoặc bicycle precision." }
   Write-Host "[OK] Heavy Track Fusion + Center-Gate Rescue V0.5.29" -ForegroundColor Green
+}
+
+function Assert-TruckSemanticLockV0530Contract {
+  Write-Host "`n[Traffic AI] Truck Semantic Lock + Canonical 4W Fusion V0.5.30" -ForegroundColor Cyan
+  $classification = Get-Content (Join-Path $root "ai-service\app\classification.py") -Raw -Encoding UTF8
+  $counting = Get-Content (Join-Path $root "ai-service\app\counting.py") -Raw -Encoding UTF8
+  $tracking = Get-Content (Join-Path $root "ai-service\app\tracking.py") -Raw -Encoding UTF8
+  $worker = Get-Content (Join-Path $root "ai-service\app\worker.py") -Raw -Encoding UTF8
+  $runtime = Get-Content (Join-Path $root "ai-service\app\runtime.py") -Raw -Encoding UTF8
+  $routes = Get-Content (Join-Path $root "backend\app\api\routes.py") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  $envExample = Get-Content (Join-Path $root ".env.example") -Raw -Encoding UTF8
+  $start = Get-Content (Join-Path $PSScriptRoot "start.ps1") -Raw -Encoding UTF8
+  $classTests = Get-Content (Join-Path $root "ai-service\tests\test_classification.py") -Raw -Encoding UTF8
+  $trackingTests = Get-Content (Join-Path $root "ai-service\tests\test_tracking.py") -Raw -Encoding UTF8
+  $countingTests = Get-Content (Join-Path $root "ai-service\tests\test_counting.py") -Raw -Encoding UTF8
+  if ($classification -notmatch 'class TruckSemanticLock' -or $classification -notmatch 'ttl_frames') { throw "V0.5.30 thiếu Truck Semantic Lock." }
+  if ($counting -notmatch 'def merge_track' -or $tracking -notmatch 'displaced canonical') { throw "V0.5.30 thiếu canonical four-wheel state merge." }
+  if ($worker -notmatch '_merge_canonical_track_state' -or $worker -notmatch '_four_wheel_duplicate_pairs' -or $worker -notmatch 'AI_TRUCK_SEMANTIC_LOCK_FRAMES') { throw "V0.5.30 thiếu worker wiring semantic lock / unique 4W telemetry." }
+  if ($runtime -notmatch 'truck_semantic_locks') { throw "Runtime V0.5.30 thiếu truck semantic telemetry." }
+  if ($routes -notmatch 'heavy-semantic-signature') { throw "Backend V0.5.30 thiếu cross-ID CAR/TRUCK semantic dedup." }
+  if ($frontend -notmatch 'Khóa class tải' -or $frontend -notmatch 'Gộp ID 4W' -or $frontend -notmatch 'Van/xe tải đã được xác nhận') { throw "Frontend V0.5.30 thiếu warning/telemetry mới." }
+  if ($envExample -notmatch 'AI_TRUCK_SEMANTIC_LOCK_FRAMES=450' -or $start -notmatch 'AI_TRUCK_SEMANTIC_LOCK_CONF') { throw "V0.5.30 thiếu runtime defaults semantic lock." }
+  if ($classTests -notmatch 'test_v0530_truck_semantic_lock_holds_through_closeup_car_flip' -or $trackingTests -notmatch 'test_v0530_alias_reports_displaced_canonical_for_state_merge' -or $countingTests -notmatch 'test_v0530_merge_track_preserves_preline_history_for_four_wheel_alias') { throw "V0.5.30 thiếu regression tests cho van/truck." }
+  Write-Host "[OK] Truck Semantic Lock + Canonical 4W Fusion V0.5.30" -ForegroundColor Green
 }
 
 function Assert-LegacySemanticCompatibilityV0523R1 {
@@ -1187,6 +1212,7 @@ Assert-TargetAwareClassRefinerV0526Contract
 Assert-DualRefinerConsensusV0527Contract
 Assert-VideoOriginHeavyGateV0528Contract
 Assert-HeavyTrackFusionV0529Contract
+Assert-TruckSemanticLockV0530Contract
 Assert-LegacySemanticCompatibilityV0523R1
 
 Write-Host "`n[Traffic AI] Road Zone + Frame Browser V0.5.11" -ForegroundColor Cyan

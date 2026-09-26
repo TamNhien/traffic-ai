@@ -190,6 +190,20 @@ class RefineEvidenceAccumulator:
             miss_probability *= max(0.0, 1.0 - confidence)
         return len(by_frame), 1.0 - miss_probability, strongest
 
+    def merge_track(self, source_track_id: int, target_track_id: int) -> None:
+        source = int(source_track_id)
+        target = int(target_track_id)
+        if source == target:
+            return
+        source_samples = list(self._samples.pop(source, ()))
+        if not source_samples:
+            return
+        merged = list(self._samples.get(target, ())) + source_samples
+        merged.sort(key=lambda item: item[0])
+        bucket = deque(maxlen=self.max_observations)
+        bucket.extend(merged[-self.max_observations :])
+        self._samples[target] = bucket
+
     def minority_consensus(
         self,
         track_id: int,
@@ -239,6 +253,94 @@ class RefineEvidenceAccumulator:
         return None
 
 
+class TruckSemanticLock:
+    """Sticky-but-bounded truck identity for one canonical four-wheel track.
+
+    A delivery van can be confidently TRUCK while far from the gate, then flip
+    back to COCO ``car`` as the box grows near the camera.  V0.5.30 keeps a
+    truck decision only after repeated refiner evidence or strong temporal
+    primary evidence, and holds that semantic identity long enough to survive
+    the final approach to the counting line.  The lock is family-scoped and
+    expires automatically, so it cannot convert two-wheel traffic or persist
+    forever.
+    """
+
+    def __init__(
+        self,
+        *,
+        ttl_frames: int = 450,
+        min_refiner_hits: int = 2,
+        min_refiner_confidence: float = 0.62,
+        primary_hits: int = 3,
+        primary_certainty: float = 0.80,
+    ) -> None:
+        self.ttl_frames = max(30, int(ttl_frames))
+        self.min_refiner_hits = max(2, int(min_refiner_hits))
+        self.min_refiner_confidence = max(0.0, min(1.0, float(min_refiner_confidence)))
+        self.primary_hits = max(2, int(primary_hits))
+        self.primary_certainty = max(0.0, min(1.0, float(primary_certainty)))
+        self._locks: dict[int, tuple[float, int]] = {}
+
+    def observe(
+        self,
+        track_id: int,
+        frame_index: int,
+        *,
+        stable_label: str,
+        certainty: float,
+        hits: int,
+        refiner_hits: int = 0,
+        refiner_confidence: float = 0.0,
+    ) -> tuple[str, float] | None:
+        strong_primary = (
+            str(stable_label) == "truck"
+            and int(hits) >= self.primary_hits
+            and float(certainty) >= self.primary_certainty
+        )
+        strong_refiner = (
+            int(refiner_hits) >= self.min_refiner_hits
+            and float(refiner_confidence) >= self.min_refiner_confidence
+        )
+        if strong_primary or strong_refiner:
+            confidence = max(float(certainty) if strong_primary else 0.0, float(refiner_confidence))
+            previous = self._locks.get(int(track_id))
+            if previous is not None:
+                confidence = max(confidence, previous[0])
+            self._locks[int(track_id)] = (confidence, int(frame_index))
+        return self.resolve(track_id, frame_index, "truck")
+
+    def resolve(self, track_id: int, frame_index: int, primary_label: str) -> tuple[str, float] | None:
+        if vehicle_family(primary_label) != "four-wheel":
+            return None
+        entry = self._locks.get(int(track_id))
+        if entry is None:
+            return None
+        confidence, observed_frame = entry
+        if int(frame_index) - int(observed_frame) > self.ttl_frames:
+            self._locks.pop(int(track_id), None)
+            return None
+        return "truck", float(confidence)
+
+    def rebind(self, source_track_id: int, target_track_id: int) -> None:
+        source = int(source_track_id)
+        target = int(target_track_id)
+        if source == target:
+            return
+        src = self._locks.pop(source, None)
+        if src is None:
+            return
+        dst = self._locks.get(target)
+        if dst is None or (src[1], src[0]) > (dst[1], dst[0]):
+            self._locks[target] = src
+
+    def active_count(self, frame_index: int) -> int:
+        current = int(frame_index)
+        stale = [tid for tid, (_conf, observed) in self._locks.items() if current - int(observed) > self.ttl_frames]
+        for tid in stale:
+            self._locks.pop(tid, None)
+        return len(self._locks)
+
+
 class TrackLabelSmoother:
     def __init__(self, history: int = 24) -> None:
         self.history = max(3, history)
@@ -266,6 +368,19 @@ class TrackLabelSmoother:
         label = max(scores, key=lambda item: (scores[item], hits.get(item, 0)))
         total = sum(scores.values()) or 1.0
         return label, scores[label] / total, hits.get(label, 0)
+
+    def merge_track(self, source_track_id: int, target_track_id: int) -> None:
+        source = int(source_track_id)
+        target = int(target_track_id)
+        if source == target:
+            return
+        source_samples = list(self._samples.pop(source, ()))
+        if not source_samples:
+            return
+        merged = list(self._samples.get(target, ())) + source_samples
+        bucket = deque(maxlen=self.history)
+        bucket.extend(merged[-self.history :])
+        self._samples[target] = bucket
 
 
 class VehicleClassPolicy:

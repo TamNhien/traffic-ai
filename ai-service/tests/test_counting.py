@@ -407,3 +407,15 @@ def test_v0529_external_heavy_rescue_marks_primary_counter_to_prevent_duplicate(
     # The normal anchor later crosses, but the same direction is already known.
     assert counter.update(1502, (50, 80), 100, 100, 21) is None
     assert counter.in_count == 1
+
+
+def test_v0530_merge_track_preserves_preline_history_for_four_wheel_alias() -> None:
+    line = CountingLine(0.2, 0.5, 0.8, 0.5)
+    counter = LineCrossingCounter(line, side_confirm_samples=1, crossing_cooldown_frames=0)
+    assert counter.update(10, (500.0, 350.0), 1000, 800, frame_index=10) is None
+    # A cross-class duplicate was already alive as another canonical ID on the
+    # opposite side; neither ID alone has a complete trajectory.
+    assert counter.update(20, (500.0, 430.0), 1000, 800, frame_index=11) is None
+    counter.merge_track(10, 20)
+    direction = counter.update(20, (500.0, 460.0), 1000, 800, frame_index=12)
+    assert direction in {"in", "out"}

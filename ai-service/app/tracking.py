@@ -142,17 +142,23 @@ class TrackContinuityResolver:
         self._cleanup(frame_index)
         return canonical, stitched
 
-    def alias_raw_id(self, raw_id: int, canonical_id: int) -> None:
-        """Bind a duplicate ByteTrack raw ID to an existing canonical vehicle."""
+    def alias_raw_id(self, raw_id: int, canonical_id: int) -> int | None:
+        """Bind a duplicate raw ID and report any displaced canonical ID.
+
+        V0.5.30 lets the worker coalesce gate/classification state when a
+        CAR/TRUCK/BUS duplicate was already alive under another canonical ID.
+        """
         raw_id = int(raw_id)
         canonical_id = int(canonical_id)
         previous = self._raw_to_canonical.get(raw_id)
         self._raw_to_canonical[raw_id] = canonical_id
-        if previous is not None and previous != canonical_id:
+        displaced = previous if previous is not None and previous != canonical_id else None
+        if displaced is not None:
             for candidate_raw, mapped in list(self._raw_to_canonical.items()):
-                if mapped == previous:
+                if mapped == displaced:
                     self._raw_to_canonical[candidate_raw] = canonical_id
-            self._states.pop(previous, None)
+            self._states.pop(displaced, None)
+        return displaced
 
     def velocity_for(self, canonical_id: int) -> Point:
         state = self._states.get(int(canonical_id))

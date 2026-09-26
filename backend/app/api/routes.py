@@ -602,7 +602,10 @@ def internal_event(payload: VehicleEventCreate, response: Response, x_ai_token: 
         and payload.crossing_x is not None
         and payload.crossing_y is not None
     ):
-        lower = max(0.0, float(payload.source_time_seconds) - 0.22)
+        # Query the widest specialised window once. The generic guard below
+        # remains capped at 0.22 s; only cross-class four-wheel semantic flips
+        # may use the wider 0.85 s window.
+        lower = max(0.0, float(payload.source_time_seconds) - 0.85)
         recent = list(db.scalars(select(VehicleEvent).where(
             VehicleEvent.session_id == payload.session_id,
             VehicleEvent.source_time_seconds.is_not(None),
@@ -619,9 +622,28 @@ def internal_event(payload: VehicleEventCreate, response: Response, x_ai_token: 
                 continue
             dx = float(payload.crossing_x) - float(other.crossing_x)
             dy = float(payload.crossing_y) - float(other.crossing_y)
-            if (dx * dx + dy * dy) ** 0.5 <= 0.025:
+            distance = (dx * dx + dy * dy) ** 0.5
+            time_delta = abs(float(payload.source_time_seconds) - float(other.source_time_seconds or 0.0))
+            if time_delta <= 0.22 and distance <= 0.025:
                 response.headers["X-TrafficAI-Deduplicated"] = "1"
                 response.headers["X-TrafficAI-Dedup-Reason"] = "crossing-signature"
+                return other
+
+            # V0.5.30 four-wheel semantic signature: one van can cross while
+            # its class flips CAR <-> TRUCK and ByteTrack changes raw ID. The
+            # generic 0.22 s signature is intentionally tight for motorcycles;
+            # use a slightly wider window only for a cross-class four-wheel pair.
+            # This suppresses a duplicate semantic event without penalising two
+            # motorcycles or two normal cars following each other closely.
+            cross_class_four_wheel = (
+                _vehicle_family_value(other.vehicle_type) == "four-wheel"
+                and _vehicle_family_value(payload.vehicle_type) == "four-wheel"
+                and str(other.vehicle_type) != str(payload.vehicle_type)
+                and ({str(other.vehicle_type), str(payload.vehicle_type)} & {"truck", "bus"})
+            )
+            if cross_class_four_wheel and time_delta <= 0.85 and distance <= 0.050:
+                response.headers["X-TrafficAI-Deduplicated"] = "1"
+                response.headers["X-TrafficAI-Dedup-Reason"] = "heavy-semantic-signature"
                 return other
 
     response.headers["X-TrafficAI-Deduplicated"] = "0"

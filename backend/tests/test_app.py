@@ -20,7 +20,7 @@ def test_root_metadata() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["name"] == "Traffic AI"
-    assert payload["version"] == "0.5.29"
+    assert payload["version"] == "0.5.30"
     assert payload["docs"] == "/docs"
     assert payload["health"] == "/api/health"
 
@@ -155,3 +155,7 @@ def test_benchmark_clone_compatibility_rejects_different_line() -> None:
     ok, reason = _benchmark_clone_compatibility(source, target)
     assert ok is False
     assert "vạch đếm" in reason
+
+
+def test_v0530_version() -> None:
+    assert app.version == "0.5.30"

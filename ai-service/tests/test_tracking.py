@@ -122,3 +122,11 @@ def test_v0529_two_wheel_does_not_use_heavy_stitch_window() -> None:
     stitched_id, stitched = resolver.resolve(202, (540, 330), "motorcycle", 145, 1440, 810)
     assert stitched is False
     assert stitched_id == 202
+
+
+def test_v0530_alias_reports_displaced_canonical_for_state_merge() -> None:
+    resolver = TrackContinuityResolver(max_gap_frames=30, max_distance_ratio=0.14)
+    resolver.resolve(10, (100.0, 100.0), "car", 1, 1000, 800)
+    resolver.resolve(20, (500.0, 500.0), "truck", 1, 1000, 800)
+    displaced = resolver.alias_raw_id(20, 10)
+    assert displaced == 20

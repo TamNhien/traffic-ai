@@ -147,6 +147,11 @@ Ensure-EnvSetting "AI_HEAVY_CENTER_RESCUE" "1"
 Ensure-EnvSetting "AI_HEAVY_CENTER_HISTORY_GAP" "90"
 Ensure-EnvSetting "AI_HEAVY_CENTER_MIN_NORMAL_RATIO" "0.20"
 Ensure-EnvSetting "AI_HEAVY_CENTER_ROAD_MARGIN_RATIO" "0.020"
+Ensure-EnvSetting "AI_TRUCK_SEMANTIC_LOCK_FRAMES" "450"
+Ensure-EnvSetting "AI_TRUCK_SEMANTIC_LOCK_MIN_HITS" "2"
+Ensure-EnvSetting "AI_TRUCK_SEMANTIC_LOCK_CONF" "0.62"
+Ensure-EnvSetting "AI_TRUCK_SEMANTIC_PRIMARY_HITS" "3"
+Ensure-EnvSetting "AI_TRUCK_SEMANTIC_PRIMARY_CERTAINTY" "0.80"
 Ensure-EnvSetting "AI_GATE_SIDE_CONFIRM_SAMPLES" "2"
 Ensure-EnvSetting "AI_GATE_COOLDOWN_FRAMES" "60"
 Ensure-EnvSetting "AI_ROAD_ZONE_PROBE_RATIO" "0.018"
@@ -277,7 +282,7 @@ if (-not $dashboardOk -or -not $apiOk) {
 }
 
 Write-Host ""
-Write-Host "[OK] Traffic AI V0.5.29 đã khởi động." -ForegroundColor Green
+Write-Host "[OK] Traffic AI V0.5.30 đã khởi động." -ForegroundColor Green
 Write-Host "Dashboard : https://traffic-ai.test:8443"
 Write-Host "API Docs  : https://traffic-ai.test:8444/docs"
 Write-Host "PostgreSQL: 127.0.0.1:5445 / traffic_ai_db"

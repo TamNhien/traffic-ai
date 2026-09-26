@@ -17,6 +17,7 @@ from app.classification import (
     RefineCandidate,
     RefineEvidenceAccumulator,
     TrackLabelSmoother,
+    TruckSemanticLock,
     VehicleClassPolicy,
     select_target_refinement,
     vehicle_family,
@@ -93,6 +94,7 @@ class PipelineWorker(threading.Thread):
         self._class_consensus_rescue_tracks: set[int] = set()
         self._truck_tracks_seen: set[int] = set()
         self._truck_crossing_tracks: set[int] = set()
+        self._four_wheel_duplicate_pairs: set[tuple[int, int]] = set()
         self._bicycle_tracks_seen: set[int] = set()
         self._video_start_rescue_tracks: set[int] = set()
         self._heavy_anchor_tracks: set[int] = set()
@@ -164,6 +166,13 @@ class PipelineWorker(threading.Thread):
         self.bicycle_consensus_min_strong = max(0.0, float(os.getenv("AI_BICYCLE_CONSENSUS_MIN_STRONG", "0.34")))
         self.truck_consensus_conf = float(os.getenv("AI_TRUCK_CONSENSUS_CONF", "0.52"))
         self._refine_consensus = RefineEvidenceAccumulator(history_frames=self.refine_consensus_history_frames)
+        self._truck_semantic_lock = TruckSemanticLock(
+            ttl_frames=int(os.getenv("AI_TRUCK_SEMANTIC_LOCK_FRAMES", "450")),
+            min_refiner_hits=int(os.getenv("AI_TRUCK_SEMANTIC_LOCK_MIN_HITS", "2")),
+            min_refiner_confidence=float(os.getenv("AI_TRUCK_SEMANTIC_LOCK_CONF", "0.62")),
+            primary_hits=int(os.getenv("AI_TRUCK_SEMANTIC_PRIMARY_HITS", "3")),
+            primary_certainty=float(os.getenv("AI_TRUCK_SEMANTIC_PRIMARY_CERTAINTY", "0.80")),
+        )
         self.human_guard_enabled = os.getenv("AI_HUMAN_GUARD", "1").strip().lower() not in {"0", "false", "no"}
         self.human_guard_model_name = os.getenv("AI_HUMAN_GUARD_MODEL", self.recall_model_name)
         self.human_guard_imgsz = int(os.getenv("AI_HUMAN_GUARD_IMGSZ", "512"))
@@ -448,7 +457,103 @@ class PipelineWorker(threading.Thread):
         if expired:
             self.state.human_guard_pending_drops += 1
 
+    def _refresh_truck_semantic_lock(
+        self,
+        track_id: int,
+        frame_index: int,
+        stable_label: str,
+        certainty: float,
+        hits: int,
+    ) -> tuple[str, float] | None:
+        truck_hits, truck_fused, _strongest = self._refine_consensus.support(
+            track_id, frame_index, "truck"
+        )
+        locked = self._truck_semantic_lock.observe(
+            track_id,
+            frame_index,
+            stable_label=stable_label,
+            certainty=certainty,
+            hits=hits,
+            refiner_hits=truck_hits,
+            refiner_confidence=truck_fused,
+        )
+        if locked is not None:
+            self._truck_tracks_seen.add(int(track_id))
+            self.state.truck_tracks_seen = len(self._truck_tracks_seen)
+            self.state.truck_semantic_locks = len(self._truck_tracks_seen)
+        return locked
+
+    @staticmethod
+    def _move_track_key(mapping: dict, source_track_id: int, target_track_id: int) -> None:
+        source = int(source_track_id)
+        target = int(target_track_id)
+        if source == target or source not in mapping:
+            return
+        source_value = mapping.pop(source)
+        if target not in mapping:
+            mapping[target] = source_value
+            return
+        target_value = mapping[target]
+        if isinstance(source_value, int) and isinstance(target_value, int):
+            mapping[target] = max(source_value, target_value)
+            return
+        if isinstance(source_value, tuple) and isinstance(target_value, tuple):
+            # last-check tuples are (frame, value); overrides are
+            # (label, confidence, frame). Pick the newest source frame.
+            if len(source_value) == 2 and len(target_value) == 2 and isinstance(source_value[0], int) and isinstance(target_value[0], int):
+                mapping[target] = source_value if source_value[0] >= target_value[0] else target_value
+                return
+            if len(source_value) >= 3 and len(target_value) >= 3 and isinstance(source_value[-1], int) and isinstance(target_value[-1], int):
+                mapping[target] = source_value if source_value[-1] >= target_value[-1] else target_value
+
+    def _merge_canonical_track_state(
+        self,
+        source_track_id: int,
+        target_track_id: int,
+        counter: LineCrossingCounter,
+        heavy_rescuer: HeavyVehicleCrossingRescuer | None,
+    ) -> None:
+        """Merge semantic/gate state after one CAR/TRUCK/BUS ID is aliased."""
+        source = int(source_track_id)
+        target = int(target_track_id)
+        if source == target:
+            return
+        counter.merge_track(source, target)
+        if heavy_rescuer is not None:
+            heavy_rescuer.merge_track(source, target)
+        self._labels.merge_track(source, target)
+        self._refine_consensus.merge_track(source, target)
+        self._truck_semantic_lock.rebind(source, target)
+        for mapping in (
+            self._class_refine_last_check,
+            self._class_refine_last_observation,
+            self._class_refine_overrides,
+        ):
+            self._move_track_key(mapping, source, target)
+        for bucket in (
+            self._seen_track_ids,
+            self._truck_tracks_seen,
+            self._truck_crossing_tracks,
+            self._bicycle_tracks_seen,
+            self._bicycle_class_rescue_tracks,
+            self._truck_class_rescue_tracks,
+            self._class_consensus_rescue_tracks,
+            self._heavy_anchor_tracks,
+            self._heavy_center_rescue_tracks,
+        ):
+            if source in bucket:
+                bucket.discard(source)
+                bucket.add(target)
+        self.state.truck_tracks_seen = len(self._truck_tracks_seen)
+        self.state.truck_crossing_tracks = len(self._truck_crossing_tracks)
+        self.state.truck_semantic_locks = len(self._truck_tracks_seen)
+        self.state.heavy_anchor_tracks = len(self._heavy_anchor_tracks)
+        self.state.heavy_center_rescues = len(self._heavy_center_rescue_tracks)
+
     def _class_override_for(self, track_id: int, frame_index: int, primary_label: str) -> tuple[str, float] | None:
+        semantic_lock = self._truck_semantic_lock.resolve(track_id, frame_index, primary_label)
+        if semantic_lock is not None:
+            return semantic_lock
         entry = self._class_refine_overrides.get(int(track_id))
         if entry is None:
             return None
@@ -484,6 +589,17 @@ class PipelineWorker(threading.Thread):
         )
         if vehicle_family(resolved_label) != vehicle_family(base_display_label):
             return self._class_override_for(track_id, frame_index, base_display_label)
+
+        # V0.5.30 semantic hysteresis: a repeatedly confirmed TRUCK must not
+        # fall back to CAR only because the close-up crossing frame is COCO-car
+        # shaped. Refresh the lock from both temporal detector evidence and
+        # distinct-frame refiner consensus, then let it win over one-frame
+        # demotions for a bounded TTL.
+        semantic_lock = self._refresh_truck_semantic_lock(
+            track_id, frame_index, stable_label, certainty, hits
+        )
+        if semantic_lock is not None and resolved_label in {"car", "bus", "truck"}:
+            resolved_label, resolved_conf = semantic_lock
 
         self._class_refine_overrides[int(track_id)] = (
             str(resolved_label), float(resolved_conf), int(frame_index)
@@ -845,7 +961,16 @@ class PipelineWorker(threading.Thread):
                         self.heavy_duplicate_iou,
                     )
                     self.state.suppressed_class_duplicates_current_frame = suppressed_duplicates
-                    self.state.four_wheel_duplicate_suppressed += int(suppressed_duplicates)
+                    # V0.5.30: cumulative telemetry counts unique raw-ID pairs,
+                    # not the same overlapping CAR/TRUCK boxes once per frame.
+                    # This turns values such as 2172 into an identity-fusion
+                    # diagnostic instead of a misleading pseudo vehicle count.
+                    for winner_index, duplicate_indices in duplicate_aliases.items():
+                        winner_raw = int(ids[winner_index])
+                        for duplicate_index in duplicate_indices:
+                            duplicate_raw = int(ids[duplicate_index])
+                            self._four_wheel_duplicate_pairs.add(tuple(sorted((winner_raw, duplicate_raw))))
+                    self.state.four_wheel_duplicate_suppressed = len(self._four_wheel_duplicate_pairs)
                     claimed_canonical_ids: set[int] = set()
                     for item_index in keep_indices:
                         rect_roi = xyxy[item_index]
@@ -871,7 +996,9 @@ class PipelineWorker(threading.Thread):
                         )
                         claimed_canonical_ids.add(track_id)
                         for duplicate_index in duplicate_aliases.get(item_index, []):
-                            self._continuity.alias_raw_id(int(ids[duplicate_index]), track_id)
+                            displaced = self._continuity.alias_raw_id(int(ids[duplicate_index]), track_id)
+                            if displaced is not None:
+                                self._merge_canonical_track_state(displaced, track_id, counter, heavy_rescuer)
                         if stitched:
                             self.state.stitch_recoveries = self._continuity.stitch_count
                             self.state.heavy_stitch_recoveries = self._continuity.heavy_stitch_count
@@ -892,6 +1019,9 @@ class PipelineWorker(threading.Thread):
                         stable_label, class_certainty, class_hits = self._labels.stable_label(track_id, current_label)
                         base_display_label = self._class_policy.display_label(
                             current_label, stable_label, class_certainty, class_hits, confidence_f
+                        )
+                        self._refresh_truck_semantic_lock(
+                            track_id, frame_index, stable_label, class_certainty, class_hits
                         )
                         display_label = base_display_label
                         cached_class = self._class_override_for(track_id, frame_index, base_display_label)
@@ -942,9 +1072,11 @@ class PipelineWorker(threading.Thread):
                         # Seeing a truck is not the same thing as counting one:
                         # only a truck track that later crosses the yellow line
                         # may increment counts_by_type["truck"].
-                        if display_label == "truck" and int(track_id) not in self._truck_tracks_seen:
+                        locked_truck = self._truck_semantic_lock.resolve(track_id, frame_index, display_label)
+                        if locked_truck is not None and int(track_id) not in self._truck_tracks_seen:
                             self._truck_tracks_seen.add(int(track_id))
                             self.state.truck_tracks_seen = len(self._truck_tracks_seen)
+                        self.state.truck_semantic_locks = len(self._truck_tracks_seen)
                         if display_label == "bicycle" and int(track_id) not in self._bicycle_tracks_seen:
                             self._bicycle_tracks_seen.add(int(track_id))
                             self.state.bicycle_tracks_seen = len(self._bicycle_tracks_seen)

@@ -205,3 +205,20 @@ def test_v0529_bicycle_consensus_rejects_when_motorcycle_refiner_support_is_simi
         bicycle_margin=0.08,
         bicycle_min_strongest=0.34,
     ) is None
+
+
+def test_v0530_truck_semantic_lock_holds_through_closeup_car_flip() -> None:
+    from app.classification import TruckSemanticLock
+
+    lock = TruckSemanticLock(ttl_frames=450, min_refiner_hits=2, min_refiner_confidence=0.62)
+    assert lock.observe(286423, 21815, stable_label="truck", certainty=0.93, hits=6) == ("truck", 0.93)
+    # Same physical van is COCO-car shaped 262 frames later while crossing.
+    assert lock.resolve(286423, 22077, "car") == ("truck", 0.93)
+
+
+def test_v0530_truck_semantic_lock_requires_durable_evidence() -> None:
+    from app.classification import TruckSemanticLock
+
+    lock = TruckSemanticLock(ttl_frames=450, min_refiner_hits=2, min_refiner_confidence=0.62)
+    assert lock.observe(7, 100, stable_label="car", certainty=0.95, hits=20, refiner_hits=1, refiner_confidence=0.61) is None
+    assert lock.resolve(7, 120, "car") is None

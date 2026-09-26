@@ -1,3 +1,35 @@
+# Traffic AI V0.5.30 — Truck Semantic Lock + Canonical 4W Fusion 🚚🔒
+
+V0.5.30 được tạo từ benchmark thật V0.5.29 / GT 149. Ảnh snapshot cho thấy **cùng canonical track van `#286423`** đã từng là `truck` với semantic certainty cao khi còn ở xa, nhưng ngay sát vạch lại rơi về `car`. Dashboard đồng thời hiển thị `Gộp car/truck 2172`, vì telemetry cũ cộng lại cùng một cặp box ở mọi frame nên dễ bị hiểu nhầm là số xe.
+
+Bản này sửa ba lớp:
+
+- **Truck Semantic Lock**: chỉ khóa `truck` sau bằng chứng bền vững (stable detector hoặc refiner consensus nhiều frame), giữ tối đa 450 frame để close-up ở vạch không làm `truck → car`; lock vẫn tự hết hạn và chỉ áp dụng family bốn bánh.
+- **Canonical 4W state fusion**: khi CAR/TRUCK/BUS box trùng nhau đổi raw ID, không chỉ alias ByteTrack ID mà còn nhập history của Strict Gate, Heavy-center, label smoother, refiner evidence và telemetry về cùng canonical track.
+- **Unique 4W telemetry + backend semantic dedup**: `Gộp ID 4W` chỉ đếm cặp raw-ID duy nhất thay vì cộng lặp mỗi frame; backend có thêm guard ngắn cho cross-class `car ↔ truck/bus` cùng crossing signature để một van đổi class/ID không tạo hai event.
+
+Telemetry mới:
+
+```text
+Xe tải xác nhận
+Khóa class tải
+Xe tải cắt vạch
+Gộp ID 4W
+```
+
+Warning chỉ xuất hiện **sau khi phiên hoàn tất**, khi đã có Truck Semantic Lock nhưng database vẫn chưa có event `truck`; nội dung cũng nói rõ `Gộp ID 4W` không phải số xe tải.
+
+Database:
+
+```text
+0043_heavy_track_v0529
+        ↓
+0044_truck_lock_v0530
+schema_version = 0.5.30
+```
+
+---
+
 # Traffic AI V0.5.29-R2 — Forward-Compatible Historical UI Contracts
 
 V0.5.29-R2 không thay đổi AI runtime, model, database hay migration. Hotfix này tiếp tục xử lý bộ kiểm thử lịch sử: V0.5.27 từng bắt buộc frontend phải còn nguyên slogan `Dual Refiner Consensus 4.0`, trong khi V0.5.29 đã thay phần mô tả UI nhưng vẫn giữ đầy đủ telemetry `general_refine_checks`, `truck_tracks_seen`, `truck_crossing_tracks`, `Refiner chung`, `Xe tải thấy`, `Xe tải cắt vạch`.

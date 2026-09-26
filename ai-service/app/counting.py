@@ -327,6 +327,23 @@ class HeavyVehicleCrossingRescuer:
         state.history = deque([sample], maxlen=128)
         return direction, crossing
 
+    def merge_track(self, source_track_id: int, target_track_id: int) -> None:
+        source = int(source_track_id)
+        target = int(target_track_id)
+        if source == target:
+            return
+        src = self._tracks.pop(source, None)
+        if src is None:
+            return
+        dst = self._tracks.get(target)
+        if dst is None:
+            self._tracks[target] = src
+            return
+        samples = list(dst.history) + list(src.history)
+        samples.sort(key=lambda sample: sample.frame_index)
+        dst.history = deque(samples[-128:], maxlen=128)
+        dst.counted_directions.update(src.counted_directions)
+
 
 class LineCrossingCounter:
     """Strict finite-line, trajectory-based bidirectional virtual gate.
@@ -821,6 +838,52 @@ class LineCrossingCounter:
             self.interpolated_crossings -= 1
         elif mode == "rescued" and self.rescued_crossings > 0:
             self.rescued_crossings -= 1
+
+    def merge_track(self, source_track_id: int, target_track_id: int) -> None:
+        """Coalesce gate history after cross-class canonical ID fusion.
+
+        V0.5.30 canonical four-wheel fusion must merge more than ByteTrack IDs:
+        the strict gate history is also transferred, otherwise one physical van
+        can have the pre-line samples under CAR and post-line samples under
+        TRUCK and never produce one complete trajectory.
+        """
+        source = int(source_track_id)
+        target = int(target_track_id)
+        if source == target:
+            return
+        src = self._tracks.pop(source, None)
+        if src is None:
+            return
+        dst = self._tracks.get(target)
+        if dst is None:
+            self._tracks[target] = src
+        else:
+            history = list(dst.history) + list(src.history)
+            history.sort(key=lambda sample: sample.frame_index)
+            dst.history = deque(history[-48:], maxlen=48)
+            origin_history = list(dst.origin_history) + list(src.origin_history)
+            origin_history.sort(key=lambda sample: sample.frame_index)
+            dst.origin_history = deque(origin_history[-20:], maxlen=20)
+            dst.counted_directions.update(src.counted_directions)
+            dst.last_count_frame = max(dst.last_count_frame, src.last_count_frame)
+            dst.armed = dst.armed and src.armed if dst.counted_directions else (dst.armed or src.armed)
+            dst.first_frame = min([value for value in (dst.first_frame, src.first_frame) if value is not None], default=None)
+            dst.total_samples += src.total_samples
+            dst.max_abs_distance_since_count = max(dst.max_abs_distance_since_count, src.max_abs_distance_since_count)
+            latest = max(dst.history, key=lambda sample: sample.frame_index, default=None)
+            if latest is not None:
+                dst.last_nonzero_side = latest.side if latest.side != 0 else dst.last_nonzero_side
+        source_frame = src.last_count_frame
+        target_state = self._tracks.get(target)
+        if source in self._last_crossing_mode and (target not in self._last_crossing_mode or source_frame >= (target_state.last_count_frame if target_state else -10000)):
+            self._last_crossing_mode[target] = self._last_crossing_mode[source]
+        self._last_crossing_mode.pop(source, None)
+        if source in self._last_crossing_point:
+            self._last_crossing_point[target] = self._last_crossing_point[source]
+        self._last_crossing_point.pop(source, None)
+        if source in self._last_origin_rescue:
+            self._last_origin_rescue.add(target)
+            self._last_origin_rescue.discard(source)
 
     def crossing_mode_for(self, track_id: int) -> str | None:
         return self._last_crossing_mode.get(int(track_id))
