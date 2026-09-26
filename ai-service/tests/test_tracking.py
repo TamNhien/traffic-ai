@@ -94,3 +94,31 @@ def test_v0528_heavy_inset_anchor_keeps_van_crossing_inside_road_zone() -> None:
     assert counter.update(1401, before, 100, 100, 10) is None
     assert counter.update(1401, after, 100, 100, 11) == "in"
     assert counter.rejected_outside_road == 0
+
+
+def test_v0529_heavy_track_can_stitch_across_longer_van_gap() -> None:
+    resolver = TrackContinuityResolver(
+        max_gap_frames=30,
+        max_distance_ratio=0.14,
+        heavy_max_gap_frames=90,
+        heavy_max_distance_ratio=0.18,
+    )
+    canonical, _ = resolver.resolve(101, (520, 160), "truck", 100, 1440, 810)
+    resolver.resolve(101, (525, 190), "truck", 101, 1440, 810)
+    stitched_id, stitched = resolver.resolve(909, (545, 360), "car", 145, 1440, 810)
+    assert stitched is True
+    assert stitched_id == canonical
+    assert resolver.heavy_stitch_count == 1
+
+
+def test_v0529_two_wheel_does_not_use_heavy_stitch_window() -> None:
+    resolver = TrackContinuityResolver(
+        max_gap_frames=30,
+        max_distance_ratio=0.14,
+        heavy_max_gap_frames=90,
+        heavy_max_distance_ratio=0.18,
+    )
+    resolver.resolve(201, (520, 160), "motorcycle", 100, 1440, 810)
+    stitched_id, stitched = resolver.resolve(202, (540, 330), "motorcycle", 145, 1440, 810)
+    assert stitched is False
+    assert stitched_id == 202

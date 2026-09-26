@@ -373,3 +373,37 @@ def test_v0528_video_origin_rescue_rejects_parallel_startup_jitter() -> None:
     assert counter.update(1303, (20, 80), 100, 100, 3, origin_probe=(20, 51)) is None
     assert counter.update(1303, (80, 82), 100, 100, 4, origin_probe=(80, 53)) is None
     assert counter.origin_rescues == 0
+
+
+def test_v0529_heavy_center_rescue_recovers_large_van_when_primary_anchor_misses() -> None:
+    from app.counting import HeavyVehicleCrossingRescuer
+
+    zone = RoadZone(0.10, 0.0, 0.90, 0.0, 0.95, 1.0, 0.05, 1.0)
+    rescue = HeavyVehicleCrossingRescuer(
+        CountingLine(0.20, 0.50, 0.80, 0.50),
+        road_zone=zone,
+        history_gap_frames=90,
+        min_normal_ratio=0.20,
+        road_margin_ratio=0.02,
+    )
+    assert rescue.update(1501, (50, 28), 100, 100, 10) is None
+    result = rescue.update(1501, (52, 78), 100, 100, 45)
+    assert result is not None
+    direction, point = result
+    assert direction == "in"
+    assert 20 <= point[0] <= 80
+    assert rescue.rescues == 1
+
+
+def test_v0529_external_heavy_rescue_marks_primary_counter_to_prevent_duplicate() -> None:
+    counter = LineCrossingCounter(
+        CountingLine(0.1, 0.5, 0.9, 0.5),
+        crossing_cooldown_frames=60,
+    )
+    assert counter.update(1502, (50, 20), 100, 100, 10) is None
+    assert counter.register_external_crossing(1502, "in", 20, (50, 50), mode="rescued") is True
+    assert counter.in_count == 1
+    assert counter.rescued_crossings == 1
+    # The normal anchor later crosses, but the same direction is already known.
+    assert counter.update(1502, (50, 80), 100, 100, 21) is None
+    assert counter.in_count == 1

@@ -2,7 +2,10 @@ from __future__ import annotations
 
 Rect = tuple[float, float, float, float]
 
-HEAVY_CONFLICTS = {"bus", "truck"}
+FOUR_WHEEL_CONFLICTS = {"car", "bus", "truck"}
+# Backward-compatible alias kept for the V0.5.17 semantic contract.
+# V0.5.29 broadens the same guard from BUS/TRUCK to the whole four-wheel family.
+HEAVY_CONFLICTS = FOUR_WHEEL_CONFLICTS
 
 
 def box_iou(a: Rect, b: Rect) -> float:
@@ -26,16 +29,14 @@ def single_heavy_vehicle_plan(
     confidences: list[float],
     iou_threshold: float = 0.68,
 ) -> tuple[list[int], dict[int, list[int]], int]:
-    """Plan a narrow BUS/TRUCK de-duplication pass.
+    """Plan a narrow cross-class four-wheel de-duplication pass.
 
-    COCO-style detectors can emit highly-overlapping BUS and TRUCK boxes for the
-    same physical heavy vehicle because normal NMS is class-aware. If both boxes
-    reach ByteTrack they can become two raw IDs and independently cross the gate.
-
-    The stronger box is kept. The weaker raw-track index is returned as an alias
-    of the winner so the continuity resolver can bind both ByteTrack IDs to one
-    canonical vehicle identity. The guard intentionally targets only the
-    BUS/TRUCK conflict and leaves dense mixed traffic untouched.
+    Frontal vans can oscillate between CAR/TRUCK/BUS in the same frame. Because
+    normal NMS is class-aware, overlapping labels may reach ByteTrack as separate
+    raw IDs and fragment one physical van into many canonical tracks. V0.5.29
+    collapses only highly-overlapping *different* four-wheel labels and aliases
+    the losing raw IDs to the strongest box. Same-class boxes and two-wheel
+    traffic remain untouched.
     """
     count = min(len(rects), len(labels), len(confidences))
     if count <= 1:
@@ -50,13 +51,13 @@ def single_heavy_vehicle_plan(
         if winner in suppressed:
             continue
         winner_label = str(labels[winner])
-        if winner_label not in HEAVY_CONFLICTS:
+        if winner_label not in FOUR_WHEEL_CONFLICTS:
             continue
         for candidate in ranked[pos + 1 :]:
             if candidate in suppressed:
                 continue
             candidate_label = str(labels[candidate])
-            if candidate_label not in HEAVY_CONFLICTS or candidate_label == winner_label:
+            if candidate_label not in FOUR_WHEEL_CONFLICTS or candidate_label == winner_label:
                 continue
             if box_iou(rects[winner], rects[candidate]) >= threshold:
                 suppressed.add(candidate)

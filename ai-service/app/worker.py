@@ -21,7 +21,7 @@ from app.classification import (
     select_target_refinement,
     vehicle_family,
 )
-from app.counting import CountingLine, LineCrossingCounter, RoadZone, signed_distance
+from app.counting import CountingLine, HeavyVehicleCrossingRescuer, LineCrossingCounter, RoadZone, signed_distance
 from app.dedup import single_heavy_vehicle_plan
 from app.flow_calibration import FlowCalibrator
 from app.gate_roi import gate_roi_for_line, road_zone_roi
@@ -96,6 +96,7 @@ class PipelineWorker(threading.Thread):
         self._bicycle_tracks_seen: set[int] = set()
         self._video_start_rescue_tracks: set[int] = set()
         self._heavy_anchor_tracks: set[int] = set()
+        self._heavy_center_rescue_tracks: set[int] = set()
         self._refine_ids: list[int] = []
         self._general_refine_ids: list[int] = []
         self._refiner_thread: threading.Thread | None = None
@@ -116,6 +117,8 @@ class PipelineWorker(threading.Thread):
         self._continuity = TrackContinuityResolver(
             max_gap_frames=int(os.getenv("AI_STITCH_MAX_GAP", "30")),
             max_distance_ratio=float(os.getenv("AI_STITCH_DISTANCE_RATIO", "0.14")),
+            heavy_max_gap_frames=int(os.getenv("AI_STITCH_HEAVY_MAX_GAP", "90")),
+            heavy_max_distance_ratio=float(os.getenv("AI_STITCH_HEAVY_DISTANCE_RATIO", "0.18")),
         )
         self.backend_url = os.getenv("BACKEND_INTERNAL_URL", "http://backend:8000/api/internal")
         self.shared_token = os.getenv("AI_SHARED_TOKEN", "TrafficAI-Local-2026")
@@ -149,11 +152,16 @@ class PipelineWorker(threading.Thread):
         self.class_refine_heavy_interval = max(1, int(os.getenv("AI_CLASS_REFINE_HEAVY_INTERVAL", "45")))
         self.class_refine_gate_distance_ratio = max(0.01, float(os.getenv("AI_CLASS_REFINE_GATE_DISTANCE_RATIO", "0.11")))
         self.class_override_ttl_frames = max(8, int(os.getenv("AI_CLASS_OVERRIDE_TTL_FRAMES", "180")))
+        self.bicycle_override_ttl_frames = max(8, int(os.getenv("AI_BICYCLE_OVERRIDE_TTL_FRAMES", "60")))
+        self.heavy_override_ttl_frames = max(8, int(os.getenv("AI_HEAVY_OVERRIDE_TTL_FRAMES", "240")))
         self.refine_target_min_iou = max(0.0, float(os.getenv("AI_REFINE_TARGET_MIN_IOU", "0.08")))
         self.refine_target_min_coverage = max(0.0, float(os.getenv("AI_REFINE_TARGET_MIN_COVERAGE", "0.16")))
         self.refine_consensus_min_hits = max(2, int(os.getenv("AI_REFINE_CONSENSUS_MIN_HITS", "2")))
         self.refine_consensus_history_frames = max(20, int(os.getenv("AI_REFINE_CONSENSUS_HISTORY_FRAMES", "120")))
         self.bicycle_consensus_conf = float(os.getenv("AI_BICYCLE_CONSENSUS_CONF", "0.60"))
+        self.bicycle_consensus_min_hits = max(2, int(os.getenv("AI_BICYCLE_CONSENSUS_MIN_HITS", "3")))
+        self.bicycle_consensus_margin = max(0.0, float(os.getenv("AI_BICYCLE_CONSENSUS_MARGIN", "0.08")))
+        self.bicycle_consensus_min_strong = max(0.0, float(os.getenv("AI_BICYCLE_CONSENSUS_MIN_STRONG", "0.34")))
         self.truck_consensus_conf = float(os.getenv("AI_TRUCK_CONSENSUS_CONF", "0.52"))
         self._refine_consensus = RefineEvidenceAccumulator(history_frames=self.refine_consensus_history_frames)
         self.human_guard_enabled = os.getenv("AI_HUMAN_GUARD", "1").strip().lower() not in {"0", "false", "no"}
@@ -168,6 +176,10 @@ class PipelineWorker(threading.Thread):
         self.agnostic_nms = os.getenv("AI_AGNOSTIC_NMS", "0").strip().lower() not in {"0", "false", "no"}
         self.heavy_duplicate_iou = float(os.getenv("AI_HEAVY_DUP_IOU", "0.68"))
         self.heavy_anchor_inset_ratio = max(0.0, min(0.40, float(os.getenv("AI_HEAVY_ANCHOR_INSET_RATIO", "0.16"))))
+        self.heavy_center_rescue_enabled = os.getenv("AI_HEAVY_CENTER_RESCUE", "1").strip().lower() not in {"0", "false", "no"}
+        self.heavy_center_history_gap = max(8, int(os.getenv("AI_HEAVY_CENTER_HISTORY_GAP", "90")))
+        self.heavy_center_min_normal_ratio = max(0.0, min(1.0, float(os.getenv("AI_HEAVY_CENTER_MIN_NORMAL_RATIO", "0.20"))))
+        self.heavy_center_road_margin_ratio = max(0.0, float(os.getenv("AI_HEAVY_CENTER_ROAD_MARGIN_RATIO", "0.020")))
         self.video_origin_rescue_frames = max(0, int(os.getenv("AI_VIDEO_ORIGIN_RESCUE_FRAMES", "20")))
         self.video_origin_distance_ratio = max(0.0, float(os.getenv("AI_VIDEO_ORIGIN_DISTANCE_RATIO", "0.065")))
         self.video_origin_min_normal_ratio = max(0.0, min(1.0, float(os.getenv("AI_VIDEO_ORIGIN_MIN_NORMAL_RATIO", "0.30"))))
@@ -441,7 +453,12 @@ class PipelineWorker(threading.Thread):
         if entry is None:
             return None
         label, confidence, observed_frame = entry
-        if int(frame_index) - int(observed_frame) > self.class_override_ttl_frames:
+        ttl = self.class_override_ttl_frames
+        if str(label) == "bicycle":
+            ttl = self.bicycle_override_ttl_frames
+        elif vehicle_family(label) == "four-wheel":
+            ttl = self.heavy_override_ttl_frames
+        if int(frame_index) - int(observed_frame) > ttl:
             self._class_refine_overrides.pop(int(track_id), None)
             return None
         if vehicle_family(label) != vehicle_family(primary_label):
@@ -580,6 +597,9 @@ class PipelineWorker(threading.Thread):
             min_hits=self.refine_consensus_min_hits,
             bicycle_confidence=self.bicycle_consensus_conf,
             truck_confidence=self.truck_consensus_conf,
+            bicycle_min_hits=self.bicycle_consensus_min_hits,
+            bicycle_margin=self.bicycle_consensus_margin,
+            bicycle_min_strongest=self.bicycle_consensus_min_strong,
         )
         if consensus is not None:
             if consensus[0] != str(target_label) and tid not in self._class_consensus_rescue_tracks:
@@ -705,6 +725,16 @@ class PipelineWorker(threading.Thread):
                 origin_rescue_distance_ratio=self.video_origin_distance_ratio,
                 origin_rescue_min_normal_ratio=self.video_origin_min_normal_ratio,
             )
+            heavy_rescuer = HeavyVehicleCrossingRescuer(
+                counter.line,
+                road_zone=counter.road_zone,
+                history_gap_frames=self.heavy_center_history_gap,
+                dead_band_ratio=float(os.getenv("AI_GATE_DEAD_BAND_RATIO", "0.006")),
+                segment_margin=float(os.getenv("AI_GATE_SEGMENT_MARGIN", "0.0")),
+                min_normal_ratio=self.heavy_center_min_normal_ratio,
+                min_motion_ratio=float(os.getenv("AI_GATE_MIN_MOTION_RATIO", "0.004")),
+                road_margin_ratio=self.heavy_center_road_margin_ratio,
+            ) if self.heavy_center_rescue_enabled else None
 
             self._event_dispatcher.start()
             self.state.status = "running"
@@ -815,6 +845,7 @@ class PipelineWorker(threading.Thread):
                         self.heavy_duplicate_iou,
                     )
                     self.state.suppressed_class_duplicates_current_frame = suppressed_duplicates
+                    self.state.four_wheel_duplicate_suppressed += int(suppressed_duplicates)
                     claimed_canonical_ids: set[int] = set()
                     for item_index in keep_indices:
                         rect_roi = xyxy[item_index]
@@ -843,6 +874,7 @@ class PipelineWorker(threading.Thread):
                             self._continuity.alias_raw_id(int(ids[duplicate_index]), track_id)
                         if stitched:
                             self.state.stitch_recoveries = self._continuity.stitch_count
+                            self.state.heavy_stitch_recoveries = self._continuity.heavy_stitch_count
 
                         velocity = self._continuity.velocity_for(track_id)
                         family_hint = vehicle_family(current_label)
@@ -949,6 +981,12 @@ class PipelineWorker(threading.Thread):
                                 device, use_half, velocity=velocity, force=False,
                             )
 
+                        heavy_center_candidate = None
+                        if heavy_rescuer is not None and vehicle_family(display_label) == "four-wheel":
+                            heavy_center_candidate = heavy_rescuer.update(
+                                track_id, center, width, height, frame_index
+                            )
+
                         direction = counter.update(
                             track_id, anchor, width, height, frame_index=frame_index,
                             origin_probe=(
@@ -957,6 +995,14 @@ class PipelineWorker(threading.Thread):
                                 else None
                             ),
                         )
+                        if direction is None and heavy_center_candidate is not None:
+                            heavy_direction, heavy_crossing_point = heavy_center_candidate
+                            if counter.register_external_crossing(
+                                track_id, heavy_direction, frame_index, heavy_crossing_point, mode="rescued"
+                            ):
+                                direction = heavy_direction
+                                self._heavy_center_rescue_tracks.add(int(track_id))
+                                self.state.heavy_center_rescues = len(self._heavy_center_rescue_tracks)
                         self.state.video_start_rescues = counter.origin_rescues
                         self.state.rejected_outside_road = counter.rejected_outside_road
                         self.state.fast_confirm_rescues = counter.fast_confirm_rescues
@@ -1161,6 +1207,9 @@ class PipelineWorker(threading.Thread):
                         "truck_tracks_seen": self.state.truck_tracks_seen,
                         "truck_crossing_tracks": self.state.truck_crossing_tracks,
                         "heavy_anchor_tracks": self.state.heavy_anchor_tracks,
+                        "heavy_center_rescues": self.state.heavy_center_rescues,
+                        "heavy_stitch_recoveries": self.state.heavy_stitch_recoveries,
+                        "four_wheel_duplicate_suppressed": self.state.four_wheel_duplicate_suppressed,
                         "video_start_rescues": self.state.video_start_rescues,
                         "human_guard_rejections": self.state.human_guard_rejections,
                         "rider_guard_rescues": self.state.rider_guard_rescues,
@@ -1382,7 +1431,7 @@ class PipelineWorker(threading.Thread):
         rt = f"x{self.state.realtime_factor:.2f}" if self.state.source_fps > 0 else "live"
         cv2.putText(
             frame,
-            f"DET {self.state.detections_current_frame} | UNTRACKED {self.state.untracked_detections} | TRACK {self.state.active_tracks} | ROAD {self.state.road_tracks_current_frame} | TOTAL {self.state.total_count} | IN {self.state.in_count} | OUT {self.state.out_count} | FPS {self.state.fps:.1f} ({rt}) | {self.state.inference_ms:.0f}ms | {'HYBRID' if self.hybrid_mode else 'DIRECT'} {Path(self.detector_model_name).name} | ROI {self.detection_roi_mode.upper()} | DIRECT-X {self.state.direct_crossings} | INTERP {self.state.interpolated_crossings} | RESCUE {self.state.rescued_crossings} | ROAD-REJECT {counter.rejected_outside_road} | CONFIRM-REJECT {counter.rejected_unconfirmed_side} | COOL-REJECT {counter.rejected_cooldown} | COOL-REL {counter.adaptive_cooldown_releases} | FAST-CONF {counter.fast_confirm_rescues} | BRACKET+ {counter.bracket_confirm_rescues} | RESCUE-X {counter.rejected_rescue_validation} | CLASS-R {self.state.class_refine_checks} | GEN-R {self.state.general_refine_checks} | CONS+ {self.state.class_consensus_rescues} | BIKE+ {self.state.bicycle_class_rescues} | TRUCK+ {self.state.truck_class_rescues} | TRUCK-SEEN {self.state.truck_tracks_seen} | TRUCK-X {self.state.truck_crossing_tracks} | HEAVY-A {self.state.heavy_anchor_tracks} | START+ {self.state.video_start_rescues} | HUMAN-X {self.state.human_guard_rejections} | RIDER+ {self.state.rider_guard_rescues} | GUARD-PENDING {self.state.human_guard_pending_crossings} | ROAD-EDGE+ {counter.road_edge_rescues}",
+            f"DET {self.state.detections_current_frame} | UNTRACKED {self.state.untracked_detections} | TRACK {self.state.active_tracks} | ROAD {self.state.road_tracks_current_frame} | TOTAL {self.state.total_count} | IN {self.state.in_count} | OUT {self.state.out_count} | FPS {self.state.fps:.1f} ({rt}) | {self.state.inference_ms:.0f}ms | {'HYBRID' if self.hybrid_mode else 'DIRECT'} {Path(self.detector_model_name).name} | ROI {self.detection_roi_mode.upper()} | DIRECT-X {self.state.direct_crossings} | INTERP {self.state.interpolated_crossings} | RESCUE {self.state.rescued_crossings} | ROAD-REJECT {counter.rejected_outside_road} | CONFIRM-REJECT {counter.rejected_unconfirmed_side} | COOL-REJECT {counter.rejected_cooldown} | COOL-REL {counter.adaptive_cooldown_releases} | FAST-CONF {counter.fast_confirm_rescues} | BRACKET+ {counter.bracket_confirm_rescues} | RESCUE-X {counter.rejected_rescue_validation} | CLASS-R {self.state.class_refine_checks} | GEN-R {self.state.general_refine_checks} | CONS+ {self.state.class_consensus_rescues} | BIKE+ {self.state.bicycle_class_rescues} | TRUCK+ {self.state.truck_class_rescues} | TRUCK-SEEN {self.state.truck_tracks_seen} | TRUCK-X {self.state.truck_crossing_tracks} | HEAVY-A {self.state.heavy_anchor_tracks} | HEAVY-C+ {self.state.heavy_center_rescues} | HEAVY-STITCH {self.state.heavy_stitch_recoveries} | 4W-DUP {self.state.four_wheel_duplicate_suppressed} | START+ {self.state.video_start_rescues} | HUMAN-X {self.state.human_guard_rejections} | RIDER+ {self.state.rider_guard_rescues} | GUARD-PENDING {self.state.human_guard_pending_crossings} | ROAD-EDGE+ {counter.road_edge_rescues}",
             (20, 32),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.62,

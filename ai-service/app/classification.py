@@ -200,6 +200,9 @@ class RefineEvidenceAccumulator:
         bicycle_confidence: float = 0.60,
         truck_confidence: float = 0.52,
         bus_confidence: float = 0.62,
+        bicycle_min_hits: int | None = None,
+        bicycle_margin: float = 0.0,
+        bicycle_min_strongest: float = 0.0,
     ) -> tuple[str, float] | None:
         """Return a conservative correction supported on distinct frames.
 
@@ -211,8 +214,18 @@ class RefineEvidenceAccumulator:
         base = str(base_label)
         hits_required = max(2, int(min_hits))
         if base in TWO_WHEEL_CLASSES:
-            hits, fused, _ = self.support(track_id, frame_index, "bicycle")
-            if base != "bicycle" and hits >= hits_required and fused >= float(bicycle_confidence):
+            hits, fused, strongest = self.support(track_id, frame_index, "bicycle")
+            base_hits, base_fused, _ = self.support(track_id, frame_index, "motorcycle")
+            bike_hits_required = max(hits_required, int(bicycle_min_hits) if bicycle_min_hits is not None else hits_required)
+            contrast_ok = base_hits == 0 or fused >= base_fused + max(0.0, float(bicycle_margin))
+            strongest_ok = strongest >= max(0.0, float(bicycle_min_strongest))
+            if (
+                base != "bicycle"
+                and hits >= bike_hits_required
+                and fused >= float(bicycle_confidence)
+                and contrast_ok
+                and strongest_ok
+            ):
                 return "bicycle", fused
             return None
 

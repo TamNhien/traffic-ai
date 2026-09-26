@@ -1,3 +1,288 @@
+# Traffic AI V0.5.29-R2 — Forward-Compatible Historical UI Contracts
+
+V0.5.29-R2 không thay đổi AI runtime, model, database hay migration. Hotfix này tiếp tục xử lý bộ kiểm thử lịch sử: V0.5.27 từng bắt buộc frontend phải còn nguyên slogan `Dual Refiner Consensus 4.0`, trong khi V0.5.29 đã thay phần mô tả UI nhưng vẫn giữ đầy đủ telemetry `general_refine_checks`, `truck_tracks_seen`, `truck_crossing_tracks`, `Refiner chung`, `Xe tải thấy`, `Xe tải cắt vạch`.
+
+- Contract V0.5.27 giờ kiểm tra **semantic telemetry** thay vì một chuỗi slogan giao diện.
+- Contract V0.5.28 cũng được chuyển sang kiểm tra `video_start_rescues` + `heavy_anchor_tracks`, tránh lỗi tương tự ở bản sau.
+- Giữ nguyên hotfix R1 cho `HEAVY_CONFLICTS` / `FOUR_WHEEL_CONFLICTS`.
+- `VERSION` vẫn là `0.5.29`; migration vẫn là `0043_heavy_track_v0529`.
+
+---
+
+# Traffic AI V0.5.29-R1 — Legacy Contract Hotfix
+
+V0.5.29-R1 không thay đổi AI runtime, model, database hay migration. Hotfix này chỉ sửa tính tương thích kiểm thử sau khi V0.5.29 đổi tên tập class duplicate guard từ `HEAVY_CONFLICTS` sang `FOUR_WHEEL_CONFLICTS`.
+
+- Giữ alias `HEAVY_CONFLICTS = FOUR_WHEEL_CONFLICTS` để contract lịch sử V0.5.17 vẫn nhận diện được implementation.
+- `scripts/test.ps1` chấp nhận cả tên cũ lẫn tên mới, tránh historical test chặn release mới.
+- `VERSION` vẫn là `0.5.29`; migration vẫn là `0043_heavy_track_v0529`.
+
+---
+
+# Traffic AI V0.5.29 — Heavy Track Fusion + Center-Gate Rescue + Bicycle Precision 🚚🚲🎯
+
+V0.5.29 được xây trực tiếp từ benchmark thật V0.5.28 trên cùng `clip1.mp4` / GT 149. Bản này không đổi model nền và chưa yêu cầu train lại `best.pt`; nó tập trung vào hai vấn đề còn thấy rõ sau V0.5.28:
+
+- **Van/xe tải trắng đã được AI nhận ra nhưng vẫn không phát crossing**: Dashboard V0.5.28 ghi `Xe tải thấy 25`, `Xe lớn anchor 73` nhưng `Xe tải cắt vạch 0` và `Xe tải 0`, trong khi video gốc xác nhận chiếc van thực sự cắt vạch khoảng 14:40–14:44.
+- **Bicycle consensus bắt đầu cứu được xe đạp nhưng hơi quá nhạy**: số xe đạp tăng, tuy nhiên benchmark V0.5.28 xuất hiện thêm một số `GT Xe máy → AI Xe đạp`. Vì vậy V0.5.29 siết lại bằng chứng bicycle thay vì hạ threshold tiếp.
+
+## Kết quả đầu vào V0.5.28
+
+```text
+Ground truth       149
+AI đếm             146
+Khớp               130
+Lọt                  19
+Đếm dư               16
+Recall              87.2%
+Precision           89.0%
+F1                  88.1%
+Class đúng          94.6%
+```
+
+So với V0.5.27, V0.5.28 tăng `Khớp 129 → 130`, giảm `Lọt 20 → 19`, giữ `Đếm dư = 16`, nhưng class accuracy giảm `95.3% → 94.6%`. Vì vậy bản này ưu tiên **giữ recall crossing**, đồng thời giảm false bicycle promotion.
+
+## 1. Heavy Track Fusion — gộp CAR/TRUCK/BUS của cùng một van
+
+COCO detector có thể đổi nhãn một chiếc van qua nhiều frame:
+
+```text
+car → truck → car → bus → truck
+```
+
+NMS mặc định theo class có thể để hai box bốn bánh khác class cùng tồn tại trên một frame, làm ByteTrack cấp nhiều raw ID cho cùng một xe. V0.5.29 mở rộng Single-Object Guard thành nhóm bốn bánh:
+
+```text
+CAR / TRUCK / BUS
+      + IoU cao
+      + cùng frame
+          ↓
+    giữ box mạnh nhất
+          ↓
+ alias raw ID còn lại
+          ↓
+  một canonical track
+```
+
+Chỉ các box **khác class trong cùng family bốn bánh** mới được gộp. Hai xe thật cùng class hoặc xe hai bánh không bị gom theo rule này.
+
+Telemetry:
+
+```text
+Gộp car/truck
+```
+
+## 2. Heavy-specific Track Stitching — nối lại ID van qua gap dài hơn
+
+Xe van/truck tiến gần camera làm bounding box phình nhanh, đôi khi bị che hoặc đổi ID lâu hơn xe máy. V0.5.29 giữ cửa sổ stitch cũ cho xe hai bánh nhưng cấp cửa sổ riêng cho bốn bánh:
+
+```ini
+AI_STITCH_HEAVY_MAX_GAP=90
+AI_STITCH_HEAVY_DISTANCE_RATIO=0.18
+```
+
+Với gap dài, resolver không tin tuyệt đối velocity cũ ở xa camera vì perspective có thể làm dự đoán vượt quá vị trí thật. Nó so cả **predicted distance** và **direct distance**, chỉ dùng chính sách này cho family bốn bánh.
+
+Telemetry:
+
+```text
+Nối track xe lớn
+```
+
+## 3. Center-Gate Rescue — cổng cứu thứ hai cho van/truck
+
+Heavy-Vehicle Anchor Inset V0.5.28 vẫn là cổng chính. V0.5.29 không thay nó bằng center; center chỉ được dùng khi **strict anchor gate đã không phát event**.
+
+```text
+four-wheel track
+      ↓
+Strict anchor gate
+      ↓
+  có crossing? ── YES → dùng event cũ
+      │
+      NO
+      ↓
+center trajectory
+      +
+finite counting segment
+      +
+bounded gap
+      +
+normal motion
+      +
+Road Zone corridor
+      ↓
+HEAVY-C+
+      ↓
+register vào primary counter
+      ↓
+VehicleEvent
+```
+
+Cấu hình:
+
+```ini
+AI_HEAVY_CENTER_RESCUE=1
+AI_HEAVY_CENTER_HISTORY_GAP=90
+AI_HEAVY_CENTER_MIN_NORMAL_RATIO=0.20
+AI_HEAVY_CENTER_ROAD_MARGIN_RATIO=0.020
+```
+
+Khi center rescue thành công, crossing được **register ngược vào LineCrossingCounter** để strict gate không đếm lại cùng hướng khi anchor phục hồi vài frame sau.
+
+Telemetry:
+
+```text
+Xe lớn cứu center
+```
+
+## 4. Bicycle Precision Consensus — giảm GT Xe máy → AI Xe đạp
+
+V0.5.28 đã chứng minh Dual Refiner có thể nhận ra bicycle, nhưng 2-frame consensus vẫn có thể promote nhầm scooter/xe máy mảnh thành bicycle. V0.5.29 siết riêng chiều `motorcycle → bicycle`:
+
+```ini
+AI_BICYCLE_CONSENSUS_MIN_HITS=3
+AI_BICYCLE_CONSENSUS_MARGIN=0.08
+AI_BICYCLE_CONSENSUS_MIN_STRONG=0.34
+AI_BICYCLE_OVERRIDE_TTL_FRAMES=60
+```
+
+Một bicycle promotion giờ cần:
+
+```text
+>= 3 source frame độc lập
++
+fused bicycle evidence đủ ngưỡng
++
+có ít nhất 1 observation đủ mạnh
++
+bicycle evidence thắng motorcycle evidence theo margin
+```
+
+Bằng chứng `best.pt` và YOLO26m trên **cùng một frame** vẫn chỉ tính một hit. TTL bicycle cũng ngắn hơn bốn bánh để một promote sai không bám quá lâu.
+
+## 5. Telemetry V0.5.29
+
+Dashboard giữ toàn bộ V0.5.28 và thêm:
+
+```text
+Xe lớn cứu center
+Nối track xe lớn
+Gộp car/truck
+```
+
+Để chẩn đoán chiếc van trắng, đọc theo chuỗi:
+
+```text
+Xe tải thấy
+   ↓
+Nối track xe lớn / Gộp car-truck
+   ↓
+Xe lớn cứu center (nếu anchor gate miss)
+   ↓
+Xe tải cắt vạch
+   ↓
+Xe tải
+```
+
+Mong muốn trên clip hiện tại là `Xe tải cắt vạch >= 1` và `Xe tải >= 1` nếu class tại event vẫn là truck.
+
+## 6. Database
+
+```text
+0042_origin_heavy_v0528
+        ↓
+0043_heavy_track_v0529
+schema_version = 0.5.29
+```
+
+Migration chỉ cập nhật schema version, không xóa dữ liệu.
+
+## 7. Regression tests V0.5.29
+
+- Large van center trajectory cắt finite gate trong Road Zone → heavy center rescue.
+- External heavy crossing được đăng ký vào primary counter → không duplicate khi anchor phục hồi.
+- Four-wheel raw ID có thể stitch qua gap dài hơn; two-wheel không được hưởng cửa sổ heavy.
+- CAR/TRUCK box chồng mạnh của cùng một van → alias một canonical track.
+- Bicycle cần số frame riêng lớn hơn khi cấu hình precision consensus.
+- Bicycle evidence không được promote nếu motorcycle refiner support gần tương đương.
+
+## 8. Cập nhật trên máy
+
+Chép source đè vào:
+
+```text
+D:\LienThongDH\DoAn\traffic-ai
+```
+
+Giữ nguyên:
+
+```text
+.env
+gateway\certs\
+videos\
+models\
+snapshots\
+datasets\
+training-runs\
+```
+
+Không dùng:
+
+```powershell
+docker compose down -v
+```
+
+Chạy:
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+.\scripts\test.ps1
+```
+
+Cần thấy:
+
+```text
+[Traffic AI] Heavy Track Fusion + Center-Gate Rescue V0.5.29
+[OK] Heavy Track Fusion + Center-Gate Rescue V0.5.29
+[SUCCESS] All Traffic AI tests passed.
+```
+
+Sau đó:
+
+```powershell
+.\scripts\start.ps1
+.\scripts\verify-database.ps1
+```
+
+Mong muốn database:
+
+```text
+0043_heavy_track_v0529
+schema_version = 0.5.29
+```
+
+Rồi `Ctrl + F5`, chạy lại đúng clip GT 149 và chụp Dashboard + Benchmark.
+
+## 9. Phát hành vẫn một lệnh
+
+Khi test và benchmark đạt yêu cầu:
+
+```powershell
+.\scripts\publish.ps1
+```
+
+Pipeline vẫn tự động:
+
+```text
+test → build → commit/push → tag v0.5.29 → GitHub Actions → GitHub Release
+```
+
+---
+
+# Lịch sử phiên bản
+
 # Traffic AI V0.5.28 — Video-Origin + Heavy-Vehicle Gate Rescue 🚚🎬
 
 V0.5.28 được xây trực tiếp từ V0.5.27 sau khi đối chiếu `clip1(3).mp4` và snapshot thực tế. Hai lỗi được xác nhận bằng video: **xe đầu clip đang cắt vạch nhưng ByteTrack chưa có đủ lịch sử phía trước vạch**, và **xe van/truck trắng thực sự đi qua vạch khoảng 14:40–14:44 nhưng box bốn bánh lớn có thể tạo anchor quá sát/ngoài biên Road Zone**.

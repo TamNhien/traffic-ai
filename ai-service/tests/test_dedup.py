@@ -31,3 +31,13 @@ def test_same_class_heavy_boxes_are_not_modified_by_cross_class_guard() -> None:
     keep, suppressed = keep_single_heavy_vehicle(rects, labels, confidences, 0.68)
     assert suppressed == 0
     assert keep == [0, 1]
+
+
+def test_v0529_overlapping_car_truck_for_same_van_are_aliased() -> None:
+    rects = [(100, 100, 330, 310), (108, 104, 326, 306), (500, 100, 620, 240)]
+    labels = ["car", "truck", "motorcycle"]
+    confidences = [0.84, 0.62, 0.90]
+    keep, aliases, suppressed = single_heavy_vehicle_plan(rects, labels, confidences, 0.68)
+    assert suppressed == 1
+    assert keep == [0, 2]
+    assert aliases == {0: [1]}
