@@ -1,3 +1,11 @@
+# V0.5.31-R1 — GitHub Actions Release/CI workflow hotfix
+
+Hotfix này không đổi AI/runtime/database. Nó sửa workflow GitHub Actions bị GitHub từ chối trước khi tạo job vì dùng `${{ runner.temp }}` ở job-level `env`. Runtime path nay được tạo trong step bằng `$RUNNER_TEMP` và truyền qua `$GITHUB_ENV`. Đồng thời npm cache của `setup-node` được tắt vì source hiện không commit `frontend/package-lock.json`; tránh blocker cache kế tiếp. `scripts/test.ps1` có regression contract để lỗi này không quay lại.
+
+> `VERSION` vẫn là `0.5.31`; tag `v0.5.31` đã phát hành rồi thì không chạy `publish.ps1` lại với tag này. Commit/push hotfix vào `main`; bản version kế tiếp sẽ dùng workflow đã sửa.
+
+---
+
 # Traffic AI V0.5.31 — Geometric Crossing Time + Startup Ghost Guard ⏱️🎯
 
 V0.5.31 được tạo từ benchmark thật V0.5.30 / GT 149. V0.5.30 đã sửa đúng semantic van/xe tải: Dashboard hiện `Xe tải = 2`, `Xe tải xác nhận = 2`, `Khóa class tải = 2`, `Xe tải cắt vạch = 2`. Tuy nhiên tổng `AI = 149` vẫn chỉ khớp `130`, còn `19 lọt + 19 dư`.

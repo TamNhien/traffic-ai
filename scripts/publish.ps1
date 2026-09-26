@@ -171,8 +171,12 @@ if ($NoWait) {
     Write-Host "[Traffic AI] Theo dõi GitHub Actions run #$runId..." -ForegroundColor Cyan
     gh run watch $runId --repo "$Owner/$Repository" --exit-status
     if ($LASTEXITCODE -ne 0) {
-      Write-Host "[WARNING] GitHub Actions Release thất bại. Đang lấy log lỗi rồi fallback sang GitHub CLI..." -ForegroundColor Yellow
-      gh run view $runId --repo "$Owner/$Repository" --log-failed
+      Write-Host "[WARNING] GitHub Actions Release thất bại. Đang lấy chẩn đoán rồi fallback sang GitHub CLI..." -ForegroundColor Yellow
+      gh run view $runId --repo "$Owner/$Repository" --log-failed 2>$null
+      if ($LASTEXITCODE -ne 0) {
+        Write-Host "[INFO] Workflow không có step log (thường là lỗi parse/validation YAML). Xem run summary:" -ForegroundColor DarkYellow
+        gh run view $runId --repo "$Owner/$Repository" 2>$null
+      }
       New-DirectGitHubRelease -Tag $tag
     } else {
       gh release view $tag --repo "$Owner/$Repository" 1>$null 2>$null

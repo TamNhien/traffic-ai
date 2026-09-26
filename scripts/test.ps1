@@ -239,13 +239,22 @@ function Assert-CiNodePortabilityV0510Contract {
   $ciText = Get-Content (Join-Path $root ".github\workflows\ci.yml") -Raw -Encoding UTF8
   $reusableText = Get-Content (Join-Path $root ".github\workflows\ci-release-reusable.yml") -Raw -Encoding UTF8
   foreach ($text in @($releaseText, $ciText, $reusableText)) {
-    if ($text -notmatch 'AI_DATASET_ROOT:.*runner\.temp' -or $text -notmatch 'AI_TRAINING_ROOT:.*runner\.temp' -or $text -notmatch 'AI_MODEL_ROOT:.*runner\.temp') {
-      throw "GitHub Actions AI test chưa dùng runner.temp cho dữ liệu ghi được."
+    if ($text -match '\$\{\{\s*runner\.temp') {
+      throw "Workflow còn dùng runner.temp trong expression ở cấp job/env; GitHub không chấp nhận context này tại vị trí đó. Hãy dùng RUNNER_TEMP trong một run step rồi ghi qua GITHUB_ENV."
+    }
+    if ($text -notmatch '\$RUNNER_TEMP/traffic-ai' -or $text -notmatch '\$GITHUB_ENV' -or $text -notmatch 'AI_DATASET_ROOT=' -or $text -notmatch 'AI_TRAINING_ROOT=' -or $text -notmatch 'AI_MODEL_ROOT=' -or $text -notmatch 'VIDEO_DIR=') {
+      throw "GitHub Actions chưa bootstrap writable runtime paths bằng RUNNER_TEMP + GITHUB_ENV."
     }
   }
   foreach ($text in @($releaseText, $ciText, $reusableText)) {
     if ($text -match 'Set up Node\.js' -and ($text -notmatch 'actions/setup-node@v7' -or $text -notmatch "node-version: '26\.10\.0'")) {
       throw "Workflow frontend chưa dùng setup-node@v7 + Node.js 26.10.0."
+    }
+    if ($text -match '(?m)^\s*cache:\s*npm\s*$' -or $text -match 'cache-dependency-path:\s*frontend/package\.json') {
+      throw "Workflow đang bật npm cache nhưng repo không có frontend/package-lock.json; setup-node có thể fail. Dùng package-manager-cache: false cho tới khi commit lockfile."
+    }
+    if ($text -notmatch 'package-manager-cache:\s*false') {
+      throw "Workflow chưa tắt npm cache khi không có frontend/package-lock.json."
     }
   }
   $training = Get-Content (Join-Path $root "ai-service\app\training.py") -Raw -Encoding UTF8
