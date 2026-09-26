@@ -22,7 +22,10 @@ from app.classification import (
     select_target_refinement,
     vehicle_family,
 )
-from app.counting import CountingLine, HeavyVehicleCrossingRescuer, LineCrossingCounter, RoadZone, signed_distance
+from app.counting import (
+    CountingLine, HeavyVehicleCrossingRescuer, LineCrossingCounter, RoadZone,
+    select_event_crossing_frame, signed_distance,
+)
 from app.dedup import single_heavy_vehicle_plan
 from app.flow_calibration import FlowCalibrator
 from app.gate_roi import gate_roi_for_line, road_zone_roi
@@ -182,6 +185,11 @@ class PipelineWorker(threading.Thread):
         self.human_guard_pending_max_frames = max(2, int(os.getenv("AI_HUMAN_GUARD_PENDING_MAX_FRAMES", "12")))
         self.warmup = os.getenv("AI_WARMUP", "1").strip().lower() not in {"0", "false", "no"}
         self.video_pace = os.getenv("AI_VIDEO_PACE", "1").strip().lower() not in {"0", "false", "no"}
+        self.video_deterministic = os.getenv("AI_VIDEO_DETERMINISTIC", "1").strip().lower() not in {"0", "false", "no"}
+        self.video_deterministic_seed = int(os.getenv("AI_VIDEO_DETERMINISTIC_SEED", "20260926"))
+        self.video_aux_ready_timeout = max(5.0, float(os.getenv("AI_VIDEO_AUX_READY_TIMEOUT", "90")))
+        self.cross_time_max_interp_seconds = max(0.0, float(os.getenv("AI_CROSS_TIME_MAX_INTERP_SECONDS", "0.24")))
+        self.cross_time_max_rescue_seconds = max(0.0, float(os.getenv("AI_CROSS_TIME_MAX_RESCUE_SECONDS", "0.72")))
         self.iou = float(os.getenv("AI_IOU", "0.55"))
         self.agnostic_nms = os.getenv("AI_AGNOSTIC_NMS", "0").strip().lower() not in {"0", "false", "no"}
         self.heavy_duplicate_iou = float(os.getenv("AI_HEAVY_DUP_IOU", "0.68"))
@@ -746,7 +754,32 @@ class PipelineWorker(threading.Thread):
             from ultralytics import YOLO
 
             cv2.setNumThreads(1)
-            if torch.cuda.is_available():
+            deterministic_video = self.payload.source_type == "video" and self.video_deterministic
+            if deterministic_video:
+                import random
+                seed = int(self.video_deterministic_seed)
+                random.seed(seed)
+                np.random.seed(seed & 0xFFFFFFFF)
+                try:
+                    cv2.setRNGSeed(seed & 0x7FFFFFFF)
+                except Exception:
+                    pass
+                torch.manual_seed(seed)
+                if torch.cuda.is_available():
+                    torch.cuda.manual_seed_all(seed)
+                torch.backends.cudnn.benchmark = False
+                torch.backends.cudnn.deterministic = True
+                try:
+                    torch.backends.cuda.matmul.allow_tf32 = False
+                    torch.backends.cudnn.allow_tf32 = False
+                except Exception:
+                    pass
+                try:
+                    torch.use_deterministic_algorithms(True, warn_only=True)
+                except Exception:
+                    pass
+                self.state.deterministic_video_replay = True
+            elif torch.cuda.is_available():
                 torch.backends.cudnn.benchmark = True
 
             device = self.device
@@ -862,6 +895,8 @@ class PipelineWorker(threading.Thread):
             self.state.general_refine_model_name = None
             if self.refine_background_warmup:
                 self._start_refiner_background(YOLO, np, device, use_half)
+                if deterministic_video and self._refiner_thread is not None:
+                    self._refiner_thread.join(timeout=self.video_aux_ready_timeout)
             elif self.refine_at_crossing:
                 self._refiner_model = YOLO(self.refine_model_name)
                 self._refine_ids = self._named_class_ids(self._refiner_model.names, REFINE_VEHICLE_CLASSES)
@@ -881,6 +916,12 @@ class PipelineWorker(threading.Thread):
                         self._general_refiner_model = None
                         self._general_refine_ids = []
             self._start_human_guard_background(YOLO, np, device, use_half)
+            if deterministic_video and self._human_guard_thread is not None:
+                self._human_guard_thread.join(timeout=self.video_aux_ready_timeout)
+            if deterministic_video:
+                refiner_ready = (not self.refine_at_crossing) or bool(self._refiner_model is not None or self._general_refiner_model is not None)
+                guard_ready = (not self.human_guard_enabled) or bool(self._human_guard_model is not None and self._human_guard_ids)
+                self.state.video_aux_models_ready_at_start = bool(refiner_ready and guard_ready)
             self.state.imgsz = self.imgsz
             self.state.half_precision = use_half
             self.state.device = "cuda" if device != "cpu" and use_half else "cpu"
@@ -962,16 +1003,10 @@ class PipelineWorker(threading.Thread):
                         self.heavy_duplicate_iou,
                     )
                     self.state.suppressed_class_duplicates_current_frame = suppressed_duplicates
-                    # V0.5.30: cumulative telemetry counts unique raw-ID pairs,
-                    # not the same overlapping CAR/TRUCK boxes once per frame.
-                    # This turns values such as 2172 into an identity-fusion
-                    # diagnostic instead of a misleading pseudo vehicle count.
-                    for winner_index, duplicate_indices in duplicate_aliases.items():
-                        winner_raw = int(ids[winner_index])
-                        for duplicate_index in duplicate_indices:
-                            duplicate_raw = int(ids[duplicate_index])
-                            self._four_wheel_duplicate_pairs.add(tuple(sorted((winner_raw, duplicate_raw))))
-                    self.state.four_wheel_duplicate_suppressed = len(self._four_wheel_duplicate_pairs)
+                    # V0.5.32 telemetry counts *canonical state merges*, not every
+                    # transient raw CAR/TRUCK box pair.  The latter still appears in
+                    # suppressed_class_duplicates_current_frame, while this cumulative
+                    # number now answers how many persistent identities were truly fused.
                     claimed_canonical_ids: set[int] = set()
                     for item_index in keep_indices:
                         rect_roi = xyxy[item_index]
@@ -998,8 +1033,10 @@ class PipelineWorker(threading.Thread):
                         claimed_canonical_ids.add(track_id)
                         for duplicate_index in duplicate_aliases.get(item_index, []):
                             displaced = self._continuity.alias_raw_id(int(ids[duplicate_index]), track_id)
-                            if displaced is not None:
+                            if displaced is not None and int(displaced) != int(track_id):
+                                self._four_wheel_duplicate_pairs.add(tuple(sorted((int(displaced), int(track_id)))))
                                 self._merge_canonical_track_state(displaced, track_id, counter, heavy_rescuer)
+                        self.state.four_wheel_duplicate_suppressed = len(self._four_wheel_duplicate_pairs)
                         if stitched:
                             self.state.stitch_recoveries = self._continuity.stitch_count
                             self.state.heavy_stitch_recoveries = self._continuity.heavy_stitch_count
@@ -1223,15 +1260,22 @@ class PipelineWorker(threading.Thread):
                             event_confidence = max(confidence_f, policy_conf, refined_conf)
 
                             crossing_frame_float = counter.crossing_frame_for(track_id)
-                            event_frame_index = max(1, int(round(crossing_frame_float))) if crossing_frame_float is not None else frame_index
-                            source_time_seconds = (
-                                ((crossing_frame_float - 1.0) / self.state.source_fps)
-                                if crossing_frame_float is not None and self.state.source_fps > 0
-                                else (((frame_index - 1) / self.state.source_fps) if self.state.source_fps > 0 else None)
-                            )
-                            if crossing_frame_float is not None and abs(float(crossing_frame_float) - float(frame_index)) >= 0.50:
-                                self.state.crossing_time_corrections += 1
                             crossing_method = counter.crossing_mode_for(track_id)
+                            fps_for_policy = self.state.source_fps if self.state.source_fps > 0 else 25.0
+                            selected_crossing_frame, time_corrected, time_clamped = select_event_crossing_frame(
+                                frame_index, crossing_frame_float, crossing_method,
+                                max_interpolated_shift_frames=max(1.0, self.cross_time_max_interp_seconds * fps_for_policy),
+                                max_rescued_shift_frames=max(1.0, self.cross_time_max_rescue_seconds * fps_for_policy),
+                            )
+                            event_frame_index = max(1, int(round(selected_crossing_frame)))
+                            source_time_seconds = (
+                                ((selected_crossing_frame - 1.0) / self.state.source_fps)
+                                if self.state.source_fps > 0 else None
+                            )
+                            if time_corrected:
+                                self.state.crossing_time_corrections += 1
+                            if time_clamped:
+                                self.state.crossing_time_clamps += 1
                             crossing_point = counter.crossing_point_for(track_id)
                             crossing_x = (crossing_point[0] / width) if crossing_point is not None and width > 0 else None
                             crossing_y = (crossing_point[1] / height) if crossing_point is not None and height > 0 else None
@@ -1356,6 +1400,9 @@ class PipelineWorker(threading.Thread):
                         "four_wheel_duplicate_suppressed": self.state.four_wheel_duplicate_suppressed,
                         "video_start_rescues": self.state.video_start_rescues,
                         "crossing_time_corrections": self.state.crossing_time_corrections,
+                        "crossing_time_clamps": self.state.crossing_time_clamps,
+                        "deterministic_video_replay": self.state.deterministic_video_replay,
+                        "video_aux_models_ready_at_start": self.state.video_aux_models_ready_at_start,
                         "human_guard_rejections": self.state.human_guard_rejections,
                         "rider_guard_rescues": self.state.rider_guard_rescues,
                         "human_guard_pending_crossings": self.state.human_guard_pending_crossings,
@@ -1576,7 +1623,7 @@ class PipelineWorker(threading.Thread):
         rt = f"x{self.state.realtime_factor:.2f}" if self.state.source_fps > 0 else "live"
         cv2.putText(
             frame,
-            f"DET {self.state.detections_current_frame} | UNTRACKED {self.state.untracked_detections} | TRACK {self.state.active_tracks} | ROAD {self.state.road_tracks_current_frame} | TOTAL {self.state.total_count} | IN {self.state.in_count} | OUT {self.state.out_count} | FPS {self.state.fps:.1f} ({rt}) | {self.state.inference_ms:.0f}ms | {'HYBRID' if self.hybrid_mode else 'DIRECT'} {Path(self.detector_model_name).name} | ROI {self.detection_roi_mode.upper()} | DIRECT-X {self.state.direct_crossings} | INTERP {self.state.interpolated_crossings} | RESCUE {self.state.rescued_crossings} | ROAD-REJECT {counter.rejected_outside_road} | CONFIRM-REJECT {counter.rejected_unconfirmed_side} | COOL-REJECT {counter.rejected_cooldown} | COOL-REL {counter.adaptive_cooldown_releases} | FAST-CONF {counter.fast_confirm_rescues} | BRACKET+ {counter.bracket_confirm_rescues} | RESCUE-X {counter.rejected_rescue_validation} | CLASS-R {self.state.class_refine_checks} | GEN-R {self.state.general_refine_checks} | CONS+ {self.state.class_consensus_rescues} | BIKE+ {self.state.bicycle_class_rescues} | TRUCK+ {self.state.truck_class_rescues} | TRUCK-SEEN {self.state.truck_tracks_seen} | TRUCK-X {self.state.truck_crossing_tracks} | HEAVY-A {self.state.heavy_anchor_tracks} | HEAVY-C+ {self.state.heavy_center_rescues} | HEAVY-STITCH {self.state.heavy_stitch_recoveries} | 4W-DUP {self.state.four_wheel_duplicate_suppressed} | START+ {self.state.video_start_rescues} | TIME-SYNC {self.state.crossing_time_corrections} | HUMAN-X {self.state.human_guard_rejections} | RIDER+ {self.state.rider_guard_rescues} | GUARD-PENDING {self.state.human_guard_pending_crossings} | ROAD-EDGE+ {counter.road_edge_rescues}",
+            f"DET {self.state.detections_current_frame} | UNTRACKED {self.state.untracked_detections} | TRACK {self.state.active_tracks} | ROAD {self.state.road_tracks_current_frame} | TOTAL {self.state.total_count} | IN {self.state.in_count} | OUT {self.state.out_count} | FPS {self.state.fps:.1f} ({rt}) | {self.state.inference_ms:.0f}ms | {'HYBRID' if self.hybrid_mode else 'DIRECT'} {Path(self.detector_model_name).name} | ROI {self.detection_roi_mode.upper()} | DIRECT-X {self.state.direct_crossings} | INTERP {self.state.interpolated_crossings} | RESCUE {self.state.rescued_crossings} | ROAD-REJECT {counter.rejected_outside_road} | CONFIRM-REJECT {counter.rejected_unconfirmed_side} | COOL-REJECT {counter.rejected_cooldown} | COOL-REL {counter.adaptive_cooldown_releases} | FAST-CONF {counter.fast_confirm_rescues} | BRACKET+ {counter.bracket_confirm_rescues} | RESCUE-X {counter.rejected_rescue_validation} | CLASS-R {self.state.class_refine_checks} | GEN-R {self.state.general_refine_checks} | CONS+ {self.state.class_consensus_rescues} | BIKE+ {self.state.bicycle_class_rescues} | TRUCK+ {self.state.truck_class_rescues} | TRUCK-SEEN {self.state.truck_tracks_seen} | TRUCK-X {self.state.truck_crossing_tracks} | HEAVY-A {self.state.heavy_anchor_tracks} | HEAVY-C+ {self.state.heavy_center_rescues} | HEAVY-STITCH {self.state.heavy_stitch_recoveries} | 4W-DUP {self.state.four_wheel_duplicate_suppressed} | START+ {self.state.video_start_rescues} | TIME-SYNC {self.state.crossing_time_corrections} | TIME-CLAMP {self.state.crossing_time_clamps} | REPLAY {'DET' if self.state.deterministic_video_replay else 'LIVE'} | HUMAN-X {self.state.human_guard_rejections} | RIDER+ {self.state.rider_guard_rescues} | GUARD-PENDING {self.state.human_guard_pending_crossings} | ROAD-EDGE+ {counter.road_edge_rescues}",
             (20, 32),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.62,

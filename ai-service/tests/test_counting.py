@@ -449,3 +449,32 @@ def test_v0531_external_crossing_preserves_geometric_source_frame() -> None:
     counter = LineCrossingCounter(CountingLine(0.1, 0.5, 0.9, 0.5))
     assert counter.register_external_crossing(1603, "out", 260, (50, 50), mode="rescued", crossing_frame=251.25)
     assert abs((counter.crossing_frame_for(1603) or 0.0) - 251.25) < 1e-6
+
+
+def test_v0532_direct_crossing_keeps_observed_frame() -> None:
+    from app.counting import select_event_crossing_frame
+    frame, corrected, clamped = select_event_crossing_frame(100, 99.1, "direct")
+    assert frame == 100.0
+    assert not corrected
+    assert not clamped
+
+
+def test_v0532_interpolated_time_sync_is_bounded() -> None:
+    from app.counting import select_event_crossing_frame
+    frame, corrected, clamped = select_event_crossing_frame(100, 80.0, "interpolated", max_interpolated_shift_frames=6)
+    assert frame == 94.0
+    assert corrected and clamped
+
+
+def test_v0532_rescue_time_sync_clamps_long_gap() -> None:
+    from app.counting import select_event_crossing_frame
+    frame, corrected, clamped = select_event_crossing_frame(100, 60.0, "rescued", max_rescued_shift_frames=18)
+    assert frame == 82.0
+    assert corrected and clamped
+
+
+def test_v0532_short_rescue_keeps_geometric_time() -> None:
+    from app.counting import select_event_crossing_frame
+    frame, corrected, clamped = select_event_crossing_frame(100, 88.0, "rescued", max_rescued_shift_frames=18)
+    assert frame == 88.0
+    assert corrected and not clamped

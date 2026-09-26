@@ -309,18 +309,18 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.31") { throw "VERSION phải là 0.5.31, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0045_cross_time_v0531.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0045_cross_time_v0531.py." }
+  if ($version -ne "0.5.32") { throw "VERSION phải là 0.5.32, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0046_replay_time_v0532.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0046_replay_time_v0532.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0045_cross_time_v0531"' -or $migrationText -notmatch 'down_revision = "0044_truck_lock_v0530"' -or $migrationText -notmatch "value='0.5.31'") {
-    throw "Migration 0045_cross_time_v0531 không đúng contract V0.5.31."
+  if ($migrationText -notmatch 'revision = "0046_replay_time_v0532"' -or $migrationText -notmatch 'down_revision = "0045_cross_time_v0531"' -or $migrationText -notmatch "value='0.5.32'") {
+    throw "Migration 0046_replay_time_v0532 không đúng contract V0.5.32."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
 
 function Assert-AlembicRevisionSafetyContract {
-  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.31" -ForegroundColor Cyan
+  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.32" -ForegroundColor Cyan
   $versionsDir = Join-Path $root "backend\alembic\versions"
   $bad = @()
   Get-ChildItem $versionsDir -Filter "*.py" | ForEach-Object {
@@ -344,7 +344,7 @@ function Assert-AlembicRevisionSafetyContract {
   if ($v17 -notmatch 'revision = "0017_ai_test_dep_v053"') {
     throw "Migration V0.5.3 chưa dùng revision ID rút gọn an toàn."
   }
-  Write-Host "[OK] Alembic revision-length safety V0.5.31" -ForegroundColor Green
+  Write-Host "[OK] Alembic revision-length safety V0.5.32" -ForegroundColor Green
 }
 
 
@@ -1154,7 +1154,7 @@ function Assert-TruckSemanticLockV0530Contract {
   if ($worker -notmatch '_merge_canonical_track_state' -or $worker -notmatch '_four_wheel_duplicate_pairs' -or $worker -notmatch 'AI_TRUCK_SEMANTIC_LOCK_FRAMES') { throw "V0.5.30 thiếu worker wiring semantic lock / unique 4W telemetry." }
   if ($runtime -notmatch 'truck_semantic_locks') { throw "Runtime V0.5.30 thiếu truck semantic telemetry." }
   if ($routes -notmatch 'heavy-semantic-signature') { throw "Backend V0.5.30 thiếu cross-ID CAR/TRUCK semantic dedup." }
-  if ($frontend -notmatch 'Khóa class tải' -or $frontend -notmatch 'Gộp ID 4W' -or $frontend -notmatch 'Van/xe tải đã được xác nhận') { throw "Frontend V0.5.30 thiếu warning/telemetry mới." }
+  if ($frontend -notmatch 'truck_semantic_locks' -or $frontend -notmatch 'truck_crossing_tracks' -or $frontend -notmatch 'four_wheel_duplicate_suppressed' -or $frontend -notmatch 'Van/xe tải đã được xác nhận') { throw "Frontend V0.5.30 thiếu warning/telemetry semantic cho truck/canonical 4W." }
   if ($envExample -notmatch 'AI_TRUCK_SEMANTIC_LOCK_FRAMES=450' -or $start -notmatch 'AI_TRUCK_SEMANTIC_LOCK_CONF') { throw "V0.5.30 thiếu runtime defaults semantic lock." }
   if ($classTests -notmatch 'test_v0530_truck_semantic_lock_holds_through_closeup_car_flip' -or $trackingTests -notmatch 'test_v0530_alias_reports_displaced_canonical_for_state_merge' -or $countingTests -notmatch 'test_v0530_merge_track_preserves_preline_history_for_four_wheel_alias') { throw "V0.5.30 thiếu regression tests cho van/truck." }
   Write-Host "[OK] Truck Semantic Lock + Canonical 4W Fusion V0.5.30" -ForegroundColor Green
@@ -1177,6 +1177,24 @@ function Assert-GeometricCrossingTimeV0531Contract {
   if ($countingTests -notmatch 'test_v0531_crossing_frame_is_interpolated_at_physical_gate_intersection' -or $countingTests -notmatch 'test_v0531_heavy_rescue_exposes_interpolated_crossing_frame') { throw "V0.5.31 thiếu regression test crossing timestamp." }
   if ($backendTests -notmatch 'test_v0531_startup_crossing_signature_guard_is_narrow') { throw "V0.5.31 thiếu regression test startup ghost guard." }
   Write-Host "[OK] Geometric Crossing Time + Startup Ghost Guard V0.5.31" -ForegroundColor Green
+}
+
+function Assert-DeterministicReplayTimeV0532Contract {
+  Write-Host "`n[Traffic AI] Deterministic Replay + Confidence-aware Time Sync V0.5.32" -ForegroundColor Cyan
+  $counting = Get-Content (Join-Path $root "ai-service\app\counting.py") -Raw -Encoding UTF8
+  $worker = Get-Content (Join-Path $root "ai-service\app\worker.py") -Raw -Encoding UTF8
+  $runtime = Get-Content (Join-Path $root "ai-service\app\runtime.py") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  $envExample = Get-Content (Join-Path $root ".env.example") -Raw -Encoding UTF8
+  $start = Get-Content (Join-Path $PSScriptRoot "start.ps1") -Raw -Encoding UTF8
+  $countingTests = Get-Content (Join-Path $root "ai-service\tests\test_counting.py") -Raw -Encoding UTF8
+  if ($counting -notmatch 'def select_event_crossing_frame' -or $counting -notmatch 'max_rescued_shift_frames') { throw "V0.5.32 thiếu confidence-aware crossing time policy." }
+  if ($worker -notmatch 'AI_VIDEO_DETERMINISTIC' -or $worker -notmatch 'torch\.use_deterministic_algorithms' -or $worker -notmatch 'video_aux_models_ready_at_start') { throw "V0.5.32 thiếu deterministic local-video replay." }
+  if ($worker -notmatch 'crossing_time_clamps' -or $runtime -notmatch 'crossing_time_clamps') { throw "V0.5.32 thiếu Time-clamp telemetry." }
+  if ($frontend -notmatch 'Time-clamp' -or $frontend -notmatch 'Replay' -or $frontend -notmatch 'Gộp canonical 4W') { throw "Frontend V0.5.32 thiếu replay/time/4W telemetry." }
+  if ($envExample -notmatch 'AI_VIDEO_DETERMINISTIC=1' -or $envExample -notmatch 'AI_CROSS_TIME_MAX_RESCUE_SECONDS=0.72' -or $start -notmatch 'AI_VIDEO_AUX_READY_TIMEOUT') { throw "V0.5.32 thiếu runtime defaults." }
+  if ($countingTests -notmatch 'test_v0532_direct_crossing_keeps_observed_frame' -or $countingTests -notmatch 'test_v0532_rescue_time_sync_clamps_long_gap') { throw "V0.5.32 thiếu regression tests time policy." }
+  Write-Host "[OK] Deterministic Replay + Confidence-aware Time Sync V0.5.32" -ForegroundColor Green
 }
 
 function Assert-LegacySemanticCompatibilityV0523R1 {
@@ -1242,6 +1260,7 @@ Assert-VideoOriginHeavyGateV0528Contract
 Assert-HeavyTrackFusionV0529Contract
 Assert-TruckSemanticLockV0530Contract
 Assert-GeometricCrossingTimeV0531Contract
+Assert-DeterministicReplayTimeV0532Contract
 Assert-LegacySemanticCompatibilityV0523R1
 
 Write-Host "`n[Traffic AI] Road Zone + Frame Browser V0.5.11" -ForegroundColor Cyan

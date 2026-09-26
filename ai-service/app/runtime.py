@@ -49,6 +49,9 @@ class PipelineState:
     four_wheel_duplicate_suppressed: int = 0
     video_start_rescues: int = 0
     crossing_time_corrections: int = 0
+    crossing_time_clamps: int = 0
+    deterministic_video_replay: bool = False
+    video_aux_models_ready_at_start: bool = False
     human_guard_rejections: int = 0
     rider_guard_rescues: int = 0
     human_guard_pending_crossings: int = 0

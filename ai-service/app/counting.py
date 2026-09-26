@@ -205,6 +205,56 @@ def crossing_frame_between(start: "_GateSample", end: "_GateSample", crossing: P
     return float(start.frame_index) + alpha * float(end.frame_index - start.frame_index)
 
 
+def select_event_crossing_frame(
+    observed_frame: int | float,
+    geometric_frame: float | None,
+    crossing_mode: str | None,
+    *,
+    max_interpolated_shift_frames: float = 6.0,
+    max_rescued_shift_frames: float = 18.0,
+) -> tuple[float, bool, bool]:
+    """Choose a trustworthy source frame for event persistence.
+
+    V0.5.31 applied geometric interpolation to nearly every event.  The supplied
+    benchmark showed that this is too aggressive: direct crossings do not need a
+    synthetic timestamp, while long rescue gaps assume constant image-plane speed
+    across perspective changes.  V0.5.32 therefore keeps direct events on their
+    observed frame, applies bounded interpolation to short/dead-band events, and
+    clamps long-gap rescue back-shifts instead of trusting an arbitrarily old
+    extrapolated instant.
+
+    Returns ``(selected_frame, corrected, clamped)``.
+    """
+    observed = max(1.0, float(observed_frame))
+    if geometric_frame is None:
+        return observed, False, False
+    try:
+        geometric = float(geometric_frame)
+    except (TypeError, ValueError):
+        return observed, False, False
+    if geometric < 1.0 or geometric > observed + 0.25:
+        return observed, False, False
+
+    shift = observed - geometric
+    # Sub-frame correction is benchmark-noise, not useful event semantics.
+    if shift < 0.50:
+        return observed, False, False
+
+    mode = str(crossing_mode or "").strip().lower()
+    if mode == "direct":
+        return observed, False, False
+    if mode == "interpolated":
+        limit = max(0.5, float(max_interpolated_shift_frames))
+    elif mode == "rescued":
+        limit = max(0.5, float(max_rescued_shift_frames))
+    else:
+        return observed, False, False
+
+    if shift <= limit:
+        return geometric, True, False
+    return observed - limit, True, True
+
+
 @dataclass(slots=True)
 class _GateSample:
     frame_index: int

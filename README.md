@@ -1,3 +1,40 @@
+# Traffic AI V0.5.32-R1 — Historical Contract Hotfix
+
+Hotfix này không đổi AI/runtime/database. Nó chỉ sửa historical contract V0.5.30 trong `scripts/test.ps1`: UI V0.5.32 đã đổi nhãn `Gộp ID 4W` thành `Gộp canonical 4W`, nhưng test cũ vẫn bắt literal cũ nên chặn oan. R1 kiểm tra semantic keys thật (`truck_semantic_locks`, `truck_crossing_tracks`, `four_wheel_duplicate_suppressed`) và warning truck thay vì khóa wording UI. `VERSION` vẫn là `0.5.32`, Alembic vẫn `0046_replay_time_v0532`.
+
+---
+
+# Traffic AI V0.5.32 — Deterministic Replay + Confidence-aware Time Sync 🎯
+
+V0.5.32 được tạo từ benchmark thật V0.5.31 / GT 149. V0.5.31 đã sửa được startup duplicate và một số timestamp rescue, nhưng lần chạy mới chỉ còn `AI 143 / khớp 125 / lọt 24 / dư 18`, trong khi V0.5.30 từng đạt `AI 149 / khớp 130 / lọt 19 / dư 19`. Telemetry `Time-sync 141` cho thấy geometric timestamp đã áp dụng quá rộng; đồng thời hai lần replay cùng clip ở các build trước cho thấy worker candidate có thể dao động vài crossing.
+
+V0.5.32 xử lý hai tầng:
+
+- **Deterministic local-video replay**: cố định Python/NumPy/OpenCV/PyTorch seed, tắt CuDNN benchmark, bật deterministic algorithms ở chế độ warn-only, tắt TF32, và chờ refiner + Human Guard warmup xong trước frame đầu. RTSP/live không bị ép vào chế độ này.
+- **Confidence-aware Time Sync**: direct crossing giữ frame quan sát; interpolated chỉ được lùi tối đa `0.24 s`; rescued tối đa `0.72 s`. Geometric time vẫn được dùng nhưng long-gap back-shift bị clamp thay vì nội suy tuyến tính vô hạn qua perspective.
+- **Canonical 4W telemetry cleanup**: `Gộp canonical 4W` chỉ tăng khi thật sự hợp nhất hai canonical state; raw CAR/TRUCK box overlap theo frame vẫn có telemetry tức thời riêng nhưng không còn làm số cumulative phình lớn.
+
+Telemetry mới/bổ sung:
+
+```text
+Replay ổn định
+Aux sẵn từ đầu
+Time-sync
+Time-clamp
+Gộp canonical 4W
+```
+
+Database:
+
+```text
+0045_cross_time_v0531
+        ↓
+0046_replay_time_v0532
+schema_version = 0.5.32
+```
+
+---
+
 # V0.5.31-R1 — GitHub Actions Release/CI workflow hotfix
 
 Hotfix này không đổi AI/runtime/database. Nó sửa workflow GitHub Actions bị GitHub từ chối trước khi tạo job vì dùng `${{ runner.temp }}` ở job-level `env`. Runtime path nay được tạo trong step bằng `$RUNNER_TEMP` và truyền qua `$GITHUB_ENV`. Đồng thời npm cache của `setup-node` được tắt vì source hiện không commit `frontend/package-lock.json`; tránh blocker cache kế tiếp. `scripts/test.ps1` có regression contract để lỗi này không quay lại.

@@ -207,6 +207,11 @@ Ensure-EnvSetting "AI_WARMUP" "1"
 # V0.2.8: bootstrap HTTPS/hosts tự động.
 
 Ensure-EnvSetting "AI_VIDEO_PACE" "1"
+Ensure-EnvSetting "AI_VIDEO_DETERMINISTIC" "1"
+Ensure-EnvSetting "AI_VIDEO_DETERMINISTIC_SEED" "20260926"
+Ensure-EnvSetting "AI_VIDEO_AUX_READY_TIMEOUT" "90"
+Ensure-EnvSetting "AI_CROSS_TIME_MAX_INTERP_SECONDS" "0.24"
+Ensure-EnvSetting "AI_CROSS_TIME_MAX_RESCUE_SECONDS" "0.72"
 Ensure-EnvSetting "AI_NATIVE_VIDEO_PREVIEW" "1"
 Ensure-EnvSetting "AI_BENCHMARK_TRACE" "1"
 Ensure-EnvSetting "AI_MJPEG_WAIT_TIMEOUT" "2.0"
@@ -282,7 +287,7 @@ if (-not $dashboardOk -or -not $apiOk) {
 }
 
 Write-Host ""
-Write-Host "[OK] Traffic AI V0.5.31 đã khởi động." -ForegroundColor Green
+Write-Host "[OK] Traffic AI V0.5.32 đã khởi động." -ForegroundColor Green
 Write-Host "Dashboard : https://traffic-ai.test:8443"
 Write-Host "API Docs  : https://traffic-ai.test:8444/docs"
 Write-Host "PostgreSQL: 127.0.0.1:5445 / traffic_ai_db"
