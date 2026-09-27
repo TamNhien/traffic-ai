@@ -131,3 +131,19 @@ def test_v0536_near_time_but_far_crossing_is_not_called_duplicate() -> None:
     gt = [rich_item(2, 40.02, "in", crossing_x=0.20, crossing_y=0.50)]
     result = match_crossings(gt, ai, 0.50)
     assert result["false_positive_items"][0]["reason"] == "rescued_gap_unmatched"
+
+
+def test_v0538_spatial_duplicate_diagnostic_exposes_delta_distance_and_method() -> None:
+    ai = [
+        rich_item(301, 50.00, "in", tracking_id=701, crossing_method="direct", crossing_x=0.40, crossing_y=0.50),
+        rich_item(302, 50.80, "in", tracking_id=702, crossing_method="rescued", crossing_x=0.405, crossing_y=0.503),
+    ]
+    gt = [rich_item(3, 50.01, "in", crossing_x=0.40, crossing_y=0.50)]
+    result = match_crossings(gt, ai, 0.75)
+    diagnostic = result["false_positive_items"][0]
+    assert diagnostic["reason"] == "spatial_duplicate_near_gt"
+    assert diagnostic["near_matched_time_delta"] == 0.8
+    assert diagnostic["near_matched_spatial_distance"] is not None
+    assert diagnostic["near_matched_spatial_distance"] < 0.008
+    assert diagnostic["near_matched_crossing_method"] == "direct"
+    assert "method direct" in diagnostic["detail"]

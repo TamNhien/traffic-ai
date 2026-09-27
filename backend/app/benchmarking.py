@@ -82,6 +82,9 @@ def _false_positive_diagnostics(
     for event in false_positive_events:
         reason = "unmatched_ai_event"
         detail = "AI có event nhưng không có Ground Truth tương ứng trong cửa sổ ghép."
+        near_matched_time_delta = None
+        near_matched_spatial_distance = None
+        near_matched_crossing_method = None
 
         if event.source_time_seconds <= 0.50:
             reason = "startup_artifact"
@@ -116,6 +119,8 @@ def _false_positive_diagnostics(
             if near_matched:
                 nearest = min(near_matched, key=lambda other: abs(other.source_time_seconds - event.source_time_seconds))
                 dt = abs(nearest.source_time_seconds - event.source_time_seconds)
+                near_matched_time_delta = round(dt, 3)
+                near_matched_crossing_method = nearest.crossing_method
                 spatial_distance = None
                 if (
                     event.crossing_x is not None and event.crossing_y is not None
@@ -124,11 +129,13 @@ def _false_positive_diagnostics(
                     dx = float(event.crossing_x) - float(nearest.crossing_x)
                     dy = float(event.crossing_y) - float(nearest.crossing_y)
                     spatial_distance = (dx * dx + dy * dy) ** 0.5
+                    near_matched_spatial_distance = round(spatial_distance, 6)
                 if spatial_distance is not None and spatial_distance <= 0.045:
                     reason = "spatial_duplicate_near_gt"
                     detail = (
                         f"AI event khác đã khớp GT cách {dt:.2f}s và điểm cắt chỉ lệch {spatial_distance:.3f}; "
-                        "khả năng ID switch/duplicate crossing cao."
+                        f"method {nearest.crossing_method or '?'} → {event.crossing_method or '?'}. "
+                        "Khả năng ID switch/duplicate crossing cao."
                     )
                 elif spatial_distance is None:
                     reason = "duplicate_near_gt"
@@ -157,6 +164,9 @@ def _false_positive_diagnostics(
             "confidence": event.confidence,
             "reason": reason,
             "detail": detail,
+            "near_matched_time_delta": near_matched_time_delta,
+            "near_matched_spatial_distance": near_matched_spatial_distance,
+            "near_matched_crossing_method": near_matched_crossing_method,
         })
 
     dominant = reason_counts.most_common(1)[0][0] if reason_counts else None

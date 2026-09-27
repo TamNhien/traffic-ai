@@ -618,6 +618,30 @@ def _two_wheel_spatial_signature_duplicate(
     return False
 
 
+def _two_wheel_ultra_spatial_signature_duplicate(
+    time_delta: float,
+    distance: float,
+    current_method: str | None,
+    other_method: str | None,
+) -> bool:
+    """V0.5.38 ultra-tight tail for secondary two-wheel duplicate signatures.
+
+    The V0.5.37 benchmark still reports same-point duplicates just beyond the
+    0.75 s rescue window.  Extend time only when at least one event is a
+    secondary crossing and the normalized crossing points are almost identical.
+    Direct/direct traffic is intentionally excluded so two real motorcycles that
+    cross the same lane close together are never collapsed by this path.
+    """
+    methods = {str(current_method or ""), str(other_method or "")}
+    if methods == {"direct"}:
+        return False
+    if "rescued" in methods:
+        return float(time_delta) <= 1.02 and float(distance) <= 0.008
+    if "interpolated" in methods:
+        return float(time_delta) <= 0.90 and float(distance) <= 0.007
+    return False
+
+
 @router.post("/internal/events", response_model=VehicleEventRead, status_code=201)
 def internal_event(payload: VehicleEventCreate, response: Response, x_ai_token: str | None = Header(default=None), db: Session = Depends(get_db)) -> VehicleEvent:
     _assert_ai_token(x_ai_token)
@@ -674,9 +698,10 @@ def internal_event(payload: VehicleEventCreate, response: Response, x_ai_token: 
         and payload.crossing_y is not None
     ):
         # Query the widest specialised window once. The generic guard below
-        # remains capped at 0.22 s; only cross-class four-wheel semantic flips
-        # may use the wider 0.85 s window.
-        lower = max(0.0, float(payload.source_time_seconds) - 0.85)
+        # remains capped at 0.22 s. V0.5.38 allows an ultra-tight two-wheel
+        # secondary signature out to 1.02 s; four-wheel semantic flips still
+        # keep their own narrower 0.85 s acceptance rule.
+        lower = max(0.0, float(payload.source_time_seconds) - 1.05)
         recent = list(db.scalars(select(VehicleEvent).where(
             VehicleEvent.session_id == payload.session_id,
             VehicleEvent.source_time_seconds.is_not(None),
@@ -729,6 +754,20 @@ def internal_event(payload: VehicleEventCreate, response: Response, x_ai_token: 
             ):
                 response.headers["X-TrafficAI-Deduplicated"] = "1"
                 response.headers["X-TrafficAI-Dedup-Reason"] = "two-wheel-spatial-signature"
+                return other
+
+            # V0.5.38: one final tail for benchmark-proven same-point
+            # duplicates that fall just beyond the V0.5.37 0.75 s window.  Space
+            # is tightened to <= 0.008 and direct/direct remains forbidden.
+            if (
+                _vehicle_family_value(other.vehicle_type) == "two-wheel"
+                and _vehicle_family_value(payload.vehicle_type) == "two-wheel"
+                and _two_wheel_ultra_spatial_signature_duplicate(
+                    time_delta, distance, payload.crossing_method, other.crossing_method
+                )
+            ):
+                response.headers["X-TrafficAI-Deduplicated"] = "1"
+                response.headers["X-TrafficAI-Dedup-Reason"] = "two-wheel-ultra-spatial-signature"
                 return other
 
             # V0.5.30 four-wheel semantic signature: one van can cross while

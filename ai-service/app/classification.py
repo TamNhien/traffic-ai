@@ -332,6 +332,65 @@ def contextual_bicycle_competitive_decision(
     return None
 
 
+def contextual_bicycle_near_margin_decision(
+    observations: list[tuple[str, float, float]],
+    *,
+    detector_confidence: float,
+    max_motorcycle_confidence: float = 0.50,
+    min_bicycle_confidence: float = 0.10,
+    min_source_win: float = 0.02,
+    max_motorcycle_veto: float = 0.08,
+    dual_fused_confidence: float = 0.28,
+    fused_margin: float = 0.02,
+) -> tuple[str, float] | None:
+    """V0.5.38 precision-first fallback for a *near-margin* bicycle context.
+
+    V0.5.37 required every supporting refiner to beat motorcycle by a fairly
+    visible margin.  The supplied 04:49 frame still has a weak primary
+    ``motorcycle`` (~0.49) while both wide-context refiners can see a bicycle,
+    but one source may be almost tied with motorcycle.  This fallback only opens
+    for an even weaker primary detector and still requires two independent
+    target-matched bicycle observations.  A source with a material motorcycle
+    lead vetoes the rescue, so an ordinary scooter cannot be flipped merely by
+    lowering an absolute bicycle threshold.
+    """
+    if float(detector_confidence) > float(max_motorcycle_confidence):
+        return None
+
+    best: dict[str, tuple[float, float]] = {}
+    for source, bicycle_conf, motorcycle_conf in observations:
+        bike = max(0.0, min(1.0, float(bicycle_conf)))
+        moto = max(0.0, min(1.0, float(motorcycle_conf)))
+        if bike < float(min_bicycle_confidence):
+            continue
+        key = str(source)
+        previous = best.get(key)
+        if previous is None or bike > previous[0]:
+            best[key] = (bike, moto)
+
+    if len(best) < 2:
+        return None
+
+    deltas = [bike - moto for bike, moto in best.values()]
+    if max(deltas) < float(min_source_win):
+        return None
+    if any((-delta) > float(max_motorcycle_veto) for delta in deltas):
+        return None
+
+    bike_miss = 1.0
+    moto_miss = 1.0
+    for bike, moto in best.values():
+        bike_miss *= max(0.0, 1.0 - bike)
+        moto_miss *= max(0.0, 1.0 - moto)
+    bike_fused = 1.0 - bike_miss
+    moto_fused = 1.0 - moto_miss
+    if bike_fused < float(dual_fused_confidence):
+        return None
+    if bike_fused < moto_fused + float(fused_margin):
+        return None
+    return "bicycle", bike_fused
+
+
 def contextual_bicycle_temporal_decision(
     observations: list[tuple[str, float]],
     *,

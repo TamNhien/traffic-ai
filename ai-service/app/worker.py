@@ -23,6 +23,7 @@ from app.classification import (
     contextual_bicycle_temporal_decision,
     contextual_bicycle_weak_motor_decision,
     contextual_bicycle_competitive_decision,
+    contextual_bicycle_near_margin_decision,
     select_contextual_bicycle_refinement,
     select_contextual_two_wheel_refinement,
     select_target_refinement,
@@ -198,6 +199,12 @@ class PipelineWorker(threading.Thread):
         self.bicycle_context_competitive_dual_conf = max(0.0, min(1.0, float(os.getenv("AI_BICYCLE_CONTEXT_COMPETITIVE_DUAL_CONF", "0.34"))))
         self.bicycle_context_competitive_fused_margin = max(0.0, min(1.0, float(os.getenv("AI_BICYCLE_CONTEXT_COMPETITIVE_FUSED_MARGIN", "0.08"))))
         self.bicycle_context_competitive_single_conf = max(0.0, min(1.0, float(os.getenv("AI_BICYCLE_CONTEXT_COMPETITIVE_SINGLE_CONF", "0.55"))))
+        self.bicycle_context_near_margin_max_motor_conf = max(0.0, min(1.0, float(os.getenv("AI_BICYCLE_CONTEXT_NEAR_MARGIN_MAX_MOTOR_CONF", "0.50"))))
+        self.bicycle_context_near_margin_min_source_conf = max(0.0, min(1.0, float(os.getenv("AI_BICYCLE_CONTEXT_NEAR_MARGIN_MIN_SOURCE_CONF", "0.10"))))
+        self.bicycle_context_near_margin_source_win = max(0.0, min(1.0, float(os.getenv("AI_BICYCLE_CONTEXT_NEAR_MARGIN_SOURCE_WIN", "0.02"))))
+        self.bicycle_context_near_margin_motor_veto = max(0.0, min(1.0, float(os.getenv("AI_BICYCLE_CONTEXT_NEAR_MARGIN_MOTOR_VETO", "0.08"))))
+        self.bicycle_context_near_margin_dual_conf = max(0.0, min(1.0, float(os.getenv("AI_BICYCLE_CONTEXT_NEAR_MARGIN_DUAL_CONF", "0.28"))))
+        self.bicycle_context_near_margin_fused_margin = max(0.0, min(1.0, float(os.getenv("AI_BICYCLE_CONTEXT_NEAR_MARGIN_FUSED_MARGIN", "0.02"))))
         self.truck_consensus_conf = float(os.getenv("AI_TRUCK_CONSENSUS_CONF", "0.52"))
         self._refine_consensus = RefineEvidenceAccumulator(history_frames=self.refine_consensus_history_frames)
         self._truck_semantic_lock = TruckSemanticLock(
@@ -1490,6 +1497,7 @@ class PipelineWorker(threading.Thread):
                         "bicycle_context_temporal_rescues": self.state.bicycle_context_temporal_rescues,
                         "bicycle_context_weak_motor_rescues": self.state.bicycle_context_weak_motor_rescues,
                         "bicycle_context_competitive_rescues": self.state.bicycle_context_competitive_rescues,
+                        "bicycle_context_near_margin_rescues": self.state.bicycle_context_near_margin_rescues,
                         "truck_class_rescues": self.state.truck_class_rescues,
                         "bicycle_tracks_seen": self.state.bicycle_tracks_seen,
                         "truck_tracks_seen": self.state.truck_tracks_seen,
@@ -1498,6 +1506,7 @@ class PipelineWorker(threading.Thread):
                         "heavy_center_rescues": self.state.heavy_center_rescues,
                         "two_wheel_center_rescues": self.state.two_wheel_center_rescues,
                         "two_wheel_spatial_signature_duplicates": self.state.two_wheel_spatial_signature_duplicates,
+                        "two_wheel_ultra_spatial_signature_duplicates": self.state.two_wheel_ultra_spatial_signature_duplicates,
                         "heavy_stitch_recoveries": self.state.heavy_stitch_recoveries,
                         "four_wheel_duplicate_suppressed": self.state.four_wheel_duplicate_suppressed,
                         "video_start_rescues": self.state.video_start_rescues,
@@ -1785,7 +1794,14 @@ class PipelineWorker(threading.Thread):
                 return None
             bike = select_contextual_two_wheel_refinement(
                 target_crop, candidates, label="bicycle",
-                min_confidence=self.bicycle_context_competitive_min_source_conf,
+                # V0.5.38 must retain 0.10-0.119 bicycle evidence for the
+                # near-margin fallback. Stricter V0.5.37/legacy decisions still
+                # apply their own thresholds later, so collecting it here does
+                # not weaken those branches.
+                min_confidence=min(
+                    self.bicycle_context_competitive_min_source_conf,
+                    self.bicycle_context_near_margin_min_source_conf,
+                ),
             )
             moto = select_contextual_two_wheel_refinement(
                 target_crop, candidates, label="motorcycle", min_confidence=0.03,
@@ -1878,6 +1894,19 @@ class PipelineWorker(threading.Thread):
                 self.state.bicycle_context_competitive_rescues += 1
 
         if decision is None:
+            decision = contextual_bicycle_near_margin_decision(
+                competitive, detector_confidence=detector_confidence,
+                max_motorcycle_confidence=self.bicycle_context_near_margin_max_motor_conf,
+                min_bicycle_confidence=self.bicycle_context_near_margin_min_source_conf,
+                min_source_win=self.bicycle_context_near_margin_source_win,
+                max_motorcycle_veto=self.bicycle_context_near_margin_motor_veto,
+                dual_fused_confidence=self.bicycle_context_near_margin_dual_conf,
+                fused_margin=self.bicycle_context_near_margin_fused_margin,
+            )
+            if decision is not None:
+                self.state.bicycle_context_near_margin_rescues += 1
+
+        if decision is None:
             decision = contextual_bicycle_temporal_decision(
                 observations,
                 temporal_hits=hits, temporal_fused=fused, temporal_strongest=strongest,
@@ -1949,7 +1978,7 @@ class PipelineWorker(threading.Thread):
         rt = f"x{self.state.realtime_factor:.2f}" if self.state.source_fps > 0 else "live"
         cv2.putText(
             frame,
-            f"DET {self.state.detections_current_frame} | UNTRACKED {self.state.untracked_detections} | TRACK {self.state.active_tracks} | ROAD {self.state.road_tracks_current_frame} | TOTAL {self.state.total_count} | IN {self.state.in_count} | OUT {self.state.out_count} | FPS {self.state.fps:.1f} ({rt}) | {self.state.inference_ms:.0f}ms | {'HYBRID' if self.hybrid_mode else 'DIRECT'} {Path(self.detector_model_name).name} | ROI {self.detection_roi_mode.upper()} | DIRECT-X {self.state.direct_crossings} | INTERP {self.state.interpolated_crossings} | RESCUE {self.state.rescued_crossings} | ROAD-REJECT {counter.rejected_outside_road} | CONFIRM-REJECT {counter.rejected_unconfirmed_side} | COOL-REJECT {counter.rejected_cooldown} | COOL-REL {counter.adaptive_cooldown_releases} | FAST-CONF {counter.fast_confirm_rescues} | BRACKET+ {counter.bracket_confirm_rescues} | RESCUE-X {counter.rejected_rescue_validation} | CLASS-R {self.state.class_refine_checks} | GEN-R {self.state.general_refine_checks} | CONS+ {self.state.class_consensus_rescues} | BIKE+ {self.state.bicycle_class_rescues} | BIKE-CTX {self.state.bicycle_context_rescues} | BIKE-T {self.state.bicycle_context_temporal_rescues} | BIKE-W+ {self.state.bicycle_context_weak_motor_rescues} | BIKE-M+ {self.state.bicycle_context_competitive_rescues} | 2W-C+ {self.state.two_wheel_center_rescues} | 2W-SIG2 {self.state.two_wheel_spatial_signature_duplicates} | TRUCK+ {self.state.truck_class_rescues} | TRUCK-SEEN {self.state.truck_tracks_seen} | TRUCK-X {self.state.truck_crossing_tracks} | HEAVY-A {self.state.heavy_anchor_tracks} | HEAVY-C+ {self.state.heavy_center_rescues} | HEAVY-STITCH {self.state.heavy_stitch_recoveries} | 4W-DUP {self.state.four_wheel_duplicate_suppressed} | START+ {self.state.video_start_rescues} | TIME-SYNC {self.state.crossing_time_corrections} | TIME-CLAMP {self.state.crossing_time_clamps} | REPLAY {'DET' if self.state.deterministic_video_replay else 'LIVE'} | HUMAN-X {self.state.human_guard_rejections} | RIDER+ {self.state.rider_guard_rescues} | GUARD-PENDING {self.state.human_guard_pending_crossings} | ROAD-EDGE+ {counter.road_edge_rescues}",
+            f"DET {self.state.detections_current_frame} | UNTRACKED {self.state.untracked_detections} | TRACK {self.state.active_tracks} | ROAD {self.state.road_tracks_current_frame} | TOTAL {self.state.total_count} | IN {self.state.in_count} | OUT {self.state.out_count} | FPS {self.state.fps:.1f} ({rt}) | {self.state.inference_ms:.0f}ms | {'HYBRID' if self.hybrid_mode else 'DIRECT'} {Path(self.detector_model_name).name} | ROI {self.detection_roi_mode.upper()} | DIRECT-X {self.state.direct_crossings} | INTERP {self.state.interpolated_crossings} | RESCUE {self.state.rescued_crossings} | ROAD-REJECT {counter.rejected_outside_road} | CONFIRM-REJECT {counter.rejected_unconfirmed_side} | COOL-REJECT {counter.rejected_cooldown} | COOL-REL {counter.adaptive_cooldown_releases} | FAST-CONF {counter.fast_confirm_rescues} | BRACKET+ {counter.bracket_confirm_rescues} | RESCUE-X {counter.rejected_rescue_validation} | CLASS-R {self.state.class_refine_checks} | GEN-R {self.state.general_refine_checks} | CONS+ {self.state.class_consensus_rescues} | BIKE+ {self.state.bicycle_class_rescues} | BIKE-CTX {self.state.bicycle_context_rescues} | BIKE-T {self.state.bicycle_context_temporal_rescues} | BIKE-W+ {self.state.bicycle_context_weak_motor_rescues} | BIKE-M+ {self.state.bicycle_context_competitive_rescues} | BIKE-NM+ {self.state.bicycle_context_near_margin_rescues} | 2W-C+ {self.state.two_wheel_center_rescues} | 2W-SIG2 {self.state.two_wheel_spatial_signature_duplicates} | 2W-ULTRA {self.state.two_wheel_ultra_spatial_signature_duplicates} | TRUCK+ {self.state.truck_class_rescues} | TRUCK-SEEN {self.state.truck_tracks_seen} | TRUCK-X {self.state.truck_crossing_tracks} | HEAVY-A {self.state.heavy_anchor_tracks} | HEAVY-C+ {self.state.heavy_center_rescues} | HEAVY-STITCH {self.state.heavy_stitch_recoveries} | 4W-DUP {self.state.four_wheel_duplicate_suppressed} | START+ {self.state.video_start_rescues} | TIME-SYNC {self.state.crossing_time_corrections} | TIME-CLAMP {self.state.crossing_time_clamps} | REPLAY {'DET' if self.state.deterministic_video_replay else 'LIVE'} | HUMAN-X {self.state.human_guard_rejections} | RIDER+ {self.state.rider_guard_rescues} | GUARD-PENDING {self.state.human_guard_pending_crossings} | ROAD-EDGE+ {counter.road_edge_rescues}",
             (20, 32),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.62,

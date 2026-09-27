@@ -323,18 +323,18 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.37") { throw "VERSION phải là 0.5.37, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0051_bike_comp_v0537.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0051_bike_comp_v0537.py." }
+  if ($version -ne "0.5.38") { throw "VERSION phải là 0.5.38, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0052_bike_ultra_v0538.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0052_bike_ultra_v0538.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0051_bike_comp_v0537"' -or $migrationText -notmatch 'down_revision = "0050_bike_spatial_v0536"' -or $migrationText -notmatch "value='0.5.37'") {
-    throw "Migration 0051_bike_comp_v0537 không đúng contract V0.5.37."
+  if ($migrationText -notmatch 'revision = "0052_bike_ultra_v0538"' -or $migrationText -notmatch 'down_revision = "0051_bike_comp_v0537"' -or $migrationText -notmatch "value='0.5.38'") {
+    throw "Migration 0052_bike_ultra_v0538 không đúng contract V0.5.38."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
 
 function Assert-AlembicRevisionSafetyContract {
-  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.37" -ForegroundColor Cyan
+  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.38" -ForegroundColor Cyan
   $versionsDir = Join-Path $root "backend\alembic\versions"
   $bad = @()
   Get-ChildItem $versionsDir -Filter "*.py" | ForEach-Object {
@@ -358,7 +358,7 @@ function Assert-AlembicRevisionSafetyContract {
   if ($v17 -notmatch 'revision = "0017_ai_test_dep_v053"') {
     throw "Migration V0.5.3 chưa dùng revision ID rút gọn an toàn."
   }
-  Write-Host "[OK] Alembic revision-length safety V0.5.37" -ForegroundColor Green
+  Write-Host "[OK] Alembic revision-length safety V0.5.38" -ForegroundColor Green
 }
 
 
@@ -1308,6 +1308,30 @@ function Assert-CompetitiveBikeSpatialSignatureV0537Contract {
   Write-Host "[OK] Competitive Bicycle Context + Spatial Rescue Signature 8.2 V0.5.37" -ForegroundColor Green
 }
 
+function Assert-NearMarginUltraSpatialV0538Contract {
+  Write-Host "`n[Traffic AI] Near-Margin Bicycle Context + Ultra-Spatial Rescue Signature 8.3 V0.5.38" -ForegroundColor Cyan
+  $classification = Get-Content (Join-Path $root "ai-service\app\classification.py") -Raw -Encoding UTF8
+  $worker = Get-Content (Join-Path $root "ai-service\app\worker.py") -Raw -Encoding UTF8
+  $runtime = Get-Content (Join-Path $root "ai-service\app\runtime.py") -Raw -Encoding UTF8
+  $async = Get-Content (Join-Path $root "ai-service\app\async_tasks.py") -Raw -Encoding UTF8
+  $routes = Get-Content (Join-Path $root "backend\app\api\routes.py") -Raw -Encoding UTF8
+  $benchmarking = Get-Content (Join-Path $root "backend\app\benchmarking.py") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  $envExample = Get-Content (Join-Path $root ".env.example") -Raw -Encoding UTF8
+  $start = Get-Content (Join-Path $PSScriptRoot "start.ps1") -Raw -Encoding UTF8
+  $classificationTests = Get-Content (Join-Path $root "ai-service\tests\test_classification.py") -Raw -Encoding UTF8
+  $backendTests = Get-Content (Join-Path $root "backend\tests\test_app.py") -Raw -Encoding UTF8
+  $benchmarkTests = Get-Content (Join-Path $root "backend\tests\test_benchmarking.py") -Raw -Encoding UTF8
+  if ($classification -notmatch 'def contextual_bicycle_near_margin_decision' -or $worker -notmatch 'AI_BICYCLE_CONTEXT_NEAR_MARGIN_DUAL_CONF' -or $worker -notmatch 'bicycle_context_near_margin_rescues' -or $worker -notmatch 'min\(\s*self\.bicycle_context_competitive_min_source_conf,\s*self\.bicycle_context_near_margin_min_source_conf') { throw "V0.5.38 thiếu Near-Margin Bicycle Context runtime/evidence floor." }
+  if ($routes -notmatch 'def _two_wheel_ultra_spatial_signature_duplicate' -or $routes -notmatch 'two-wheel-ultra-spatial-signature') { throw "Backend V0.5.38 thiếu Ultra-Spatial Rescue Signature 8.3." }
+  if ($runtime -notmatch 'two_wheel_ultra_spatial_signature_duplicates' -or $async -notmatch 'two-wheel-ultra-spatial-signature') { throw "V0.5.38 thiếu ultra-spatial telemetry." }
+  if ($benchmarking -notmatch 'near_matched_time_delta' -or $benchmarking -notmatch 'near_matched_spatial_distance' -or $benchmarking -notmatch 'near_matched_crossing_method') { throw "Benchmark V0.5.38 thiếu chi tiết Δt/Δxy/method cho spatial duplicate." }
+  if ($frontend -notmatch 'Bike near-M' -or $frontend -notmatch '2W ultra' -or $frontend -notmatch 'Δxy') { throw "Frontend V0.5.38 thiếu telemetry/diagnostic mới." }
+  if ($envExample -notmatch 'AI_BICYCLE_CONTEXT_NEAR_MARGIN_MAX_MOTOR_CONF=0.50' -or $envExample -notmatch 'AI_BICYCLE_CONTEXT_NEAR_MARGIN_DUAL_CONF=0.28' -or $start -notmatch 'AI_BICYCLE_CONTEXT_NEAR_MARGIN_FUSED_MARGIN') { throw "V0.5.38 thiếu runtime defaults." }
+  if ($classificationTests -notmatch 'test_v0538_near_margin_context_rescues_dual_source_weak_motorcycle' -or $backendTests -notmatch 'test_v0538_two_wheel_ultra_spatial_signature_extends_only_ultra_close_secondary_tail' -or $benchmarkTests -notmatch 'test_v0538_spatial_duplicate_diagnostic_exposes_delta_distance_and_method') { throw "V0.5.38 thiếu regression tests." }
+  Write-Host "[OK] Near-Margin Bicycle Context + Ultra-Spatial Rescue Signature 8.3 V0.5.38" -ForegroundColor Green
+}
+
 function Assert-LegacySemanticCompatibilityV0523R1 {
   Write-Host "`n[Traffic AI] Weak-Motor Dual Context + Spatial Benchmark Audit V0.5.36"
 $classification = Get-Content -Raw (Join-Path $Root "ai-service/app/classification.py")
@@ -1389,6 +1413,7 @@ Assert-BicyclePrecisionGtAuditV0533Contract
 Assert-TwoWheelContextCenterGateV0534Contract
 Assert-BicycleContextTrailDedupV0535Contract
 Assert-CompetitiveBikeSpatialSignatureV0537Contract
+Assert-NearMarginUltraSpatialV0538Contract
 Assert-LegacySemanticCompatibilityV0523R1
 
 Write-Host "`n[Traffic AI] Road Zone + Frame Browser V0.5.11" -ForegroundColor Cyan

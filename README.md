@@ -1,3 +1,74 @@
+# Traffic AI V0.5.38 — Near-Margin Bicycle Context + Ultra-Spatial Rescue Signature 8.3 🚲🎯
+
+V0.5.38 được xây từ source V0.5.37-R1 và benchmark mới của `clip1.mp4` (GT 149) cùng 184 snapshot trong `camera_1(20260927-123141).rar`. V0.5.37 đã cải thiện precision counting nhưng chưa thay đổi số GT khớp và nhánh bicycle context vẫn chưa promote được ca 04:49.
+
+Benchmark V0.5.37 nhận được:
+
+```text
+GT                  149
+AI                  154
+Khớp                134
+Lọt                  15
+Dư                   20
+Recall              89.9%
+Precision           87.0%
+F1                  88.4%
+Class đúng          99.3%
+```
+
+So với V0.5.36, số dư đã giảm `22 -> 20`; telemetry `2W spatial = 2` xác nhận Spatial Rescue Signature 8.2 đã loại được hai duplicate mà không đổi recall. Tuy nhiên Benchmark vẫn còn `6` event dư sát GT đã khớp + cùng điểm cắt, và bicycle telemetry là `Bike ctx match = 9` nhưng `Bike weak-MC = 0`, `Bike margin = 0`, `Bike context = 0`. Snapshot `frame_7242` vẫn cho primary `motorcycle ~0.49` ở ca GT Xe đạp 04:49.450.
+
+## 1. Near-Margin Bicycle Context
+
+V0.5.37 yêu cầu mỗi refiner bicycle phải thắng motorcycle theo margin tương đối rõ. V0.5.38 thêm một fallback hẹp hơn, chỉ mở khi primary motorcycle cực yếu (`<= 0.50`) và có đủ **hai nguồn context độc lập**.
+
+Fallback mới yêu cầu đồng thời:
+
+- mỗi nguồn có bicycle target-match tối thiểu `0.10`;
+- ít nhất một nguồn cho bicycle thắng motorcycle `>= 0.02`;
+- không nguồn nào được cho motorcycle thắng bicycle quá `0.08` (motorcycle veto);
+- fused bicycle `>= 0.28`;
+- fused bicycle vẫn phải thắng fused motorcycle ít nhất `0.02`;
+- motorcycle primary mạnh hơn `0.50` không được dùng nhánh này.
+
+Telemetry mới: `Bike near-M`.
+
+Mục tiêu là ca 04:49.450: cho phép hai refiner gần hòa nhưng cùng nghiêng về bicycle cứu một primary motorcycle 0.49, trong khi scooter có motorcycle-context mạnh vẫn bị veto.
+
+## 2. Ultra-Spatial Rescue Signature 8.3
+
+V0.5.37 đã dedup được 2 event (`2W spatial = 2`) nhưng Benchmark còn 6 spatial duplicate candidates. V0.5.38 không nới `direct/direct`. Chỉ cặp có `rescued` hoặc `interpolated` mới được dùng tail mới:
+
+```text
+rescued involved     : Δt <= 1.02 s và Δcross <= 0.008
+interpolated involved: Δt <= 0.90 s và Δcross <= 0.007
+direct/direct        : không dùng ultra tail
+```
+
+Backend query window tăng lên 1.05 s chỉ để nhìn thấy candidate; generic signature vẫn giữ `0.22 s`, còn four-wheel semantic guard vẫn giữ giới hạn riêng cũ. Telemetry mới: `2W ultra`.
+
+## 3. Benchmark spatial audit chi tiết hơn
+
+Mỗi `spatial_duplicate_near_gt` giờ trả thêm:
+
+- `near_matched_time_delta`;
+- `near_matched_spatial_distance`;
+- `near_matched_crossing_method`;
+- detail có cặp method, ví dụ `direct -> rescued`.
+
+Nhờ đó bản sau có thể phân biệt rõ duplicate do rescue/interpolation với hai xe thật chạy gần nhau, thay vì tiếp tục nới threshold theo cảm tính.
+
+## 4. Phần giữ nguyên
+
+- Center-Gate Rescue 8.0 vẫn giữ vì `2W center = 9` và là nguồn tăng recall lớn từ V0.5.34.
+- Không siết generic long-gap rescue ở V0.5.38 vì Benchmark vẫn còn 8 miss kiểu Crossing Gate không phát event; siết rescue toàn cục có nguy cơ đổi false-positive thành false-negative.
+- Truck Semantic Lock / Canonical 4W Fusion giữ nguyên; benchmark hiện vẫn cho `Xe tải = 2` lượt cắt vạch.
+- Deterministic Replay, Confidence-aware Time Sync, Human Guard 2.1 và Road Zone giữ nguyên.
+
+Database: `0052_bike_ultra_v0538`, `schema_version = 0.5.38`. Không xóa dữ liệu.
+
+---
+
 # Traffic AI V0.5.37-R1 — Historical 2W Signature Contract Hotfix 🔧
 
 R1 không đổi runtime/AI/database của V0.5.37. Hotfix chỉ sửa `scripts/test.ps1` để contract lịch sử V0.5.35 nhận cả implementation cũ `two-wheel-rescue-signature` và successor V0.5.37 `two-wheel-spatial-signature`. V0.5.37 đã nâng `_two_wheel_rescue_signature_duplicate` thành `_two_wheel_spatial_signature_duplicate`, nên việc bắt literal reason cũ làm local test fail oan dù backend vẫn giữ semantics dedup hẹp và regression tests.

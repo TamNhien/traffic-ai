@@ -411,3 +411,54 @@ def test_v0537_competitive_single_source_needs_temporal_support() -> None:
         observations, detector_confidence=0.44, temporal_hits=2, temporal_fused=0.57
     )
     assert result is not None and result[0] == "bicycle"
+
+
+def test_v0538_near_margin_context_rescues_dual_source_weak_motorcycle() -> None:
+    from app.classification import (
+        contextual_bicycle_competitive_decision,
+        contextual_bicycle_near_margin_decision,
+    )
+
+    observations = [
+        ("domain", 0.17, 0.13),
+        ("general", 0.16, 0.15),
+    ]
+    # V0.5.37 remains intentionally too strict for this almost-tied context.
+    assert contextual_bicycle_competitive_decision(
+        observations,
+        detector_confidence=0.49,
+        max_motorcycle_confidence=0.55,
+        min_bicycle_confidence=0.12,
+        min_source_margin=0.06,
+        dual_fused_confidence=0.34,
+        fused_margin=0.08,
+    ) is None
+    result = contextual_bicycle_near_margin_decision(
+        observations,
+        detector_confidence=0.49,
+    )
+    assert result is not None
+    assert result[0] == "bicycle"
+    assert result[1] >= 0.28
+
+
+def test_v0538_near_margin_context_honors_motorcycle_veto() -> None:
+    from app.classification import contextual_bicycle_near_margin_decision
+
+    assert contextual_bicycle_near_margin_decision(
+        [
+            ("domain", 0.20, 0.11),
+            ("general", 0.16, 0.29),
+        ],
+        detector_confidence=0.48,
+    ) is None
+
+
+def test_v0538_near_margin_context_rejects_confident_primary_or_single_source() -> None:
+    from app.classification import contextual_bicycle_near_margin_decision
+
+    dual = [("domain", 0.24, 0.12), ("general", 0.21, 0.11)]
+    assert contextual_bicycle_near_margin_decision(dual, detector_confidence=0.61) is None
+    assert contextual_bicycle_near_margin_decision(
+        [("domain", 0.42, 0.10)], detector_confidence=0.45
+    ) is None

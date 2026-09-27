@@ -112,6 +112,10 @@ class EventDispatcher(threading.Thread):
                                 elif dedup_reason == "two-wheel-spatial-signature":
                                     self.state.two_wheel_signature_duplicates += 1
                                     self.state.two_wheel_spatial_signature_duplicates += 1
+                                elif dedup_reason == "two-wheel-ultra-spatial-signature":
+                                    self.state.two_wheel_signature_duplicates += 1
+                                    self.state.two_wheel_spatial_signature_duplicates += 1
+                                    self.state.two_wheel_ultra_spatial_signature_duplicates += 1
                             else:
                                 self.state.persisted_events += 1
                             delivered = True
