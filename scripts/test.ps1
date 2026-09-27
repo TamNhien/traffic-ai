@@ -309,18 +309,18 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.32") { throw "VERSION phải là 0.5.32, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0046_replay_time_v0532.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0046_replay_time_v0532.py." }
+  if ($version -ne "0.5.34") { throw "VERSION phải là 0.5.34, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0048_two_wheel_gate_v0534.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0048_two_wheel_gate_v0534.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0046_replay_time_v0532"' -or $migrationText -notmatch 'down_revision = "0045_cross_time_v0531"' -or $migrationText -notmatch "value='0.5.32'") {
-    throw "Migration 0046_replay_time_v0532 không đúng contract V0.5.32."
+  if ($migrationText -notmatch 'revision = "0048_two_wheel_gate_v0534"' -or $migrationText -notmatch 'down_revision = "0047_two_wheel_v0533"' -or $migrationText -notmatch "value='0.5.34'") {
+    throw "Migration 0048_two_wheel_gate_v0534 không đúng contract V0.5.34."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
 
 function Assert-AlembicRevisionSafetyContract {
-  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.32" -ForegroundColor Cyan
+  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.34" -ForegroundColor Cyan
   $versionsDir = Join-Path $root "backend\alembic\versions"
   $bad = @()
   Get-ChildItem $versionsDir -Filter "*.py" | ForEach-Object {
@@ -344,7 +344,7 @@ function Assert-AlembicRevisionSafetyContract {
   if ($v17 -notmatch 'revision = "0017_ai_test_dep_v053"') {
     throw "Migration V0.5.3 chưa dùng revision ID rút gọn an toàn."
   }
-  Write-Host "[OK] Alembic revision-length safety V0.5.32" -ForegroundColor Green
+  Write-Host "[OK] Alembic revision-length safety V0.5.34" -ForegroundColor Green
 }
 
 
@@ -1016,6 +1016,7 @@ function Assert-TargetAwareClassRefinerV0526Contract {
   $classTests = Get-Content (Join-Path $root "ai-service\tests\test_classification.py") -Raw -Encoding UTF8
   $hybridTests = Get-Content (Join-Path $root "ai-service\tests\test_hybrid_recall.py") -Raw -Encoding UTF8
   $benchmarkTests = Get-Content (Join-Path $root "backend\tests\test_benchmarking.py") -Raw -Encoding UTF8
+  $start = Get-Content (Join-Path $PSScriptRoot "start.ps1") -Raw -Encoding UTF8
   if ($classification -notmatch 'select_target_refinement' -or $classification -notmatch 'bicycle_refine_override_conf' -or $classification -notmatch 'truck_refine_override_conf') {
     throw "V0.5.26 thiếu target-aware refiner hoặc bicycle/truck override policy."
   }
@@ -1028,8 +1029,8 @@ function Assert-TargetAwareClassRefinerV0526Contract {
   if ($benchmarking -notmatch 'class_mismatch_items' -or $frontend -notmatch 'Sai loại phương tiện' -or $frontend -notmatch 'Xe đạp cứu' -or $frontend -notmatch 'Xe tải cứu' -or $frontend -notmatch 'Video-start') {
     throw "Benchmark/frontend V0.5.26 thiếu class mismatch hoặc class-rescue telemetry."
   }
-  if ($envExample -notmatch 'AI_VIDEO_STARTUP_GRACE_FRAMES=0' -or $envExample -notmatch 'AI_REFINE_MAX_PER_FRAME=2' -or $envExample -notmatch 'AI_BICYCLE_REFINE_OVERRIDE_CONF=0.58' -or $envExample -notmatch 'AI_TRUCK_REFINE_OVERRIDE_CONF=0.48') {
-    throw "V0.5.26 thiếu cấu hình Target-aware Class Refiner / video-start."
+  if ($envExample -notmatch 'AI_VIDEO_STARTUP_GRACE_FRAMES=0' -or $envExample -notmatch 'AI_REFINE_MAX_PER_FRAME=2' -or $envExample -notmatch 'AI_BICYCLE_REFINE_OVERRIDE_CONF=' -or $envExample -notmatch 'AI_TRUCK_REFINE_OVERRIDE_CONF=0.48' -or $start -notmatch 'AI_BICYCLE_REFINE_OVERRIDE_CONF.*0\.58.*0\.90') {
+    throw "V0.5.26 thiếu cấu hình Target-aware Class Refiner / video-start hoặc migration bicycle legacy."
   }
   if ($classTests -notmatch 'target_refiner_ignores_high_confidence_neighbor' -or $classTests -notmatch 'refiner_can_rescue_bicycle_from_motorcycle_biased_primary' -or $classTests -notmatch 'target_refiner_can_promote_small_car_shaped_truck' -or $hybridTests -notmatch 'local_video_has_no_startup_grace_but_rtsp_keeps_guard') {
     throw "V0.5.26 thiếu regression test cho bicycle/truck target refine hoặc source-aware startup grace."
@@ -1130,7 +1131,7 @@ function Assert-HeavyTrackFusionV0529Contract {
   if ($worker -notmatch 'AI_HEAVY_CENTER_RESCUE' -or $worker -notmatch 'AI_STITCH_HEAVY_MAX_GAP' -or $worker -notmatch 'AI_BICYCLE_CONSENSUS_MIN_HITS') { throw "V0.5.29 thiếu runtime wiring cho heavy rescue / bicycle precision." }
   if ($runtime -notmatch 'heavy_center_rescues' -or $runtime -notmatch 'heavy_stitch_recoveries' -or $runtime -notmatch 'four_wheel_duplicate_suppressed') { throw "Runtime V0.5.29 thiếu telemetry heavy track fusion." }
   if ($frontend -notmatch 'heavy_center_rescues' -or $frontend -notmatch 'heavy_stitch_recoveries' -or $frontend -notmatch 'four_wheel_duplicate_suppressed') { throw "Frontend V0.5.29 thiếu telemetry Heavy Track Fusion." }
-  if ($envExample -notmatch 'AI_HEAVY_CENTER_RESCUE=1' -or $envExample -notmatch 'AI_STITCH_HEAVY_MAX_GAP=90' -or $envExample -notmatch 'AI_BICYCLE_CONSENSUS_MIN_HITS=3' -or $start -notmatch 'AI_HEAVY_CENTER_HISTORY_GAP') { throw "V0.5.29 thiếu cấu hình runtime mới." }
+  if ($envExample -notmatch 'AI_HEAVY_CENTER_RESCUE=1' -or $envExample -notmatch 'AI_STITCH_HEAVY_MAX_GAP=90' -or $envExample -notmatch 'AI_BICYCLE_CONSENSUS_MIN_HITS=' -or $start -notmatch 'AI_BICYCLE_CONSENSUS_MIN_HITS.*3.*4' -or $start -notmatch 'AI_HEAVY_CENTER_HISTORY_GAP') { throw "V0.5.29 thiếu cấu hình runtime mới hoặc migration bicycle precision legacy." }
   if ($countingTests -notmatch 'test_v0529_heavy_center_rescue_recovers_large_van' -or $trackingTests -notmatch 'test_v0529_heavy_track_can_stitch_across_longer_van_gap' -or $dedupTests -notmatch 'test_v0529_overlapping_car_truck_for_same_van_are_aliased' -or $classTests -notmatch 'test_v0529_bicycle_consensus_rejects_when_motorcycle_refiner_support_is_similar') { throw "V0.5.29 thiếu regression tests cho van/truck hoặc bicycle precision." }
   Write-Host "[OK] Heavy Track Fusion + Center-Gate Rescue V0.5.29" -ForegroundColor Green
 }
@@ -1197,6 +1198,45 @@ function Assert-DeterministicReplayTimeV0532Contract {
   Write-Host "[OK] Deterministic Replay + Confidence-aware Time Sync V0.5.32" -ForegroundColor Green
 }
 
+
+function Assert-BicyclePrecisionGtAuditV0533Contract {
+  Write-Host "`n[Traffic AI] Bicycle Precision 4.0 + GT Class Audit V0.5.33" -ForegroundColor Cyan
+  $classification = Get-Content (Join-Path $root "ai-service\app\classification.py") -Raw -Encoding UTF8
+  $worker = Get-Content (Join-Path $root "ai-service\app\worker.py") -Raw -Encoding UTF8
+  $routes = Get-Content (Join-Path $root "backend\app\api\routes.py") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  $styles = Get-Content (Join-Path $root "frontend\src\styles.css") -Raw -Encoding UTF8
+  $envExample = Get-Content (Join-Path $root ".env.example") -Raw -Encoding UTF8
+  $start = Get-Content (Join-Path $PSScriptRoot "start.ps1") -Raw -Encoding UTF8
+  if ($classification -notmatch 'def source_count' -or $classification -notmatch 'bicycle_min_sources') { throw "V0.5.33 thiếu bicycle source-diversity consensus." }
+  if ($worker -notmatch 'AI_BICYCLE_CONSENSUS_MIN_SOURCES' -or $worker -notmatch 'AI_BICYCLE_REFINE_OVERRIDE_CONF.*0\.90') { throw "V0.5.33 thiếu bicycle precision runtime policy." }
+  if ($routes -notmatch 'GroundTruthMarkUpdate' -or $routes -notmatch '@router.patch\("/benchmarks/\{benchmark_id\}/marks/\{mark_id\}"\)') { throw "Backend V0.5.33 thiếu chỉnh class Ground Truth tại chỗ." }
+  if ($frontend -notmatch 'updateMarkVehicle' -or $frontend -notmatch 'Đơn vị là lượt cắt vạch' -or $frontend -notmatch 'Bicycle Precision 4.0') { throw "Frontend V0.5.33 thiếu GT class editor hoặc passage semantics." }
+  if ($styles -notmatch 'class-audit-row.*grid-template-areas' -or $styles -notmatch 'scrollbar-gutter:stable') { throw "Frontend V0.5.33 thiếu responsive layout cho danh sách Sai loại phương tiện." }
+  if ($envExample -notmatch 'AI_BICYCLE_CONSENSUS_MIN_SOURCES=2' -or $start -notmatch 'AI_BICYCLE_CONSENSUS_CONF.*0.60.*0.78') { throw "V0.5.33 thiếu migration tuning bicycle cũ -> mới." }
+  Write-Host "[OK] Bicycle Precision 4.0 + GT Class Audit V0.5.33" -ForegroundColor Green
+}
+
+function Assert-TwoWheelContextCenterGateV0534Contract {
+  Write-Host "`n[Traffic AI] Two-Wheel Context + Center-Gate Rescue 8.0 V0.5.34" -ForegroundColor Cyan
+  $counting = Get-Content (Join-Path $root "ai-service\app\counting.py") -Raw -Encoding UTF8
+  $classification = Get-Content (Join-Path $root "ai-service\app\classification.py") -Raw -Encoding UTF8
+  $worker = Get-Content (Join-Path $root "ai-service\app\worker.py") -Raw -Encoding UTF8
+  $runtime = Get-Content (Join-Path $root "ai-service\app\runtime.py") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  $envExample = Get-Content (Join-Path $root ".env.example") -Raw -Encoding UTF8
+  $start = Get-Content (Join-Path $PSScriptRoot "start.ps1") -Raw -Encoding UTF8
+  $countingTests = Get-Content (Join-Path $root "ai-service\tests\test_counting.py") -Raw -Encoding UTF8
+  $classificationTests = Get-Content (Join-Path $root "ai-service\tests\test_classification.py") -Raw -Encoding UTF8
+  if ($counting -notmatch 'class TwoWheelCenterCrossingRescuer' -or $counting -notmatch 'segment_edge_ratio' -or $counting -notmatch 'max_jump_ratio') { throw "V0.5.34 thiếu strict two-wheel center rescue." }
+  if ($classification -notmatch 'def contextual_bicycle_decision' -or $worker -notmatch '_refine_bicycle_context' -or $worker -notmatch 'AI_BICYCLE_CONTEXT_RESCUE') { throw "V0.5.34 thiếu crossing-only bicycle context rescue." }
+  if ($worker -notmatch 'TwoWheelCenterCrossingRescuer' -or $worker -notmatch 'two_wheel_center_rescues' -or $runtime -notmatch 'two_wheel_center_rescues') { throw "V0.5.34 thiếu 2W center runtime/telemetry." }
+  if ($runtime -notmatch 'bicycle_context_rescues' -or $frontend -notmatch 'Bike context' -or $frontend -notmatch '2W center') { throw "Frontend/runtime V0.5.34 thiếu context/2W telemetry." }
+  if ($envExample -notmatch 'AI_TWO_WHEEL_CENTER_RESCUE=1' -or $envExample -notmatch 'AI_BICYCLE_CONTEXT_DUAL_CONF=0.72' -or $start -notmatch 'AI_TWO_WHEEL_CENTER_MIN_NORMAL_RATIO') { throw "V0.5.34 thiếu runtime defaults." }
+  if ($countingTests -notmatch 'test_v0534_two_wheel_center_rescue_accepts_strong_finite_crossing' -or $classificationTests -notmatch 'test_v0534_context_bicycle_requires_dual_moderate_sources') { throw "V0.5.34 thiếu regression tests." }
+  Write-Host "[OK] Two-Wheel Context + Center-Gate Rescue 8.0 V0.5.34" -ForegroundColor Green
+}
+
 function Assert-LegacySemanticCompatibilityV0523R1 {
   Write-Host "`n[Traffic AI] Legacy semantic contract compatibility V0.5.23-R1" -ForegroundColor Cyan
   $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
@@ -1261,6 +1301,8 @@ Assert-HeavyTrackFusionV0529Contract
 Assert-TruckSemanticLockV0530Contract
 Assert-GeometricCrossingTimeV0531Contract
 Assert-DeterministicReplayTimeV0532Contract
+Assert-BicyclePrecisionGtAuditV0533Contract
+Assert-TwoWheelContextCenterGateV0534Contract
 Assert-LegacySemanticCompatibilityV0523R1
 
 Write-Host "`n[Traffic AI] Road Zone + Frame Browser V0.5.11" -ForegroundColor Cyan

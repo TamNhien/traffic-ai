@@ -165,6 +165,12 @@ class GroundTruthMarkCreate(BaseModel):
     note: str | None = None
 
 
+class GroundTruthMarkUpdate(BaseModel):
+    direction: Direction | None = None
+    vehicle_type: VehicleType | None = None
+    note: str | None = None
+
+
 def _assert_ai_token(token: str | None) -> None:
     if token != settings.ai_shared_token:
         raise HTTPException(status_code=401, detail="Invalid AI service token")
@@ -975,6 +981,23 @@ def create_ground_truth_mark(benchmark_id: int, payload: GroundTruthMarkCreate, 
         note=(payload.note or "").strip()[:255] or None,
     )
     db.add(mark)
+    db.commit()
+    db.refresh(mark)
+    return _ground_truth_payload(mark)
+
+
+@router.patch("/benchmarks/{benchmark_id}/marks/{mark_id}")
+def update_ground_truth_mark(benchmark_id: int, mark_id: int, payload: GroundTruthMarkUpdate, db: Session = Depends(get_db)) -> dict:
+    """Correct GT class/direction in place without changing its reviewed timecode."""
+    mark = db.get(GroundTruthCrossing, mark_id)
+    if mark is None or mark.benchmark_id != benchmark_id:
+        raise HTTPException(status_code=404, detail="Ground-truth mark not found")
+    if payload.vehicle_type is not None:
+        mark.vehicle_type = payload.vehicle_type.value
+    if payload.direction is not None:
+        mark.direction = payload.direction.value
+    if payload.note is not None:
+        mark.note = payload.note.strip()[:255] or None
     db.commit()
     db.refresh(mark)
     return _ground_truth_payload(mark)

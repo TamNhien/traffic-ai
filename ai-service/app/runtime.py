@@ -38,6 +38,8 @@ class PipelineState:
     general_refine_checks: int = 0
     class_consensus_rescues: int = 0
     bicycle_class_rescues: int = 0
+    bicycle_context_checks: int = 0
+    bicycle_context_rescues: int = 0
     truck_class_rescues: int = 0
     bicycle_tracks_seen: int = 0
     truck_tracks_seen: int = 0
@@ -45,6 +47,7 @@ class PipelineState:
     truck_crossing_tracks: int = 0
     heavy_anchor_tracks: int = 0
     heavy_center_rescues: int = 0
+    two_wheel_center_rescues: int = 0
     heavy_stitch_recoveries: int = 0
     four_wheel_duplicate_suppressed: int = 0
     video_start_rescues: int = 0

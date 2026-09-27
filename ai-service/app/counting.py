@@ -422,6 +422,195 @@ class HeavyVehicleCrossingRescuer:
             self._last_crossing_frame.pop(source, None)
 
 
+@dataclass(slots=True)
+class _TwoWheelRescueState:
+    history: deque[_GateSample] = field(default_factory=lambda: deque(maxlen=64))
+    counted_directions: set[str] = field(default_factory=set)
+
+
+class TwoWheelCenterCrossingRescuer:
+    """Conservative center-trajectory rescue for fragmented two-wheel tracks.
+
+    V0.5.34 keeps the strict motion-leading-anchor gate as the primary source of
+    truth.  This secondary gate is evaluated only for established bicycle /
+    motorcycle tracks after the primary gate returns no crossing.  It targets a
+    failure mode visible in the GT-149 benchmark: a narrow front-wheel box or a
+    one-frame rider/vehicle box change can keep the leading anchor on one side of
+    the line even though the *vehicle centre trajectory* cleanly crosses it.
+
+    The rescue is deliberately much stricter than the heavy-vehicle center gate:
+    short history, finite-segment edge margin, strong normal motion, bounded jump,
+    road-corridor validation and minimum depth on both sides.  It therefore does
+    not turn ordinary line-adjacent jitter into a crossing.
+    """
+
+    def __init__(
+        self,
+        line: CountingLine,
+        road_zone: RoadZone | None = None,
+        *,
+        history_gap_frames: int = 12,
+        interpolation_gap_frames: int = 3,
+        dead_band_ratio: float = 0.006,
+        segment_margin: float = 0.0,
+        segment_edge_ratio: float = 0.04,
+        min_normal_ratio: float = 0.42,
+        min_motion_ratio: float = 0.005,
+        max_jump_ratio: float = 0.10,
+        min_side_distance_ratio: float = 0.006,
+        road_margin_ratio: float = 0.008,
+    ) -> None:
+        self.line = line
+        self.road_zone = road_zone
+        self.history_gap_frames = max(2, int(history_gap_frames))
+        self.interpolation_gap_frames = max(1, min(self.history_gap_frames, int(interpolation_gap_frames)))
+        self.dead_band_ratio = max(0.0, float(dead_band_ratio))
+        self.segment_margin = max(0.0, float(segment_margin))
+        self.segment_edge_ratio = max(0.0, min(0.30, float(segment_edge_ratio)))
+        self.min_normal_ratio = max(0.0, min(1.0, float(min_normal_ratio)))
+        self.min_motion_ratio = max(0.0, float(min_motion_ratio))
+        self.max_jump_ratio = max(0.0, float(max_jump_ratio))
+        self.min_side_distance_ratio = max(0.0, float(min_side_distance_ratio))
+        self.road_margin_ratio = max(0.0, float(road_margin_ratio))
+        self._tracks: dict[int, _TwoWheelRescueState] = {}
+        self.rescues = 0
+        self.rejected_segment = 0
+        self.rejected_motion = 0
+        self.rejected_jump = 0
+        self.rejected_road = 0
+        self._last_crossing_frame: dict[int, float] = {}
+        self._last_crossing_mode: dict[int, str] = {}
+
+    @staticmethod
+    def _segment_fraction(point: Point, a: Point, b: Point) -> float:
+        abx = b[0] - a[0]
+        aby = b[1] - a[1]
+        denom = abx * abx + aby * aby
+        if denom <= 1e-9:
+            return 0.5
+        return ((point[0] - a[0]) * abx + (point[1] - a[1]) * aby) / denom
+
+    def update(
+        self,
+        track_id: int,
+        center: Point,
+        frame_width: int,
+        frame_height: int,
+        frame_index: int,
+    ) -> tuple[str, Point] | None:
+        a, b = self.line.denormalize(frame_width, frame_height)
+        scale = max(1.0, min(frame_width, frame_height))
+        diagonal = max(hypot(frame_width, frame_height), 1.0)
+        dead_band = max(2.0, scale * self.dead_band_ratio)
+        distance = signed_distance(center, a, b)
+        side = 0 if abs(distance) <= dead_band else (1 if distance > 0 else -1)
+        sample = _GateSample(int(frame_index), center, distance, side)
+        state = self._tracks.setdefault(int(track_id), _TwoWheelRescueState())
+        state.history.append(sample)
+        if side == 0:
+            return None
+
+        previous: _GateSample | None = None
+        for candidate in reversed(list(state.history)[:-1]):
+            gap = sample.frame_index - candidate.frame_index
+            if gap <= 0:
+                continue
+            if gap > self.history_gap_frames:
+                break
+            if candidate.side == -side:
+                previous = candidate
+                break
+        if previous is None:
+            return None
+
+        direction = "in" if previous.side < 0 < side else "out"
+        if direction in state.counted_directions:
+            return None
+
+        crossing = segment_crossing_point(
+            previous.point, center, a, b, segment_margin=self.segment_margin
+        )
+        if crossing is None:
+            self.rejected_segment += 1
+            return None
+        fraction = self._segment_fraction(crossing, a, b)
+        if fraction < self.segment_edge_ratio or fraction > 1.0 - self.segment_edge_ratio:
+            self.rejected_segment += 1
+            return None
+
+        dx = center[0] - previous.point[0]
+        dy = center[1] - previous.point[1]
+        move_len = max(hypot(dx, dy), 1e-6)
+        perpendicular = abs(distance - previous.distance)
+        normal_ratio = perpendicular / move_len
+        jump_ratio = move_len / diagonal
+        side_depth_ratio = min(abs(distance), abs(previous.distance)) / scale
+        if jump_ratio > self.max_jump_ratio > 0.0:
+            self.rejected_jump += 1
+            return None
+        if (
+            perpendicular < max(2.0, scale * self.min_motion_ratio)
+            or normal_ratio < self.min_normal_ratio
+            or side_depth_ratio < self.min_side_distance_ratio
+        ):
+            self.rejected_motion += 1
+            return None
+
+        if self.road_zone is not None:
+            ux, uy = dx / move_len, dy / move_len
+            probe = max(3.0, scale * 0.015)
+            before = (crossing[0] - ux * probe, crossing[1] - uy * probe)
+            after = (crossing[0] + ux * probe, crossing[1] + uy * probe)
+            centers_ok = (
+                self.road_zone.contains_with_margin(previous.point, frame_width, frame_height, self.road_margin_ratio)
+                and self.road_zone.contains_with_margin(center, frame_width, frame_height, self.road_margin_ratio)
+            )
+            corridor_ok = (
+                self.road_zone.contains(crossing, frame_width, frame_height)
+                and self.road_zone.contains(before, frame_width, frame_height)
+                and self.road_zone.contains(after, frame_width, frame_height)
+            )
+            if not (centers_ok and corridor_ok):
+                self.rejected_road += 1
+                return None
+
+        state.counted_directions.add(direction)
+        gap = sample.frame_index - previous.frame_index
+        mode = "interpolated" if gap <= self.interpolation_gap_frames else "rescued"
+        self._last_crossing_mode[int(track_id)] = mode
+        self._last_crossing_frame[int(track_id)] = crossing_frame_between(previous, sample, crossing)
+        self.rescues += 1
+        state.history = deque([sample], maxlen=64)
+        return direction, crossing
+
+    def crossing_frame_for(self, track_id: int) -> float | None:
+        return self._last_crossing_frame.get(int(track_id))
+
+    def crossing_mode_for(self, track_id: int) -> str:
+        return self._last_crossing_mode.get(int(track_id), "rescued")
+
+    def merge_track(self, source_track_id: int, target_track_id: int) -> None:
+        source = int(source_track_id)
+        target = int(target_track_id)
+        if source == target:
+            return
+        src = self._tracks.pop(source, None)
+        if src is None:
+            return
+        dst = self._tracks.get(target)
+        if dst is None:
+            self._tracks[target] = src
+        else:
+            samples = list(dst.history) + list(src.history)
+            samples.sort(key=lambda sample: sample.frame_index)
+            dst.history = deque(samples[-64:], maxlen=64)
+            dst.counted_directions.update(src.counted_directions)
+        if source in self._last_crossing_frame:
+            self._last_crossing_frame[target] = self._last_crossing_frame.pop(source)
+        if source in self._last_crossing_mode:
+            self._last_crossing_mode[target] = self._last_crossing_mode.pop(source)
+
+
 class LineCrossingCounter:
     """Strict finite-line, trajectory-based bidirectional virtual gate.
 

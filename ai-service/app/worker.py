@@ -19,12 +19,13 @@ from app.classification import (
     TrackLabelSmoother,
     TruckSemanticLock,
     VehicleClassPolicy,
+    contextual_bicycle_decision,
     select_target_refinement,
     vehicle_family,
 )
 from app.counting import (
     CountingLine, HeavyVehicleCrossingRescuer, LineCrossingCounter, RoadZone,
-    select_event_crossing_frame, signed_distance,
+    TwoWheelCenterCrossingRescuer, select_event_crossing_frame, signed_distance,
 )
 from app.dedup import single_heavy_vehicle_plan
 from app.flow_calibration import FlowCalibrator
@@ -84,7 +85,7 @@ class PipelineWorker(threading.Thread):
             bicycle_hits=int(os.getenv("AI_BICYCLE_MIN_HITS", "5")),
             strong_bicycle_certainty=float(os.getenv("AI_BICYCLE_STRONG_CERTAINTY", "0.90")),
             strong_bicycle_hits=int(os.getenv("AI_BICYCLE_STRONG_HITS", "8")),
-            bicycle_refine_override_conf=float(os.getenv("AI_BICYCLE_REFINE_OVERRIDE_CONF", "0.58")),
+            bicycle_refine_override_conf=float(os.getenv("AI_BICYCLE_REFINE_OVERRIDE_CONF", "0.90")),
             truck_refine_override_conf=float(os.getenv("AI_TRUCK_REFINE_OVERRIDE_CONF", "0.48")),
             heavy_refine_override_conf=float(os.getenv("AI_HEAVY_REFINE_OVERRIDE_CONF", "0.54")),
         )
@@ -94,6 +95,7 @@ class PipelineWorker(threading.Thread):
         self._class_refine_last_observation: dict[int, tuple[int, tuple[str, float] | None]] = {}
         self._class_refine_overrides: dict[int, tuple[str, float, int]] = {}
         self._bicycle_class_rescue_tracks: set[int] = set()
+        self._bicycle_context_rescue_tracks: set[int] = set()
         self._truck_class_rescue_tracks: set[int] = set()
         self._class_consensus_rescue_tracks: set[int] = set()
         self._truck_tracks_seen: set[int] = set()
@@ -164,10 +166,20 @@ class PipelineWorker(threading.Thread):
         self.refine_target_min_coverage = max(0.0, float(os.getenv("AI_REFINE_TARGET_MIN_COVERAGE", "0.16")))
         self.refine_consensus_min_hits = max(2, int(os.getenv("AI_REFINE_CONSENSUS_MIN_HITS", "2")))
         self.refine_consensus_history_frames = max(20, int(os.getenv("AI_REFINE_CONSENSUS_HISTORY_FRAMES", "120")))
-        self.bicycle_consensus_conf = float(os.getenv("AI_BICYCLE_CONSENSUS_CONF", "0.60"))
-        self.bicycle_consensus_min_hits = max(2, int(os.getenv("AI_BICYCLE_CONSENSUS_MIN_HITS", "3")))
-        self.bicycle_consensus_margin = max(0.0, float(os.getenv("AI_BICYCLE_CONSENSUS_MARGIN", "0.08")))
-        self.bicycle_consensus_min_strong = max(0.0, float(os.getenv("AI_BICYCLE_CONSENSUS_MIN_STRONG", "0.34")))
+        self.bicycle_consensus_conf = float(os.getenv("AI_BICYCLE_CONSENSUS_CONF", "0.78"))
+        self.bicycle_consensus_min_hits = max(2, int(os.getenv("AI_BICYCLE_CONSENSUS_MIN_HITS", "4")))
+        self.bicycle_consensus_margin = max(0.0, float(os.getenv("AI_BICYCLE_CONSENSUS_MARGIN", "0.16")))
+        self.bicycle_consensus_min_strong = max(0.0, float(os.getenv("AI_BICYCLE_CONSENSUS_MIN_STRONG", "0.45")))
+        self.bicycle_consensus_min_sources = max(1, int(os.getenv("AI_BICYCLE_CONSENSUS_MIN_SOURCES", "2")))
+        self.bicycle_consensus_single_source_strong = max(0.0, float(os.getenv("AI_BICYCLE_CONSENSUS_SINGLE_SOURCE_STRONG", "0.88")))
+        self.bicycle_context_rescue_enabled = os.getenv("AI_BICYCLE_CONTEXT_RESCUE", "1").strip().lower() not in {"0", "false", "no"}
+        self.bicycle_context_pad_x = max(0.2, float(os.getenv("AI_BICYCLE_CONTEXT_PAD_X", "1.10")))
+        self.bicycle_context_pad_y = max(0.2, float(os.getenv("AI_BICYCLE_CONTEXT_PAD_Y", "0.85")))
+        self.bicycle_context_dual_conf = max(0.0, min(1.0, float(os.getenv("AI_BICYCLE_CONTEXT_DUAL_CONF", "0.72"))))
+        self.bicycle_context_single_conf = max(0.0, min(1.0, float(os.getenv("AI_BICYCLE_CONTEXT_SINGLE_CONF", "0.90"))))
+        self.bicycle_context_min_source_conf = max(0.0, min(1.0, float(os.getenv("AI_BICYCLE_CONTEXT_MIN_SOURCE_CONF", "0.18"))))
+        self.bicycle_context_min_strong = max(0.0, min(1.0, float(os.getenv("AI_BICYCLE_CONTEXT_MIN_STRONG", "0.34"))))
+        self.bicycle_context_max_per_frame = max(0, int(os.getenv("AI_BICYCLE_CONTEXT_MAX_PER_FRAME", "1")))
         self.truck_consensus_conf = float(os.getenv("AI_TRUCK_CONSENSUS_CONF", "0.52"))
         self._refine_consensus = RefineEvidenceAccumulator(history_frames=self.refine_consensus_history_frames)
         self._truck_semantic_lock = TruckSemanticLock(
@@ -198,6 +210,14 @@ class PipelineWorker(threading.Thread):
         self.heavy_center_history_gap = max(8, int(os.getenv("AI_HEAVY_CENTER_HISTORY_GAP", "90")))
         self.heavy_center_min_normal_ratio = max(0.0, min(1.0, float(os.getenv("AI_HEAVY_CENTER_MIN_NORMAL_RATIO", "0.20"))))
         self.heavy_center_road_margin_ratio = max(0.0, float(os.getenv("AI_HEAVY_CENTER_ROAD_MARGIN_RATIO", "0.020")))
+        self.two_wheel_center_rescue_enabled = os.getenv("AI_TWO_WHEEL_CENTER_RESCUE", "1").strip().lower() not in {"0", "false", "no"}
+        self.two_wheel_center_history_gap = max(3, int(os.getenv("AI_TWO_WHEEL_CENTER_HISTORY_GAP", "12")))
+        self.two_wheel_center_min_normal_ratio = max(0.0, min(1.0, float(os.getenv("AI_TWO_WHEEL_CENTER_MIN_NORMAL_RATIO", "0.42"))))
+        self.two_wheel_center_max_jump_ratio = max(0.01, float(os.getenv("AI_TWO_WHEEL_CENTER_MAX_JUMP_RATIO", "0.10")))
+        self.two_wheel_center_min_side_ratio = max(0.0, float(os.getenv("AI_TWO_WHEEL_CENTER_MIN_SIDE_RATIO", "0.006")))
+        self.two_wheel_center_road_margin_ratio = max(0.0, float(os.getenv("AI_TWO_WHEEL_CENTER_ROAD_MARGIN_RATIO", "0.008")))
+        self.two_wheel_center_segment_edge_ratio = max(0.0, min(0.25, float(os.getenv("AI_TWO_WHEEL_CENTER_SEGMENT_EDGE_RATIO", "0.04"))))
+        self.two_wheel_center_min_track_hits = max(2, int(os.getenv("AI_TWO_WHEEL_CENTER_MIN_TRACK_HITS", "3")))
         self.video_origin_rescue_frames = max(0, int(os.getenv("AI_VIDEO_ORIGIN_RESCUE_FRAMES", "20")))
         self.video_origin_distance_ratio = max(0.0, float(os.getenv("AI_VIDEO_ORIGIN_DISTANCE_RATIO", "0.065")))
         self.video_origin_min_normal_ratio = max(0.0, min(1.0, float(os.getenv("AI_VIDEO_ORIGIN_MIN_NORMAL_RATIO", "0.30"))))
@@ -725,6 +745,8 @@ class PipelineWorker(threading.Thread):
             bicycle_min_hits=self.bicycle_consensus_min_hits,
             bicycle_margin=self.bicycle_consensus_margin,
             bicycle_min_strongest=self.bicycle_consensus_min_strong,
+            bicycle_min_sources=self.bicycle_consensus_min_sources,
+            bicycle_single_source_strong=self.bicycle_consensus_single_source_strong,
         )
         if consensus is not None:
             if consensus[0] != str(target_label) and tid not in self._class_consensus_rescue_tracks:
@@ -885,6 +907,20 @@ class PipelineWorker(threading.Thread):
                 min_motion_ratio=float(os.getenv("AI_GATE_MIN_MOTION_RATIO", "0.004")),
                 road_margin_ratio=self.heavy_center_road_margin_ratio,
             ) if self.heavy_center_rescue_enabled else None
+            two_wheel_rescuer = TwoWheelCenterCrossingRescuer(
+                counter.line,
+                road_zone=counter.road_zone,
+                history_gap_frames=self.two_wheel_center_history_gap,
+                interpolation_gap_frames=int(os.getenv("AI_GATE_INTERPOLATION_GAP", "3")),
+                dead_band_ratio=float(os.getenv("AI_GATE_DEAD_BAND_RATIO", "0.006")),
+                segment_margin=float(os.getenv("AI_GATE_SEGMENT_MARGIN", "0.0")),
+                segment_edge_ratio=self.two_wheel_center_segment_edge_ratio,
+                min_normal_ratio=self.two_wheel_center_min_normal_ratio,
+                min_motion_ratio=float(os.getenv("AI_GATE_MIN_MOTION_RATIO", "0.004")),
+                max_jump_ratio=self.two_wheel_center_max_jump_ratio,
+                min_side_distance_ratio=self.two_wheel_center_min_side_ratio,
+                road_margin_ratio=self.two_wheel_center_road_margin_ratio,
+            ) if self.two_wheel_center_rescue_enabled else None
 
             self._event_dispatcher.start()
             self.state.status = "running"
@@ -984,6 +1020,7 @@ class PipelineWorker(threading.Thread):
                 crossing_this_frame = False
                 pending_crossing_events: list[tuple[int, str, str, float, int, float | None, str | None, float | None, float | None]] = []
                 refines_used_this_frame = 0
+                bicycle_context_used_this_frame = 0
                 boxes = result.boxes
                 self.state.detections_current_frame = int(len(boxes)) if boxes is not None else 0
                 self.state.active_tracks = 0
@@ -1156,6 +1193,16 @@ class PipelineWorker(threading.Thread):
                             heavy_center_candidate = heavy_rescuer.update(
                                 track_id, center, width, height, frame_index
                             )
+                        two_wheel_center_candidate = None
+                        if (
+                            two_wheel_rescuer is not None
+                            and vehicle_family(display_label) == "two-wheel"
+                            and class_hits >= self.two_wheel_center_min_track_hits
+                            and track_on_road
+                        ):
+                            two_wheel_center_candidate = two_wheel_rescuer.update(
+                                track_id, center, width, height, frame_index
+                            )
 
                         direction = counter.update(
                             track_id, anchor, width, height, frame_index=frame_index,
@@ -1175,6 +1222,16 @@ class PipelineWorker(threading.Thread):
                                 direction = heavy_direction
                                 self._heavy_center_rescue_tracks.add(int(track_id))
                                 self.state.heavy_center_rescues = len(self._heavy_center_rescue_tracks)
+                        if direction is None and two_wheel_center_candidate is not None:
+                            two_wheel_direction, two_wheel_crossing_point = two_wheel_center_candidate
+                            two_wheel_crossing_frame = two_wheel_rescuer.crossing_frame_for(track_id) if two_wheel_rescuer is not None else None
+                            two_wheel_mode = two_wheel_rescuer.crossing_mode_for(track_id) if two_wheel_rescuer is not None else "rescued"
+                            if counter.register_external_crossing(
+                                track_id, two_wheel_direction, frame_index, two_wheel_crossing_point,
+                                mode=two_wheel_mode, crossing_frame=two_wheel_crossing_frame,
+                            ):
+                                direction = two_wheel_direction
+                                self.state.two_wheel_center_rescues += 1
                         self.state.video_start_rescues = counter.origin_rescues
                         self.state.rejected_outside_road = counter.rejected_outside_road
                         self.state.fast_confirm_rescues = counter.fast_confirm_rescues
@@ -1247,6 +1304,25 @@ class PipelineWorker(threading.Thread):
                             if remembered is not None:
                                 event_label = remembered[0]
                                 policy_conf = max(policy_conf, remembered[1])
+
+                            # V0.5.34 crossing-only bicycle context rescue.  The
+                            # strict V0.5.33 policy remains the default; only a
+                            # geometry-proven motorcycle crossing gets one wider
+                            # target crop, which is useful when the tracker box
+                            # contains only the bicycle front wheel / basket.
+                            if (
+                                event_label == "motorcycle"
+                                and self.bicycle_context_rescue_enabled
+                                and bicycle_context_used_this_frame < self.bicycle_context_max_per_frame
+                            ):
+                                context_bicycle = self._refine_bicycle_context(
+                                    track_id, frame_index, frame, rect, device, use_half
+                                )
+                                bicycle_context_used_this_frame += 1
+                                if context_bicycle is not None:
+                                    event_label = "bicycle"
+                                    policy_conf = max(policy_conf, float(context_bicycle[1]))
+
                             event_label = event_label if event_label in VEHICLE_CLASSES else "other"
                             if event_label == "truck":
                                 self._truck_tracks_seen.add(int(track_id))
@@ -1390,12 +1466,15 @@ class PipelineWorker(threading.Thread):
                         "general_refine_checks": self.state.general_refine_checks,
                         "class_consensus_rescues": self.state.class_consensus_rescues,
                         "bicycle_class_rescues": self.state.bicycle_class_rescues,
+                        "bicycle_context_checks": self.state.bicycle_context_checks,
+                        "bicycle_context_rescues": self.state.bicycle_context_rescues,
                         "truck_class_rescues": self.state.truck_class_rescues,
                         "bicycle_tracks_seen": self.state.bicycle_tracks_seen,
                         "truck_tracks_seen": self.state.truck_tracks_seen,
                         "truck_crossing_tracks": self.state.truck_crossing_tracks,
                         "heavy_anchor_tracks": self.state.heavy_anchor_tracks,
                         "heavy_center_rescues": self.state.heavy_center_rescues,
+                        "two_wheel_center_rescues": self.state.two_wheel_center_rescues,
                         "heavy_stitch_recoveries": self.state.heavy_stitch_recoveries,
                         "four_wheel_duplicate_suppressed": self.state.four_wheel_duplicate_suppressed,
                         "video_start_rescues": self.state.video_start_rescues,
@@ -1571,6 +1650,119 @@ class PipelineWorker(threading.Thread):
         except Exception:
             return None
 
+
+    def _context_bicycle_from_model(
+        self,
+        frame,
+        rect,
+        device,
+        use_half: bool,
+        refine_ids: list[int],
+        model,
+    ) -> float | None:
+        """Return a target-matched bicycle confidence from a wider crossing crop."""
+        if model is None or not refine_ids:
+            return None
+        try:
+            h, w = frame.shape[:2]
+            x1, y1, x2, y2 = [float(v) for v in rect]
+            target_w = max(1.0, x2 - x1)
+            target_h = max(1.0, y2 - y1)
+            pad_x = max(28, int(target_w * self.bicycle_context_pad_x))
+            pad_y = max(34, int(target_h * self.bicycle_context_pad_y))
+            ix1 = max(0, int(x1) - pad_x)
+            iy1 = max(0, int(y1) - pad_y)
+            ix2 = min(w, int(x2) + pad_x)
+            iy2 = min(h, int(y2) + pad_y)
+            crop = frame[iy1:iy2, ix1:ix2]
+            if crop.size == 0 or crop.shape[0] < 48 or crop.shape[1] < 48:
+                return None
+            predictions = model.predict(
+                crop,
+                conf=0.05,
+                classes=refine_ids,
+                device=device,
+                imgsz=max(self.refine_imgsz, 704),
+                half=use_half,
+                verbose=False,
+            )
+            if not predictions:
+                return None
+            boxes = predictions[0].boxes
+            if boxes is None or len(boxes) == 0:
+                return None
+            target_crop = (x1 - ix1, y1 - iy1, x2 - ix1, y2 - iy1)
+            candidates: list[RefineCandidate] = []
+            for box, cls_id, conf in zip(
+                boxes.xyxy.cpu().tolist(),
+                boxes.cls.int().cpu().tolist(),
+                boxes.conf.cpu().tolist(),
+            ):
+                label = str(predictions[0].names[int(cls_id)])
+                if label == "bicycle":
+                    candidates.append(RefineCandidate(label, float(conf), tuple(map(float, box))))
+            if not candidates:
+                return None
+            match = select_target_refinement(
+                target_crop,
+                candidates,
+                min_iou=min(self.refine_target_min_iou, 0.04),
+                min_target_coverage=min(self.refine_target_min_coverage, 0.12),
+                min_evidence_coverage=0.24,
+                max_center_distance_ratio=1.05,
+                target_family="two-wheel",
+            )
+            return None if match is None else float(match.confidence)
+        except Exception:
+            return None
+
+    def _refine_bicycle_context(
+        self,
+        track_id: int,
+        frame_index: int,
+        frame,
+        rect,
+        device,
+        use_half: bool,
+    ) -> tuple[str, float] | None:
+        """Crossing-only wide-context bicycle rescue.
+
+        The normal target-aware refiner remains strict.  This second pass exists
+        for partial two-wheel boxes (for example only a front wheel/basket), and
+        therefore runs only when a real geometry crossing is already proven.
+        """
+        if not self.bicycle_context_rescue_enabled:
+            return None
+        self.state.bicycle_context_checks += 1
+        observations: list[tuple[str, float]] = []
+        if self._refiner_model is not None and self._refine_ids:
+            conf = self._context_bicycle_from_model(
+                frame, rect, device, use_half, self._refine_ids, self._refiner_model
+            )
+            if conf is not None:
+                observations.append(("domain", conf))
+        if self._general_refiner_model is not None and self._general_refine_ids:
+            conf = self._context_bicycle_from_model(
+                frame, rect, device, use_half, self._general_refine_ids, self._general_refiner_model
+            )
+            if conf is not None:
+                observations.append(("general", conf))
+        decision = contextual_bicycle_decision(
+            observations,
+            dual_source_confidence=self.bicycle_context_dual_conf,
+            single_source_confidence=self.bicycle_context_single_conf,
+            min_source_confidence=self.bicycle_context_min_source_conf,
+            min_strongest=self.bicycle_context_min_strong,
+        )
+        if decision is None:
+            return None
+        tid = int(track_id)
+        if tid not in self._bicycle_context_rescue_tracks:
+            self._bicycle_context_rescue_tracks.add(tid)
+            self.state.bicycle_context_rescues = len(self._bicycle_context_rescue_tracks)
+        self._class_refine_overrides[tid] = ("bicycle", float(decision[1]), int(frame_index))
+        return decision
+
     @staticmethod
     def _draw_raw_detection(cv2, frame, rect, label: str, confidence: float) -> None:
         x1, y1, x2, y2 = [int(v) for v in rect]
@@ -1623,7 +1815,7 @@ class PipelineWorker(threading.Thread):
         rt = f"x{self.state.realtime_factor:.2f}" if self.state.source_fps > 0 else "live"
         cv2.putText(
             frame,
-            f"DET {self.state.detections_current_frame} | UNTRACKED {self.state.untracked_detections} | TRACK {self.state.active_tracks} | ROAD {self.state.road_tracks_current_frame} | TOTAL {self.state.total_count} | IN {self.state.in_count} | OUT {self.state.out_count} | FPS {self.state.fps:.1f} ({rt}) | {self.state.inference_ms:.0f}ms | {'HYBRID' if self.hybrid_mode else 'DIRECT'} {Path(self.detector_model_name).name} | ROI {self.detection_roi_mode.upper()} | DIRECT-X {self.state.direct_crossings} | INTERP {self.state.interpolated_crossings} | RESCUE {self.state.rescued_crossings} | ROAD-REJECT {counter.rejected_outside_road} | CONFIRM-REJECT {counter.rejected_unconfirmed_side} | COOL-REJECT {counter.rejected_cooldown} | COOL-REL {counter.adaptive_cooldown_releases} | FAST-CONF {counter.fast_confirm_rescues} | BRACKET+ {counter.bracket_confirm_rescues} | RESCUE-X {counter.rejected_rescue_validation} | CLASS-R {self.state.class_refine_checks} | GEN-R {self.state.general_refine_checks} | CONS+ {self.state.class_consensus_rescues} | BIKE+ {self.state.bicycle_class_rescues} | TRUCK+ {self.state.truck_class_rescues} | TRUCK-SEEN {self.state.truck_tracks_seen} | TRUCK-X {self.state.truck_crossing_tracks} | HEAVY-A {self.state.heavy_anchor_tracks} | HEAVY-C+ {self.state.heavy_center_rescues} | HEAVY-STITCH {self.state.heavy_stitch_recoveries} | 4W-DUP {self.state.four_wheel_duplicate_suppressed} | START+ {self.state.video_start_rescues} | TIME-SYNC {self.state.crossing_time_corrections} | TIME-CLAMP {self.state.crossing_time_clamps} | REPLAY {'DET' if self.state.deterministic_video_replay else 'LIVE'} | HUMAN-X {self.state.human_guard_rejections} | RIDER+ {self.state.rider_guard_rescues} | GUARD-PENDING {self.state.human_guard_pending_crossings} | ROAD-EDGE+ {counter.road_edge_rescues}",
+            f"DET {self.state.detections_current_frame} | UNTRACKED {self.state.untracked_detections} | TRACK {self.state.active_tracks} | ROAD {self.state.road_tracks_current_frame} | TOTAL {self.state.total_count} | IN {self.state.in_count} | OUT {self.state.out_count} | FPS {self.state.fps:.1f} ({rt}) | {self.state.inference_ms:.0f}ms | {'HYBRID' if self.hybrid_mode else 'DIRECT'} {Path(self.detector_model_name).name} | ROI {self.detection_roi_mode.upper()} | DIRECT-X {self.state.direct_crossings} | INTERP {self.state.interpolated_crossings} | RESCUE {self.state.rescued_crossings} | ROAD-REJECT {counter.rejected_outside_road} | CONFIRM-REJECT {counter.rejected_unconfirmed_side} | COOL-REJECT {counter.rejected_cooldown} | COOL-REL {counter.adaptive_cooldown_releases} | FAST-CONF {counter.fast_confirm_rescues} | BRACKET+ {counter.bracket_confirm_rescues} | RESCUE-X {counter.rejected_rescue_validation} | CLASS-R {self.state.class_refine_checks} | GEN-R {self.state.general_refine_checks} | CONS+ {self.state.class_consensus_rescues} | BIKE+ {self.state.bicycle_class_rescues} | BIKE-CTX {self.state.bicycle_context_rescues} | 2W-C+ {self.state.two_wheel_center_rescues} | TRUCK+ {self.state.truck_class_rescues} | TRUCK-SEEN {self.state.truck_tracks_seen} | TRUCK-X {self.state.truck_crossing_tracks} | HEAVY-A {self.state.heavy_anchor_tracks} | HEAVY-C+ {self.state.heavy_center_rescues} | HEAVY-STITCH {self.state.heavy_stitch_recoveries} | 4W-DUP {self.state.four_wheel_duplicate_suppressed} | START+ {self.state.video_start_rescues} | TIME-SYNC {self.state.crossing_time_corrections} | TIME-CLAMP {self.state.crossing_time_clamps} | REPLAY {'DET' if self.state.deterministic_video_replay else 'LIVE'} | HUMAN-X {self.state.human_guard_rejections} | RIDER+ {self.state.rider_guard_rescues} | GUARD-PENDING {self.state.human_guard_pending_crossings} | ROAD-EDGE+ {counter.road_edge_rescues}",
             (20, 32),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.62,

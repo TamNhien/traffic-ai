@@ -64,12 +64,20 @@ def test_target_refiner_ignores_high_confidence_neighbor() -> None:
 
 
 def test_refiner_can_rescue_bicycle_from_motorcycle_biased_primary() -> None:
-    policy = VehicleClassPolicy(bicycle_refine_override_conf=0.58)
+    policy = VehicleClassPolicy(bicycle_refine_override_conf=0.90)
     label, confidence = policy.final_label(
-        "motorcycle", "motorcycle", 0.96, 18, ("bicycle", 0.66)
+        "motorcycle", "motorcycle", 0.96, 18, ("bicycle", 0.93)
     )
     assert label == "bicycle"
     assert confidence >= 0.96
+
+
+def test_v0533_single_medium_bicycle_refiner_no_longer_flips_scooter() -> None:
+    policy = VehicleClassPolicy(bicycle_refine_override_conf=0.90)
+    label, _ = policy.final_label(
+        "motorcycle", "motorcycle", 0.96, 18, ("bicycle", 0.72)
+    )
+    assert label == "motorcycle"
 
 
 def test_target_refiner_can_promote_small_car_shaped_truck() -> None:
@@ -222,3 +230,71 @@ def test_v0530_truck_semantic_lock_requires_durable_evidence() -> None:
     lock = TruckSemanticLock(ttl_frames=450, min_refiner_hits=2, min_refiner_confidence=0.62)
     assert lock.observe(7, 100, stable_label="car", certainty=0.95, hits=20, refiner_hits=1, refiner_confidence=0.61) is None
     assert lock.resolve(7, 120, "car") is None
+
+
+def test_v0533_bicycle_consensus_prefers_source_diversity() -> None:
+    from app.classification import RefineEvidenceAccumulator
+
+    evidence = RefineEvidenceAccumulator(history_frames=120)
+    for frame, conf in [(100, 0.50), (110, 0.52), (120, 0.54), (130, 0.56)]:
+        evidence.update(901, frame, "bicycle", conf, "general")
+    assert evidence.minority_consensus(
+        901, 130, "motorcycle", min_hits=2, bicycle_confidence=0.78,
+        bicycle_min_hits=4, bicycle_margin=0.16, bicycle_min_strongest=0.45,
+        bicycle_min_sources=2, bicycle_single_source_strong=0.88,
+    ) is None
+
+    evidence.update(901, 140, "bicycle", 0.58, "domain")
+    result = evidence.minority_consensus(
+        901, 140, "motorcycle", min_hits=2, bicycle_confidence=0.78,
+        bicycle_min_hits=4, bicycle_margin=0.16, bicycle_min_strongest=0.45,
+        bicycle_min_sources=2, bicycle_single_source_strong=0.88,
+    )
+    assert result is not None
+    assert result[0] == "bicycle"
+
+
+def test_v0533_very_strong_single_refiner_can_rescue_repeated_clear_bicycle() -> None:
+    from app.classification import RefineEvidenceAccumulator
+
+    evidence = RefineEvidenceAccumulator(history_frames=120)
+    for frame in (200, 210, 220, 230, 240):
+        evidence.update(902, frame, "bicycle", 0.91, "general")
+    result = evidence.minority_consensus(
+        902, 240, "motorcycle", min_hits=2, bicycle_confidence=0.78,
+        bicycle_min_hits=4, bicycle_margin=0.16, bicycle_min_strongest=0.45,
+        bicycle_min_sources=2, bicycle_single_source_strong=0.88,
+    )
+    assert result is not None
+    assert result[0] == "bicycle"
+
+
+def test_v0534_context_bicycle_requires_dual_moderate_sources() -> None:
+    from app.classification import contextual_bicycle_decision
+
+    decision = contextual_bicycle_decision(
+        [("domain", 0.46), ("general", 0.55)],
+        dual_source_confidence=0.72,
+        single_source_confidence=0.90,
+        min_source_confidence=0.18,
+        min_strongest=0.34,
+    )
+    assert decision is not None
+    assert decision[0] == "bicycle"
+
+
+def test_v0534_context_bicycle_rejects_single_medium_guess() -> None:
+    from app.classification import contextual_bicycle_decision
+
+    assert contextual_bicycle_decision(
+        [("general", 0.72)], single_source_confidence=0.90
+    ) is None
+
+
+def test_v0534_context_bicycle_allows_one_extremely_strong_source() -> None:
+    from app.classification import contextual_bicycle_decision
+
+    decision = contextual_bicycle_decision(
+        [("general", 0.94)], single_source_confidence=0.90
+    )
+    assert decision == ("bicycle", 0.94)

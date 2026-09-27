@@ -20,7 +20,7 @@ def test_root_metadata() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["name"] == "Traffic AI"
-    assert payload["version"] == "0.5.32"
+    assert payload["version"] == "0.5.34"
     assert payload["docs"] == "/docs"
     assert payload["health"] == "/api/health"
 
@@ -157,8 +157,8 @@ def test_benchmark_clone_compatibility_rejects_different_line() -> None:
     assert "vạch đếm" in reason
 
 
-def test_v0531_version() -> None:
-    assert app.version == "0.5.32"
+def test_backend_version_metadata() -> None:
+    assert app.version == "0.5.34"
 
 
 def test_v0531_startup_crossing_signature_guard_is_narrow() -> None:
@@ -167,3 +167,42 @@ def test_v0531_startup_crossing_signature_guard_is_narrow() -> None:
     assert _startup_crossing_signature_duplicate(0.36, 0.16, 0.080) is False
     assert _startup_crossing_signature_duplicate(1.20, 0.90, 0.010) is False
     assert _startup_crossing_signature_duplicate(0.95, 0.10, 0.010) is False
+
+
+def test_v0533_ground_truth_mark_update_schema() -> None:
+    from app.api.routes import GroundTruthMarkUpdate
+    from app.models.all_models import VehicleType
+
+    payload = GroundTruthMarkUpdate(vehicle_type=VehicleType.motorcycle)
+    assert payload.vehicle_type == VehicleType.motorcycle
+    assert payload.direction is None
+
+
+def test_v0533_version() -> None:
+    assert app.version == "0.5.34"
+
+
+def test_v0533_ground_truth_mark_update_keeps_timecode() -> None:
+    from app.api.routes import GroundTruthMarkUpdate, update_ground_truth_mark
+    from app.models.all_models import Direction, GroundTruthCrossing, VehicleType
+
+    mark = GroundTruthCrossing(
+        id=77, benchmark_id=12, source_time_seconds=639.119, source_frame_index=15979,
+        vehicle_type="bicycle", direction="out", note=None,
+    )
+
+    class FakeDb:
+        def get(self, model, row_id):
+            assert model is GroundTruthCrossing
+            return mark if row_id == 77 else None
+        def commit(self):
+            pass
+        def refresh(self, row):
+            assert row is mark
+
+    payload = GroundTruthMarkUpdate(vehicle_type=VehicleType.motorcycle, direction=Direction.out)
+    result = update_ground_truth_mark(12, 77, payload, FakeDb())
+    assert result["vehicle_type"] == "motorcycle"
+    assert result["direction"] == "out"
+    assert result["source_time_seconds"] == 639.119
+    assert mark.source_frame_index == 15979

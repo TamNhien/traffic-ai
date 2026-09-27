@@ -1,3 +1,146 @@
+# Traffic AI V0.5.34 — Two-Wheel Context + Center-Gate Rescue 8.0 🚲🛵🎯
+
+V0.5.34 được xây từ replay deterministic V0.5.33 trên `clip1.mp4` / GT 149 và 176 snapshot trong `camera_1(10).rar`. Baseline mới đã giữ được precision class rất cao nhưng counting geometry vẫn là nút thắt:
+
+```text
+GT                  149
+AI                  147
+Khớp                126
+Lọt                  23
+Dư                   21
+Recall              84.6%
+Precision           85.7%
+F1                  85.1%
+Class đúng          99.2%
+```
+
+Benchmark chỉ còn **1 lỗi class đã khớp rõ ràng**: `04:49.450 · GT Xe đạp → AI Xe máy`. Snapshot cho thấy người áo xanh đi xe đạp nhưng box detector chủ yếu ôm phần bánh trước/giỏ, vì vậy crop target thông thường không thấy đủ rider + khung xe. Một xe đạp thật khác ở gần cuối clip cũng có box hai bánh hẹp và có nguy cơ nằm trong nhóm crossing miss.
+
+## 1. Crossing-only Bicycle Context Rescue
+
+V0.5.33 vẫn giữ nguyên chính sách bicycle precision chặt để scooter không bị đổi thành xe đạp. V0.5.34 **không hạ các threshold đó**. Thay vào đó, chỉ khi geometry đã chứng minh một crossing hai bánh nhưng event vẫn là `motorcycle`, runtime chạy tối đa một lượt context rescue trên frame:
+
+```text
+box tracker hẹp (bánh trước / giỏ)
+        ↓
+geometry crossing thật
+        ↓
+crop rộng hơn quanh đúng target
+        ↓
+best.pt DOMAIN + YOLO26m GENERAL
+        ↓
+2 nguồn cùng ủng hộ bicycle
+HOẶC 1 nguồn cực mạnh
+        ↓
+BIKE-CTX+ → bicycle
+```
+
+Một medium one-shot bicycle guess vẫn không được phép lật scooter. Context rescue chỉ chạy tại crossing nên không làm hàng nghìn track roadside đổi class.
+
+Telemetry mới:
+
+```text
+Bike context
+```
+
+## 2. Strict Two-Wheel Center-Gate Rescue 8.0
+
+Baseline V0.5.33 còn `11 Crossing Gate không phát event + 7 chưa đủ xác nhận phía sau vạch`. Với xe hai bánh, motion-leading anchor có thể nhảy khi detector chuyển từ rider+xe sang chỉ bánh trước/đuôi xe. V0.5.34 bổ sung cổng center trajectory **sau khi primary gate không phát crossing**.
+
+Cổng phụ chỉ chấp nhận khi đồng thời thỏa:
+
+- canonical track hai bánh đã đủ history;
+- center thật sự giao finite counting segment;
+- crossing không nằm sát endpoint;
+- gap ngắn (`12` frame mặc định);
+- normal motion mạnh (`>= 0.42`);
+- jump bị giới hạn (`<= 0.10` diagonal);
+- hai phía đủ sâu khỏi dead-band;
+- hai center + corridor đều hợp lệ trong Road Zone.
+
+Khi primary gate đã đếm, center rescue không tạo event thứ hai. Khi center rescue chứng minh crossing trước, `register_external_crossing()` ghi state ngược vào primary gate để chặn duplicate về sau.
+
+Telemetry mới:
+
+```text
+2W center
+```
+
+## 3. Không thay đổi phần đã ổn
+
+- Deterministic Replay V0.5.32 giữ nguyên.
+- Bicycle Precision 4.0 / GT Class Audit V0.5.33 giữ nguyên.
+- Truck Semantic Lock + Canonical 4W Fusion giữ nguyên; `Xe tải = 2` vẫn là 2 **lượt cắt vạch** của cùng chiếc van quay lại, không phải 2 van vật lý.
+- Confidence-aware Time Sync, Human Guard 2.1, Heavy center rescue và backend dedup giữ nguyên.
+
+Database:
+
+```text
+0047_two_wheel_v0533
+        ↓
+0048_two_wheel_gate_v0534
+schema_version = 0.5.34
+```
+
+---
+
+# Traffic AI V0.5.33-R2 — Benchmark Class Audit UI Hotfix 🧩
+
+Hotfix R2 không đổi AI runtime, model, database hay migration. Bản này chỉ sửa giao diện danh sách **Sai loại phương tiện** của GT Class Audit: panel báo cáo hẹp trước đây ép 4 cột (timecode / GT / AI / dropdown) trên cùng một hàng nên chữ bị xuống dòng từng từ, chồng lấn và select bị co. R2 chuyển mỗi dòng sang layout 3 tầng ổn định: `timecode + GT` → `AI` → `dropdown sửa GT` full-width, đồng thời chừa gutter cho scrollbar để nội dung không bị che.
+
+`scripts/test.ps1` bổ sung regression contract cho layout này. `VERSION` vẫn là `0.5.33`; Alembic head vẫn `0047_two_wheel_v0533`; `schema_version` vẫn `0.5.33`.
+
+---
+
+# Traffic AI V0.5.33-R1 — Historical Contract Hotfix 🔧
+
+Hotfix R1 không thay đổi AI runtime, model, database hay migration. Bản này sửa hai historical contract trong `scripts/test.ps1` bị khóa vào default cũ sau khi V0.5.33 siết Bicycle Precision:
+
+- V0.5.26 không còn bắt buộc `.env.example` phải giữ `AI_BICYCLE_REFINE_OVERRIDE_CONF=0.58`; contract kiểm tra setting hiện tồn tại và `start.ps1` vẫn có migration `0.58 -> 0.90`.
+- V0.5.29 không còn bắt buộc `.env.example` phải giữ `AI_BICYCLE_CONSENSUS_MIN_HITS=3`; contract kiểm tra setting hiện tồn tại và `start.ps1` vẫn có migration `3 -> 4`.
+- `VERSION` vẫn là `0.5.33`; Alembic head vẫn là `0047_two_wheel_v0533`; `schema_version` vẫn là `0.5.33`.
+
+---
+
+# Traffic AI V0.5.33 — Bicycle Precision 4.0 + GT Class Audit + Passage Semantics 🚲🛵🚚
+
+V0.5.33 được tạo sau khi đối chiếu hai replay deterministic V0.5.32 trên cùng `clip1.mp4` và 352 snapshot trong `camera_1(9).rar` (176 frame ứng viên, mỗi frame xuất hiện đúng hai lần giữa hai replay). Hai lượt đều cho cùng `147` crossing, xác nhận replay đã ổn định.
+
+## Kết luận kiểm tra clip trước khi sửa
+
+- **Van/xe tải:** trong clip chỉ có **một chiếc van màu trắng-xanh**, nhưng chiếc xe này **cắt vạch hai lần** ở hai thời điểm khác nhau (xấp xỉ `10:42.9` và `14:43.1`, hai hướng khác nhau). Dashboard đang đo **lượt cắt vạch**, vì vậy `Xe tải = 2` là đúng theo semantics đếm lượt, không có nghĩa có hai chiếc van khác nhau. V0.5.33 bổ sung giải thích ngay trên Dashboard để tránh nhầm giữa *số xe vật lý duy nhất* và *số lượt qua vạch*.
+- **Xe đạp/xe máy:** `Xe đạp = 4` ở V0.5.32 chưa đúng. Review khung hình cho thấy hai lượt xe đạp thực sự nổi bật quanh `04:49` và `15:22`; một số scooter đã bị bicycle consensus promote nhầm.
+- **Ground Truth cũng có nhãn class sai:** các mốc `10:39.119`, `14:24.671`, `15:04.244` đang ghi GT `Xe đạp` nhưng khung hình cho thấy phương tiện là scooter/xe máy. Vì vậy không được dùng toàn bộ 7 dòng `Sai loại phương tiện` để tune model một cách mù quáng.
+
+Theo 149 lượt GT hiện có, sau khi audit class thủ công, phân bố hợp lý nhất của clip là khoảng **145 lượt xe máy + 2 lượt xe đạp + 2 lượt van/xe tải = 149 lượt**. Đây là phân bố theo *lượt cắt vạch*, không phải số phương tiện vật lý duy nhất.
+
+## Bicycle Precision 4.0
+
+Bicycle rescue được siết theo ba tầng:
+
+- consensus bicycle tối thiểu `4` frame thay vì `3`; fused confidence `0.78`, margin so với motorcycle `0.16`, strongest hit `0.45`;
+- ưu tiên ít nhất `2` nguồn refiner độc lập (`best.pt` domain + YOLO26m general); một nguồn duy nhất chỉ được cứu khi lặp nhiều frame và có hit rất mạnh `>=0.88`;
+- one-shot bicycle override tăng `0.58 → 0.90`, nên một dự đoán bicycle vừa phải không còn dễ biến scooter thành xe đạp. Strong repeated primary-bicycle path vẫn được giữ để xe đạp rõ không bị ép thành motorcycle.
+
+## GT Class Audit
+
+Benchmark cho phép sửa trực tiếp `vehicle_type` của một Ground Truth mark bằng dropdown. PATCH giữ nguyên timecode/frame/direction, do đó không cần xóa rồi đánh dấu lại 149 mốc chỉ để sửa `Xe đạp ↔ Xe máy`.
+
+## Passage semantics
+
+Dashboard ghi rõ các số theo loại là **lượt cắt vạch**: cùng một xe quay lại và cắt vạch lần nữa được tính thêm một lượt. Không thêm long-window dedup cho chiếc van, vì làm vậy sẽ xóa một crossing thật.
+
+Database:
+
+```text
+0046_replay_time_v0532
+        ↓
+0047_two_wheel_v0533
+schema_version = 0.5.33
+```
+
+---
+
 # Traffic AI V0.5.32-R1 — Historical Contract Hotfix
 
 Hotfix này không đổi AI/runtime/database. Nó chỉ sửa historical contract V0.5.30 trong `scripts/test.ps1`: UI V0.5.32 đã đổi nhãn `Gộp ID 4W` thành `Gộp canonical 4W`, nhưng test cũ vẫn bắt literal cũ nên chặn oan. R1 kiểm tra semantic keys thật (`truck_semantic_locks`, `truck_crossing_tracks`, `four_wheel_duplicate_suppressed`) và warning truck thay vì khóa wording UI. `VERSION` vẫn là `0.5.32`, Alembic vẫn `0046_replay_time_v0532`.

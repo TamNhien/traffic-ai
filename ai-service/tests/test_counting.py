@@ -478,3 +478,65 @@ def test_v0532_short_rescue_keeps_geometric_time() -> None:
     frame, corrected, clamped = select_event_crossing_frame(100, 88.0, "rescued", max_rescued_shift_frames=18)
     assert frame == 88.0
     assert corrected and not clamped
+
+
+def test_v0534_two_wheel_center_rescue_accepts_strong_finite_crossing() -> None:
+    from app.counting import TwoWheelCenterCrossingRescuer
+
+    road = RoadZone(0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0)
+    rescue = TwoWheelCenterCrossingRescuer(
+        CountingLine(0.1, 0.5, 0.9, 0.5),
+        road_zone=road,
+        history_gap_frames=12,
+        min_normal_ratio=0.42,
+        max_jump_ratio=0.50,
+        min_side_distance_ratio=0.006,
+        segment_edge_ratio=0.04,
+    )
+    assert rescue.update(501, (50, 35), 100, 100, 1) is None
+    result = rescue.update(501, (51, 68), 100, 100, 3)
+    assert result is not None
+    assert result[0] == "in"
+    assert rescue.crossing_mode_for(501) == "interpolated"
+
+
+def test_v0534_two_wheel_center_rescue_rejects_line_parallel_jitter() -> None:
+    from app.counting import TwoWheelCenterCrossingRescuer
+
+    road = RoadZone(0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0)
+    rescue = TwoWheelCenterCrossingRescuer(
+        CountingLine(0.1, 0.5, 0.9, 0.5), road_zone=road, min_normal_ratio=0.55
+    )
+    assert rescue.update(502, (20, 48), 100, 100, 1) is None
+    assert rescue.update(502, (82, 52), 100, 100, 2) is None
+    assert rescue.rescues == 0
+
+
+def test_v0534_two_wheel_center_rescue_rejects_endpoint_crossing() -> None:
+    from app.counting import TwoWheelCenterCrossingRescuer
+
+    road = RoadZone(0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0)
+    rescue = TwoWheelCenterCrossingRescuer(
+        CountingLine(0.1, 0.5, 0.9, 0.5),
+        road_zone=road,
+        segment_edge_ratio=0.08,
+        max_jump_ratio=0.50,
+    )
+    assert rescue.update(503, (11, 30), 100, 100, 1) is None
+    assert rescue.update(503, (11, 70), 100, 100, 2) is None
+    assert rescue.rescues == 0
+
+
+def test_v0534_two_wheel_center_rescue_rejects_long_jump() -> None:
+    from app.counting import TwoWheelCenterCrossingRescuer
+
+    road = RoadZone(0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0)
+    rescue = TwoWheelCenterCrossingRescuer(
+        CountingLine(0.1, 0.5, 0.9, 0.5),
+        road_zone=road,
+        max_jump_ratio=0.10,
+        min_normal_ratio=0.2,
+    )
+    assert rescue.update(504, (15, 20), 100, 100, 1) is None
+    assert rescue.update(504, (85, 80), 100, 100, 2) is None
+    assert rescue.rejected_jump == 1

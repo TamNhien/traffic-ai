@@ -141,6 +141,54 @@ def select_target_refinement(
     return best
 
 
+
+def contextual_bicycle_decision(
+    observations: list[tuple[str, float]],
+    *,
+    dual_source_confidence: float = 0.72,
+    single_source_confidence: float = 0.90,
+    min_source_confidence: float = 0.18,
+    min_strongest: float = 0.34,
+) -> tuple[str, float] | None:
+    """Fuse one crossing-time *context* bicycle opinion per refiner source.
+
+    V0.5.33 intentionally made normal bicycle promotion very strict to stop
+    scooters flipping to bicycle.  The remaining GT-149 error is different: the
+    recall tracker sometimes boxes only the bicycle front wheel/basket, so the
+    normal target crop never shows enough of the rider + frame.  V0.5.34 uses a
+    second, larger context crop only at an actual two-wheel crossing.
+
+    To keep the V0.5.33 precision gains, context evidence cannot promote from one
+    ordinary weak guess.  Two independent sources (domain best.pt + general
+    verifier) must jointly exceed a fused threshold, or one source must be very
+    strong on its own.
+    """
+
+    best_by_source: dict[str, float] = {}
+    for source, confidence in observations:
+        value = max(0.0, min(1.0, float(confidence)))
+        if value < float(min_source_confidence):
+            continue
+        key = str(source)
+        best_by_source[key] = max(best_by_source.get(key, 0.0), value)
+    if not best_by_source:
+        return None
+
+    strongest = max(best_by_source.values())
+    if strongest >= float(single_source_confidence):
+        return "bicycle", strongest
+
+    if len(best_by_source) < 2 or strongest < float(min_strongest):
+        return None
+    miss_probability = 1.0
+    for confidence in best_by_source.values():
+        miss_probability *= max(0.0, 1.0 - confidence)
+    fused = 1.0 - miss_probability
+    if fused >= float(dual_source_confidence):
+        return "bicycle", fused
+    return None
+
+
 class RefineEvidenceAccumulator:
     """Fuse low-rate class-refiner observations across distinct source frames.
 
@@ -190,6 +238,24 @@ class RefineEvidenceAccumulator:
             miss_probability *= max(0.0, 1.0 - confidence)
         return len(by_frame), 1.0 - miss_probability, strongest
 
+    def source_count(self, track_id: int, frame_index: int, label: str) -> int:
+        """Count independent refiner sources supporting ``label`` in history.
+
+        Domain ``best.pt`` and the general YOLO verifier are intentionally
+        treated as separate opinions. Repeated predictions from one model can
+        still build temporal confidence, but V0.5.33 can require source
+        diversity before promoting the rare ``bicycle`` class.
+        """
+
+        current = int(frame_index)
+        sources: set[str] = set()
+        for observed_frame, observed_label, _confidence, source in self._samples.get(int(track_id), ()):
+            age = current - int(observed_frame)
+            if age < 0 or age > self.history_frames or observed_label != str(label):
+                continue
+            sources.add(str(source))
+        return len(sources)
+
     def merge_track(self, source_track_id: int, target_track_id: int) -> None:
         source = int(source_track_id)
         target = int(target_track_id)
@@ -217,6 +283,8 @@ class RefineEvidenceAccumulator:
         bicycle_min_hits: int | None = None,
         bicycle_margin: float = 0.0,
         bicycle_min_strongest: float = 0.0,
+        bicycle_min_sources: int = 1,
+        bicycle_single_source_strong: float = 1.01,
     ) -> tuple[str, float] | None:
         """Return a conservative correction supported on distinct frames.
 
@@ -233,12 +301,19 @@ class RefineEvidenceAccumulator:
             bike_hits_required = max(hits_required, int(bicycle_min_hits) if bicycle_min_hits is not None else hits_required)
             contrast_ok = base_hits == 0 or fused >= base_fused + max(0.0, float(bicycle_margin))
             strongest_ok = strongest >= max(0.0, float(bicycle_min_strongest))
+            source_count = self.source_count(track_id, frame_index, "bicycle")
+            source_ok = source_count >= max(1, int(bicycle_min_sources))
+            # Escape hatch for a genuinely clear bicycle seen repeatedly by one
+            # refiner: source diversity is preferred, not an absolute blocker.
+            if not source_ok and hits >= bike_hits_required + 1:
+                source_ok = strongest >= max(0.0, float(bicycle_single_source_strong))
             if (
                 base != "bicycle"
                 and hits >= bike_hits_required
                 and fused >= float(bicycle_confidence)
                 and contrast_ok
                 and strongest_ok
+                and source_ok
             ):
                 return "bicycle", fused
             return None
