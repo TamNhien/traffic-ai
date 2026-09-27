@@ -15,6 +15,8 @@ class TimedCrossing:
     tracking_id: int | None = None
     crossing_method: str | None = None
     confidence: float | None = None
+    crossing_x: float | None = None
+    crossing_y: float | None = None
 
 
 def _value(item: Any, name: str, default=None):
@@ -38,6 +40,8 @@ def _timed(item: Any) -> TimedCrossing:
         tracking_id=int(tracking_id) if tracking_id is not None else None,
         crossing_method=str(_value(item, "crossing_method")) if _value(item, "crossing_method") else None,
         confidence=float(confidence) if confidence is not None else None,
+        crossing_x=(float(_value(item, "crossing_x")) if _value(item, "crossing_x") is not None else None),
+        crossing_y=(float(_value(item, "crossing_y")) if _value(item, "crossing_y") is not None else None),
     )
 
 
@@ -111,18 +115,34 @@ def _false_positive_diagnostics(
             ]
             if near_matched:
                 nearest = min(near_matched, key=lambda other: abs(other.source_time_seconds - event.source_time_seconds))
-                reason = "duplicate_near_gt"
-                detail = (
-                    f"Có một AI event khác đã khớp GT chỉ cách {abs(nearest.source_time_seconds-event.source_time_seconds):.2f}s; "
-                    "có khả năng ID switch/duplicate crossing."
-                )
-            elif event.crossing_method == "rescued":
+                dt = abs(nearest.source_time_seconds - event.source_time_seconds)
+                spatial_distance = None
+                if (
+                    event.crossing_x is not None and event.crossing_y is not None
+                    and nearest.crossing_x is not None and nearest.crossing_y is not None
+                ):
+                    dx = float(event.crossing_x) - float(nearest.crossing_x)
+                    dy = float(event.crossing_y) - float(nearest.crossing_y)
+                    spatial_distance = (dx * dx + dy * dy) ** 0.5
+                if spatial_distance is not None and spatial_distance <= 0.045:
+                    reason = "spatial_duplicate_near_gt"
+                    detail = (
+                        f"AI event khác đã khớp GT cách {dt:.2f}s và điểm cắt chỉ lệch {spatial_distance:.3f}; "
+                        "khả năng ID switch/duplicate crossing cao."
+                    )
+                elif spatial_distance is None:
+                    reason = "duplicate_near_gt"
+                    detail = (
+                        f"Có một AI event khác đã khớp GT chỉ cách {dt:.2f}s nhưng event cũ thiếu tọa độ crossing; "
+                        "chỉ xem đây là nghi vấn duplicate."
+                    )
+            if reason == "unmatched_ai_event" and event.crossing_method == "rescued":
                 reason = "rescued_gap_unmatched"
                 detail = "Event được Crossing Engine cứu qua gap dài nhưng không có GT tương ứng."
-            elif event.crossing_method == "interpolated":
+            elif reason == "unmatched_ai_event" and event.crossing_method == "interpolated":
                 reason = "interpolated_unmatched"
                 detail = "Event nội suy qua vạch không có GT tương ứng; cần kiểm tra jitter/dead-band tại timecode này."
-            elif event.crossing_method == "direct":
+            elif reason == "unmatched_ai_event" and event.crossing_method == "direct":
                 reason = "direct_unmatched"
                 detail = "Event cắt trực tiếp nhưng không có GT; kiểm tra track/anchor có thật sự thuộc xe chạy qua vạch hay không."
 

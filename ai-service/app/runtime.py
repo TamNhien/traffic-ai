@@ -42,6 +42,7 @@ class PipelineState:
     bicycle_context_rescues: int = 0
     bicycle_context_target_matches: int = 0
     bicycle_context_temporal_rescues: int = 0
+    bicycle_context_weak_motor_rescues: int = 0
     truck_class_rescues: int = 0
     bicycle_tracks_seen: int = 0
     truck_tracks_seen: int = 0

@@ -323,18 +323,18 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.35") { throw "VERSION phải là 0.5.35, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0049_two_wheel_sig_v0535.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0049_two_wheel_sig_v0535.py." }
+  if ($version -ne "0.5.36") { throw "VERSION phải là 0.5.36, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0050_bike_spatial_v0536.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0050_bike_spatial_v0536.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0049_two_wheel_sig_v0535"' -or $migrationText -notmatch 'down_revision = "0048_two_wheel_gate_v0534"' -or $migrationText -notmatch "value='0.5.35'") {
-    throw "Migration 0049_two_wheel_sig_v0535 không đúng contract V0.5.35."
+  if ($migrationText -notmatch 'revision = "0050_bike_spatial_v0536"' -or $migrationText -notmatch 'down_revision = "0049_two_wheel_sig_v0535"' -or $migrationText -notmatch "value='0.5.36'") {
+    throw "Migration 0050_bike_spatial_v0536 không đúng contract V0.5.36."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
 
 function Assert-AlembicRevisionSafetyContract {
-  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.35" -ForegroundColor Cyan
+  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.36" -ForegroundColor Cyan
   $versionsDir = Join-Path $root "backend\alembic\versions"
   $bad = @()
   Get-ChildItem $versionsDir -Filter "*.py" | ForEach-Object {
@@ -358,7 +358,7 @@ function Assert-AlembicRevisionSafetyContract {
   if ($v17 -notmatch 'revision = "0017_ai_test_dep_v053"') {
     throw "Migration V0.5.3 chưa dùng revision ID rút gọn an toàn."
   }
-  Write-Host "[OK] Alembic revision-length safety V0.5.35" -ForegroundColor Green
+  Write-Host "[OK] Alembic revision-length safety V0.5.36" -ForegroundColor Green
 }
 
 
@@ -1274,7 +1274,20 @@ function Assert-BicycleContextTrailDedupV0535Contract {
 }
 
 function Assert-LegacySemanticCompatibilityV0523R1 {
-  Write-Host "`n[Traffic AI] Legacy semantic contract compatibility V0.5.23-R1" -ForegroundColor Cyan
+  Write-Host "`n[Traffic AI] Weak-Motor Dual Context + Spatial Benchmark Audit V0.5.36"
+$classification = Get-Content -Raw (Join-Path $Root "ai-service/app/classification.py")
+$worker = Get-Content -Raw (Join-Path $Root "ai-service/app/worker.py")
+$runtime = Get-Content -Raw (Join-Path $Root "ai-service/app/runtime.py")
+$benchmarking = Get-Content -Raw (Join-Path $Root "backend/app/benchmarking.py")
+$frontend = Get-Content -Raw (Join-Path $Root "frontend/src/main.jsx")
+$envExample = Get-Content -Raw (Join-Path $Root ".env.example")
+if ($classification -notmatch 'def contextual_bicycle_weak_motor_decision' -or $worker -notmatch 'AI_BICYCLE_CONTEXT_WEAK_MOTOR_DUAL_CONF') { throw "V0.5.36 thiếu weak-motor dual-context bicycle rescue." }
+if ($runtime -notmatch 'bicycle_context_weak_motor_rescues' -or $frontend -notmatch 'Bike weak-MC') { throw "V0.5.36 thiếu telemetry weak-motor context." }
+if ($benchmarking -notmatch 'spatial_duplicate_near_gt' -or $benchmarking -notmatch 'crossing_x') { throw "V0.5.36 thiếu spatial benchmark duplicate audit." }
+if ($envExample -notmatch 'AI_BICYCLE_CONTEXT_WEAK_MOTOR_MAX_CONF=0.62' -or $envExample -notmatch 'AI_BICYCLE_CONTEXT_WEAK_MOTOR_DUAL_CONF=0.58') { throw "V0.5.36 thiếu runtime defaults." }
+Write-Host "[OK] Weak-Motor Dual Context + Spatial Benchmark Audit V0.5.36"
+
+Write-Host "`n[Traffic AI] Legacy semantic contract compatibility V0.5.23-R1" -ForegroundColor Cyan
   $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
   if ($frontend -notmatch 'Tổng lượt cắt vạch' -or $frontend -notmatch 'direct_crossings' -or $frontend -notmatch 'interpolated_crossings' -or $frontend -notmatch 'rescued_crossings') {
     throw "V0.5.23-R1 thiếu crossing breakdown tương thích các engine cũ."

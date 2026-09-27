@@ -47,7 +47,7 @@ def test_benchmark_tolerance_blocks_far_event() -> None:
     assert result["false_positives"] == 1
 
 
-def rich_item(idx, time, direction="in", vehicle_type="motorcycle", tracking_id=None, crossing_method=None, confidence=0.9):
+def rich_item(idx, time, direction="in", vehicle_type="motorcycle", tracking_id=None, crossing_method=None, confidence=0.9, crossing_x=None, crossing_y=None):
     return SimpleNamespace(
         id=idx,
         source_time_seconds=time,
@@ -56,6 +56,8 @@ def rich_item(idx, time, direction="in", vehicle_type="motorcycle", tracking_id=
         tracking_id=tracking_id,
         crossing_method=crossing_method,
         confidence=confidence,
+        crossing_x=crossing_x,
+        crossing_y=crossing_y,
     )
 
 
@@ -109,3 +111,23 @@ def test_v0527_global_matcher_does_not_use_class_to_improve_assignment() -> None
     assert result["matched"] == 1
     assert result["matched_items"][0]["ai_event_id"] == 11
     assert result["class_mismatches"] == 1
+
+
+def test_v0536_spatial_duplicate_requires_close_crossing_point() -> None:
+    ai = [
+        rich_item(201, 30.00, "in", tracking_id=501, crossing_method="direct", crossing_x=0.40, crossing_y=0.50),
+        rich_item(202, 30.40, "in", tracking_id=502, crossing_method="rescued", crossing_x=0.41, crossing_y=0.51),
+    ]
+    gt = [rich_item(1, 30.02, "in", crossing_x=0.40, crossing_y=0.50)]
+    result = match_crossings(gt, ai, 0.50)
+    assert result["false_positive_items"][0]["reason"] == "spatial_duplicate_near_gt"
+
+
+def test_v0536_near_time_but_far_crossing_is_not_called_duplicate() -> None:
+    ai = [
+        rich_item(211, 40.00, "in", tracking_id=601, crossing_method="direct", crossing_x=0.20, crossing_y=0.50),
+        rich_item(212, 40.35, "in", tracking_id=602, crossing_method="rescued", crossing_x=0.72, crossing_y=0.50),
+    ]
+    gt = [rich_item(2, 40.02, "in", crossing_x=0.20, crossing_y=0.50)]
+    result = match_crossings(gt, ai, 0.50)
+    assert result["false_positive_items"][0]["reason"] == "rescued_gap_unmatched"

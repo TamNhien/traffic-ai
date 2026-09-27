@@ -332,3 +332,30 @@ def test_v0535_context_trail_rejects_single_weak_guess_without_history() -> None
         [("general", 0.60)], temporal_hits=1, temporal_fused=0.60,
         temporal_strongest=0.60, temporal_sources=1,
     ) is None
+
+
+def test_v0536_weak_motor_dual_context_rescues_two_source_bicycle() -> None:
+    from app.classification import contextual_bicycle_weak_motor_decision
+    result = contextual_bicycle_weak_motor_decision(
+        [("domain", 0.38), ("general", 0.36)],
+        detector_confidence=0.49,
+        max_motorcycle_confidence=0.62,
+        dual_source_confidence=0.58,
+        min_source_confidence=0.18,
+        min_strongest=0.24,
+    )
+    assert result is not None and result[0] == "bicycle"
+
+
+def test_v0536_weak_motor_dual_context_rejects_confident_motorcycle() -> None:
+    from app.classification import contextual_bicycle_weak_motor_decision
+    assert contextual_bicycle_weak_motor_decision(
+        [("domain", 0.55), ("general", 0.52)], detector_confidence=0.81
+    ) is None
+
+
+def test_v0536_weak_motor_dual_context_rejects_single_source() -> None:
+    from app.classification import contextual_bicycle_weak_motor_decision
+    assert contextual_bicycle_weak_motor_decision(
+        [("domain", 0.72)], detector_confidence=0.49
+    ) is None

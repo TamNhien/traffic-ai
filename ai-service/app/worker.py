@@ -21,6 +21,7 @@ from app.classification import (
     VehicleClassPolicy,
     contextual_bicycle_decision,
     contextual_bicycle_temporal_decision,
+    contextual_bicycle_weak_motor_decision,
     select_contextual_bicycle_refinement,
     select_target_refinement,
     vehicle_family,
@@ -186,6 +187,9 @@ class PipelineWorker(threading.Thread):
         self.bicycle_context_temporal_conf = max(0.0, min(1.0, float(os.getenv("AI_BICYCLE_CONTEXT_TEMPORAL_CONF", "0.50"))))
         self.bicycle_context_temporal_strong = max(0.0, min(1.0, float(os.getenv("AI_BICYCLE_CONTEXT_TEMPORAL_STRONG", "0.26"))))
         self.bicycle_context_temporal_combined = max(0.0, min(1.0, float(os.getenv("AI_BICYCLE_CONTEXT_TEMPORAL_COMBINED", "0.72"))))
+        self.bicycle_context_weak_motor_max_conf = max(0.0, min(1.0, float(os.getenv("AI_BICYCLE_CONTEXT_WEAK_MOTOR_MAX_CONF", "0.62"))))
+        self.bicycle_context_weak_motor_dual_conf = max(0.0, min(1.0, float(os.getenv("AI_BICYCLE_CONTEXT_WEAK_MOTOR_DUAL_CONF", "0.58"))))
+        self.bicycle_context_weak_motor_min_strong = max(0.0, min(1.0, float(os.getenv("AI_BICYCLE_CONTEXT_WEAK_MOTOR_MIN_STRONG", "0.24"))))
         self.truck_consensus_conf = float(os.getenv("AI_TRUCK_CONSENSUS_CONF", "0.52"))
         self._refine_consensus = RefineEvidenceAccumulator(history_frames=self.refine_consensus_history_frames)
         self._truck_semantic_lock = TruckSemanticLock(
@@ -1322,7 +1326,7 @@ class PipelineWorker(threading.Thread):
                                 and bicycle_context_used_this_frame < self.bicycle_context_max_per_frame
                             ):
                                 context_bicycle = self._refine_bicycle_context(
-                                    track_id, frame_index, frame, rect, device, use_half
+                                    track_id, frame_index, frame, rect, device, use_half, confidence_f
                                 )
                                 bicycle_context_used_this_frame += 1
                                 if context_bicycle is not None:
@@ -1476,6 +1480,7 @@ class PipelineWorker(threading.Thread):
                         "bicycle_context_rescues": self.state.bicycle_context_rescues,
                         "bicycle_context_target_matches": self.state.bicycle_context_target_matches,
                         "bicycle_context_temporal_rescues": self.state.bicycle_context_temporal_rescues,
+                        "bicycle_context_weak_motor_rescues": self.state.bicycle_context_weak_motor_rescues,
                         "truck_class_rescues": self.state.truck_class_rescues,
                         "bicycle_tracks_seen": self.state.bicycle_tracks_seen,
                         "truck_tracks_seen": self.state.truck_tracks_seen,
@@ -1728,6 +1733,7 @@ class PipelineWorker(threading.Thread):
         rect,
         device,
         use_half: bool,
+        detector_confidence: float,
     ) -> tuple[str, float] | None:
         """Crossing-only wide-context bicycle rescue.
 
@@ -1758,6 +1764,17 @@ class PipelineWorker(threading.Thread):
             min_source_confidence=self.bicycle_context_min_source_conf,
             min_strongest=self.bicycle_context_min_strong,
         )
+        if decision is None:
+            decision = contextual_bicycle_weak_motor_decision(
+                observations,
+                detector_confidence=detector_confidence,
+                max_motorcycle_confidence=self.bicycle_context_weak_motor_max_conf,
+                dual_source_confidence=self.bicycle_context_weak_motor_dual_conf,
+                min_source_confidence=self.bicycle_context_min_source_conf,
+                min_strongest=self.bicycle_context_weak_motor_min_strong,
+            )
+            if decision is not None:
+                self.state.bicycle_context_weak_motor_rescues += 1
         if decision is None:
             hits, fused, strongest = self._refine_consensus.support(track_id, frame_index, "bicycle")
             sources = self._refine_consensus.source_count(track_id, frame_index, "bicycle")
@@ -1832,7 +1849,7 @@ class PipelineWorker(threading.Thread):
         rt = f"x{self.state.realtime_factor:.2f}" if self.state.source_fps > 0 else "live"
         cv2.putText(
             frame,
-            f"DET {self.state.detections_current_frame} | UNTRACKED {self.state.untracked_detections} | TRACK {self.state.active_tracks} | ROAD {self.state.road_tracks_current_frame} | TOTAL {self.state.total_count} | IN {self.state.in_count} | OUT {self.state.out_count} | FPS {self.state.fps:.1f} ({rt}) | {self.state.inference_ms:.0f}ms | {'HYBRID' if self.hybrid_mode else 'DIRECT'} {Path(self.detector_model_name).name} | ROI {self.detection_roi_mode.upper()} | DIRECT-X {self.state.direct_crossings} | INTERP {self.state.interpolated_crossings} | RESCUE {self.state.rescued_crossings} | ROAD-REJECT {counter.rejected_outside_road} | CONFIRM-REJECT {counter.rejected_unconfirmed_side} | COOL-REJECT {counter.rejected_cooldown} | COOL-REL {counter.adaptive_cooldown_releases} | FAST-CONF {counter.fast_confirm_rescues} | BRACKET+ {counter.bracket_confirm_rescues} | RESCUE-X {counter.rejected_rescue_validation} | CLASS-R {self.state.class_refine_checks} | GEN-R {self.state.general_refine_checks} | CONS+ {self.state.class_consensus_rescues} | BIKE+ {self.state.bicycle_class_rescues} | BIKE-CTX {self.state.bicycle_context_rescues} | BIKE-T {self.state.bicycle_context_temporal_rescues} | 2W-C+ {self.state.two_wheel_center_rescues} | TRUCK+ {self.state.truck_class_rescues} | TRUCK-SEEN {self.state.truck_tracks_seen} | TRUCK-X {self.state.truck_crossing_tracks} | HEAVY-A {self.state.heavy_anchor_tracks} | HEAVY-C+ {self.state.heavy_center_rescues} | HEAVY-STITCH {self.state.heavy_stitch_recoveries} | 4W-DUP {self.state.four_wheel_duplicate_suppressed} | START+ {self.state.video_start_rescues} | TIME-SYNC {self.state.crossing_time_corrections} | TIME-CLAMP {self.state.crossing_time_clamps} | REPLAY {'DET' if self.state.deterministic_video_replay else 'LIVE'} | HUMAN-X {self.state.human_guard_rejections} | RIDER+ {self.state.rider_guard_rescues} | GUARD-PENDING {self.state.human_guard_pending_crossings} | ROAD-EDGE+ {counter.road_edge_rescues}",
+            f"DET {self.state.detections_current_frame} | UNTRACKED {self.state.untracked_detections} | TRACK {self.state.active_tracks} | ROAD {self.state.road_tracks_current_frame} | TOTAL {self.state.total_count} | IN {self.state.in_count} | OUT {self.state.out_count} | FPS {self.state.fps:.1f} ({rt}) | {self.state.inference_ms:.0f}ms | {'HYBRID' if self.hybrid_mode else 'DIRECT'} {Path(self.detector_model_name).name} | ROI {self.detection_roi_mode.upper()} | DIRECT-X {self.state.direct_crossings} | INTERP {self.state.interpolated_crossings} | RESCUE {self.state.rescued_crossings} | ROAD-REJECT {counter.rejected_outside_road} | CONFIRM-REJECT {counter.rejected_unconfirmed_side} | COOL-REJECT {counter.rejected_cooldown} | COOL-REL {counter.adaptive_cooldown_releases} | FAST-CONF {counter.fast_confirm_rescues} | BRACKET+ {counter.bracket_confirm_rescues} | RESCUE-X {counter.rejected_rescue_validation} | CLASS-R {self.state.class_refine_checks} | GEN-R {self.state.general_refine_checks} | CONS+ {self.state.class_consensus_rescues} | BIKE+ {self.state.bicycle_class_rescues} | BIKE-CTX {self.state.bicycle_context_rescues} | BIKE-T {self.state.bicycle_context_temporal_rescues} | BIKE-W+ {self.state.bicycle_context_weak_motor_rescues} | 2W-C+ {self.state.two_wheel_center_rescues} | TRUCK+ {self.state.truck_class_rescues} | TRUCK-SEEN {self.state.truck_tracks_seen} | TRUCK-X {self.state.truck_crossing_tracks} | HEAVY-A {self.state.heavy_anchor_tracks} | HEAVY-C+ {self.state.heavy_center_rescues} | HEAVY-STITCH {self.state.heavy_stitch_recoveries} | 4W-DUP {self.state.four_wheel_duplicate_suppressed} | START+ {self.state.video_start_rescues} | TIME-SYNC {self.state.crossing_time_corrections} | TIME-CLAMP {self.state.crossing_time_clamps} | REPLAY {'DET' if self.state.deterministic_video_replay else 'LIVE'} | HUMAN-X {self.state.human_guard_rejections} | RIDER+ {self.state.rider_guard_rescues} | GUARD-PENDING {self.state.human_guard_pending_crossings} | ROAD-EDGE+ {counter.road_edge_rescues}",
             (20, 32),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.62,

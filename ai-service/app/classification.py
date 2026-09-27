@@ -239,6 +239,47 @@ def contextual_bicycle_temporal_decision(
     return "bicycle", combined
 
 
+
+def contextual_bicycle_weak_motor_decision(
+    observations: list[tuple[str, float]],
+    *,
+    detector_confidence: float,
+    max_motorcycle_confidence: float = 0.62,
+    dual_source_confidence: float = 0.58,
+    min_source_confidence: float = 0.18,
+    min_strongest: float = 0.24,
+) -> tuple[str, float] | None:
+    """Precision-preserving rescue for a *weak* motorcycle crossing.
+
+    V0.5.35 proved the context matcher is finding bicycle candidates (Bike ctx
+    match > 0) but the generic context threshold can still be too strict for the
+    partial front-wheel/basket box at 04:49.  This path only opens when the
+    detector itself is weak and *both* independent context refiners support a
+    bicycle.  A confident motorcycle or a single-source guess can never use this
+    relaxed threshold.
+    """
+    if float(detector_confidence) > float(max_motorcycle_confidence):
+        return None
+    best_by_source: dict[str, float] = {}
+    for source, confidence in observations:
+        value = max(0.0, min(1.0, float(confidence)))
+        if value < float(min_source_confidence):
+            continue
+        key = str(source)
+        best_by_source[key] = max(best_by_source.get(key, 0.0), value)
+    if len(best_by_source) < 2:
+        return None
+    strongest = max(best_by_source.values())
+    if strongest < float(min_strongest):
+        return None
+    miss_probability = 1.0
+    for confidence in best_by_source.values():
+        miss_probability *= max(0.0, 1.0 - confidence)
+    fused = 1.0 - miss_probability
+    if fused < float(dual_source_confidence):
+        return None
+    return "bicycle", fused
+
 def contextual_bicycle_decision(
     observations: list[tuple[str, float]],
     *,

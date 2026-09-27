@@ -1,3 +1,18 @@
+# Traffic AI V0.5.36 — Weak-Motor Dual Context + Spatial Benchmark Audit 🚲🔎
+
+V0.5.35 trên GT 149 giữ nguyên counting so với V0.5.34 (`156 AI / 134 khớp / 15 lọt / 22 dư`) nhưng telemetry đã xác định đúng nút thắt mới: `Bike ctx match = 4` trong khi `Bike context = 0`, `Bike trail = 0`; tức crop/matcher đã nhìn thấy bicycle candidate nhưng cổng quyết định vẫn quá chặt. Đồng thời `2W dedup = 0` cho thấy 10 mục benchmark gắn nhãn “event dư gần GT” chưa đủ bằng chứng để xóa runtime chỉ dựa vào thời gian.
+
+V0.5.36 xử lý hai điểm an toàn:
+
+- **Weak-Motor Dual Context**: chỉ khi detector đang gọi `motorcycle` với confidence yếu (`<= 0.62`) và **cả refiner miền + refiner chung** cùng target-match bicycle, runtime được dùng ngưỡng fused thấp hơn (`0.58`). Motorcycle confidence cao hoặc single-source guess vẫn không được phép đổi class. Đây là nhánh nhắm đúng trường hợp `04:49.450`, nơi snapshot cho thấy detector motorcycle khoảng `0.49` nhưng bicycle context đã match.
+- **Spatial Benchmark Audit**: chẩn đoán `duplicate_near_gt` giờ kiểm tra thêm `crossing_x/y`. Chỉ event vừa gần thời gian vừa gần điểm cắt (`<= 0.045`) mới được gọi `spatial_duplicate_near_gt`; hai xe đi gần thời gian nhưng ở vị trí khác trên vạch sẽ quay về chẩn đoán theo crossing method thay vì bị gắn nhãn duplicate quá sớm.
+
+Telemetry mới: `Bike weak-MC`.
+
+Database: `0050_bike_spatial_v0536`, `schema_version = 0.5.36`. Không xóa dữ liệu.
+
+---
+
 # Traffic AI V0.5.35 — Bicycle Context Trail + 2W Rescue Signature 8.1 🚲🛵🎯
 
 V0.5.34 trên GT 149 đã tăng **khớp 126 → 134**, giảm **lọt 23 → 15**, Recall **84.6% → 89.9%** và F1 **85.1% → 87.9%**. `2W center = 9` trong khi số khớp tăng 8 và đếm dư chỉ tăng 1, vì vậy V0.5.35 giữ nguyên Center-Gate Rescue 8.0 thay vì rollback. Hai điểm còn lại được xử lý riêng:
