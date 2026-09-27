@@ -298,3 +298,37 @@ def test_v0534_context_bicycle_allows_one_extremely_strong_source() -> None:
         [("general", 0.94)], single_source_confidence=0.90
     )
     assert decision == ("bicycle", 0.94)
+
+
+def test_v0535_context_match_accepts_full_bicycle_near_partial_front_box() -> None:
+    from app.classification import RefineCandidate, select_contextual_bicycle_refinement
+    target = (80.0, 70.0, 120.0, 150.0)
+    candidates = [RefineCandidate("bicycle", 0.46, (55.0, 45.0, 135.0, 165.0))]
+    match = select_contextual_bicycle_refinement(target, candidates)
+    assert match is not None
+    assert match.label == "bicycle"
+
+
+def test_v0535_context_match_rejects_parked_neighbor() -> None:
+    from app.classification import RefineCandidate, select_contextual_bicycle_refinement
+    target = (80.0, 70.0, 120.0, 150.0)
+    candidates = [RefineCandidate("bicycle", 0.95, (220.0, 40.0, 300.0, 160.0))]
+    assert select_contextual_bicycle_refinement(target, candidates) is None
+
+
+def test_v0535_context_trail_combines_one_context_opinion_with_temporal_evidence() -> None:
+    from app.classification import contextual_bicycle_temporal_decision
+    result = contextual_bicycle_temporal_decision(
+        [("general", 0.38)], temporal_hits=3, temporal_fused=0.63,
+        temporal_strongest=0.47, temporal_sources=1, min_combined=0.72,
+    )
+    assert result is not None
+    assert result[0] == "bicycle"
+
+
+def test_v0535_context_trail_rejects_single_weak_guess_without_history() -> None:
+    from app.classification import contextual_bicycle_temporal_decision
+    assert contextual_bicycle_temporal_decision(
+        [("general", 0.60)], temporal_hits=1, temporal_fused=0.60,
+        temporal_strongest=0.60, temporal_sources=1,
+    ) is None

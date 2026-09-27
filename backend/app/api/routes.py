@@ -567,6 +567,28 @@ def _startup_crossing_signature_duplicate(
     )
 
 
+def _two_wheel_rescue_signature_duplicate(
+    time_delta: float,
+    distance: float,
+    current_method: str | None,
+    other_method: str | None,
+) -> bool:
+    """Narrow V0.5.35 cross-ID guard for secondary two-wheel gate events.
+
+    V0.5.34 recovered eight additional GT matches with nine 2W-center rescues,
+    but the benchmark also retained near-GT duplicate events. The generic 0.22s
+    signature must stay tight for dense traffic, so only a pair involving a
+    rescued/interpolated crossing receives a slightly wider time window and a
+    tighter spatial requirement. Direct/direct traffic is never widened here.
+    """
+    methods = {str(current_method or ""), str(other_method or "")}
+    if "rescued" in methods:
+        return float(time_delta) <= 0.60 and float(distance) <= 0.018
+    if methods <= {"interpolated", "rescued"} and "interpolated" in methods:
+        return float(time_delta) <= 0.40 and float(distance) <= 0.016
+    return False
+
+
 @router.post("/internal/events", response_model=VehicleEventRead, status_code=201)
 def internal_event(payload: VehicleEventCreate, response: Response, x_ai_token: str | None = Header(default=None), db: Session = Depends(get_db)) -> VehicleEvent:
     _assert_ai_token(x_ai_token)
@@ -663,6 +685,21 @@ def internal_event(payload: VehicleEventCreate, response: Response, x_ai_token: 
             if time_delta <= 0.22 and distance <= 0.025:
                 response.headers["X-TrafficAI-Deduplicated"] = "1"
                 response.headers["X-TrafficAI-Dedup-Reason"] = "crossing-signature"
+                return other
+
+            # V0.5.35: secondary two-wheel center/gap rescue can rediscover the
+            # same physical crossing under a new ByteTrack ID. Widen only when
+            # at least one event came from a secondary crossing method, and use
+            # a tighter crossing-point distance than the generic guard.
+            if (
+                _vehicle_family_value(other.vehicle_type) == "two-wheel"
+                and _vehicle_family_value(payload.vehicle_type) == "two-wheel"
+                and _two_wheel_rescue_signature_duplicate(
+                    time_delta, distance, payload.crossing_method, other.crossing_method
+                )
+            ):
+                response.headers["X-TrafficAI-Deduplicated"] = "1"
+                response.headers["X-TrafficAI-Dedup-Reason"] = "two-wheel-rescue-signature"
                 return other
 
             # V0.5.30 four-wheel semantic signature: one van can cross while

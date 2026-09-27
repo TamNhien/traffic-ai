@@ -225,6 +225,10 @@ Ensure-EnvSetting "AI_BICYCLE_CONTEXT_SINGLE_CONF" "0.90"
 Ensure-EnvSetting "AI_BICYCLE_CONTEXT_MIN_SOURCE_CONF" "0.18"
 Ensure-EnvSetting "AI_BICYCLE_CONTEXT_MIN_STRONG" "0.34"
 Ensure-EnvSetting "AI_BICYCLE_CONTEXT_MAX_PER_FRAME" "1"
+Ensure-EnvSetting "AI_BICYCLE_CONTEXT_TEMPORAL_MIN_HITS" "2"
+Ensure-EnvSetting "AI_BICYCLE_CONTEXT_TEMPORAL_CONF" "0.50"
+Ensure-EnvSetting "AI_BICYCLE_CONTEXT_TEMPORAL_STRONG" "0.26"
+Ensure-EnvSetting "AI_BICYCLE_CONTEXT_TEMPORAL_COMBINED" "0.72"
 Ensure-EnvSetting "AI_WARMUP" "1"
 
 # V0.2.8: bootstrap HTTPS/hosts tự động.
@@ -310,7 +314,7 @@ if (-not $dashboardOk -or -not $apiOk) {
 }
 
 Write-Host ""
-Write-Host "[OK] Traffic AI V0.5.34 đã khởi động." -ForegroundColor Green
+Write-Host "[OK] Traffic AI V0.5.35 đã khởi động." -ForegroundColor Green
 Write-Host "Dashboard : https://traffic-ai.test:8443"
 Write-Host "API Docs  : https://traffic-ai.test:8444/docs"
 Write-Host "PostgreSQL: 127.0.0.1:5445 / traffic_ai_db"

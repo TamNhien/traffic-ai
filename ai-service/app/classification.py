@@ -142,6 +142,103 @@ def select_target_refinement(
 
 
 
+def select_contextual_bicycle_refinement(
+    target: Rect,
+    candidates: list[RefineCandidate],
+    *,
+    min_confidence: float = 0.18,
+    max_center_distance_ratio: float = 1.35,
+) -> TargetRefineMatch | None:
+    """Match a bicycle candidate to a partial two-wheel target at crossing time.
+
+    V0.5.34 still used the ordinary target matcher for its wide context crop.
+    That remains too strict when ByteTrack owns only the basket/front wheel while
+    the refiner detects the whole bicycle+rider footprint. V0.5.35 first tries a
+    relaxed ordinary match, then permits a candidate that substantially overlaps
+    a bounded envelope around the tracked target. The envelope is deliberately
+    local so a parked bicycle elsewhere in the wide crop cannot steal the event.
+    """
+    bicycles = [c for c in candidates if str(c.label) == "bicycle" and float(c.confidence) >= float(min_confidence)]
+    if not bicycles:
+        return None
+    strict = select_target_refinement(
+        target, bicycles, min_iou=0.02, min_target_coverage=0.06,
+        min_evidence_coverage=0.12, max_center_distance_ratio=1.15,
+        target_family="two-wheel",
+    )
+    if strict is not None:
+        return strict
+
+    tx1, ty1, tx2, ty2 = [float(v) for v in target]
+    tw = max(1.0, tx2 - tx1)
+    th = max(1.0, ty2 - ty1)
+    tcx = (tx1 + tx2) / 2.0
+    tcy = (ty1 + ty2) / 2.0
+    tdiag = max(hypot(tw, th), 1.0)
+    envelope = (tx1 - 0.80 * tw, ty1 - 0.60 * th, tx2 + 0.80 * tw, ty2 + 0.60 * th)
+
+    best: TargetRefineMatch | None = None
+    for candidate in bicycles:
+        rect = tuple(float(v) for v in candidate.rect)
+        ex1, ey1, ex2, ey2 = rect
+        ecx = (ex1 + ex2) / 2.0
+        ecy = (ey1 + ey2) / 2.0
+        center_ratio = hypot(ecx - tcx, ecy - tcy) / tdiag
+        if center_ratio > float(max_center_distance_ratio):
+            continue
+        envelope_cov = _evidence_coverage(envelope, rect)
+        target_cov = _coverage(target, rect)
+        if envelope_cov < 0.34 and target_cov < 0.05:
+            continue
+        iou = _iou(target, rect)
+        evidence_cov = _evidence_coverage(target, rect)
+        geometry = max(envelope_cov, target_cov, max(0.0, 1.0 - center_ratio / max(1.0, float(max_center_distance_ratio))))
+        score = float(candidate.confidence) * (0.55 + 0.45 * min(1.0, geometry))
+        match = TargetRefineMatch(
+            label="bicycle", confidence=float(candidate.confidence), target_iou=iou,
+            target_coverage=target_cov, evidence_coverage=evidence_cov,
+            center_distance_ratio=center_ratio, score=score,
+        )
+        if best is None or (match.score, match.confidence) > (best.score, best.confidence):
+            best = match
+    return best
+
+
+def contextual_bicycle_temporal_decision(
+    observations: list[tuple[str, float]],
+    *,
+    temporal_hits: int,
+    temporal_fused: float,
+    temporal_strongest: float,
+    temporal_sources: int,
+    min_hits: int = 2,
+    min_temporal_fused: float = 0.50,
+    min_temporal_strongest: float = 0.26,
+    min_combined: float = 0.72,
+) -> tuple[str, float] | None:
+    """Crossing-only fallback combining context and earlier target evidence.
+
+    A single weak context guess is never enough. At least one context observation
+    must agree with repeated pre-crossing bicycle evidence. Two refiner sources
+    are preferred; one source is accepted only after three temporal hits with a
+    materially strong observation.
+    """
+    context = [max(0.0, min(1.0, float(conf))) for _source, conf in observations if float(conf) >= 0.18]
+    if not context:
+        return None
+    if int(temporal_hits) < max(2, int(min_hits)):
+        return None
+    if float(temporal_fused) < float(min_temporal_fused) or float(temporal_strongest) < float(min_temporal_strongest):
+        return None
+    if int(temporal_sources) < 2 and not (int(temporal_hits) >= 3 and float(temporal_strongest) >= 0.45):
+        return None
+    context_strongest = max(context)
+    combined = 1.0 - (1.0 - context_strongest) * (1.0 - max(0.0, min(1.0, float(temporal_fused))))
+    if combined < float(min_combined):
+        return None
+    return "bicycle", combined
+
+
 def contextual_bicycle_decision(
     observations: list[tuple[str, float]],
     *,

@@ -1,3 +1,16 @@
+# Traffic AI V0.5.35 — Bicycle Context Trail + 2W Rescue Signature 8.1 🚲🛵🎯
+
+V0.5.34 trên GT 149 đã tăng **khớp 126 → 134**, giảm **lọt 23 → 15**, Recall **84.6% → 89.9%** và F1 **85.1% → 87.9%**. `2W center = 9` trong khi số khớp tăng 8 và đếm dư chỉ tăng 1, vì vậy V0.5.35 giữ nguyên Center-Gate Rescue 8.0 thay vì rollback. Hai điểm còn lại được xử lý riêng:
+
+- `Bike context = 0` và lỗi class duy nhất vẫn là `04:49.450 GT Xe đạp → AI Xe máy`: matcher context mới chấp nhận refiner nhìn toàn bộ bicycle trong khi ByteTrack chỉ giữ box bánh trước/giỏ, sau đó có thể kết hợp với evidence target-matched từ các frame trước vạch.
+- Benchmark còn nhiều event `duplicate_near_gt` / rescue gap dư: backend có **2W Rescue Signature 8.1**, chỉ mở rộng dedup khi cặp cùng hướng/cùng family ở rất sát điểm crossing và ít nhất một event là rescue/interpolation. Direct/direct không bị nới để bảo vệ hai xe thật chạy sát nhau.
+
+Telemetry mới: `Bike ctx match`, `Bike trail`, `2W dedup`.
+
+Database: `0049_two_wheel_sig_v0535`, `schema_version = 0.5.35`. Không xóa dữ liệu.
+
+---
+
 # Traffic AI V0.5.34 — Two-Wheel Context + Center-Gate Rescue 8.0 🚲🛵🎯
 
 V0.5.34 được xây từ replay deterministic V0.5.33 trên `clip1.mp4` / GT 149 và 176 snapshot trong `camera_1(10).rar`. Baseline mới đã giữ được precision class rất cao nhưng counting geometry vẫn là nút thắt:

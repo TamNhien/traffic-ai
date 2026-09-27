@@ -323,18 +323,18 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.34") { throw "VERSION phải là 0.5.34, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0048_two_wheel_gate_v0534.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0048_two_wheel_gate_v0534.py." }
+  if ($version -ne "0.5.35") { throw "VERSION phải là 0.5.35, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0049_two_wheel_sig_v0535.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0049_two_wheel_sig_v0535.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0048_two_wheel_gate_v0534"' -or $migrationText -notmatch 'down_revision = "0047_two_wheel_v0533"' -or $migrationText -notmatch "value='0.5.34'") {
-    throw "Migration 0048_two_wheel_gate_v0534 không đúng contract V0.5.34."
+  if ($migrationText -notmatch 'revision = "0049_two_wheel_sig_v0535"' -or $migrationText -notmatch 'down_revision = "0048_two_wheel_gate_v0534"' -or $migrationText -notmatch "value='0.5.35'") {
+    throw "Migration 0049_two_wheel_sig_v0535 không đúng contract V0.5.35."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
 
 function Assert-AlembicRevisionSafetyContract {
-  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.34" -ForegroundColor Cyan
+  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.35" -ForegroundColor Cyan
   $versionsDir = Join-Path $root "backend\alembic\versions"
   $bad = @()
   Get-ChildItem $versionsDir -Filter "*.py" | ForEach-Object {
@@ -358,7 +358,7 @@ function Assert-AlembicRevisionSafetyContract {
   if ($v17 -notmatch 'revision = "0017_ai_test_dep_v053"') {
     throw "Migration V0.5.3 chưa dùng revision ID rút gọn an toàn."
   }
-  Write-Host "[OK] Alembic revision-length safety V0.5.34" -ForegroundColor Green
+  Write-Host "[OK] Alembic revision-length safety V0.5.35" -ForegroundColor Green
 }
 
 
@@ -1251,6 +1251,28 @@ function Assert-TwoWheelContextCenterGateV0534Contract {
   Write-Host "[OK] Two-Wheel Context + Center-Gate Rescue 8.0 V0.5.34" -ForegroundColor Green
 }
 
+function Assert-BicycleContextTrailDedupV0535Contract {
+  Write-Host "`n[Traffic AI] Bicycle Context Trail + 2W Rescue Signature 8.1 V0.5.35" -ForegroundColor Cyan
+  $classification = Get-Content (Join-Path $root "ai-service\app\classification.py") -Raw -Encoding UTF8
+  $worker = Get-Content (Join-Path $root "ai-service\app\worker.py") -Raw -Encoding UTF8
+  $runtime = Get-Content (Join-Path $root "ai-service\app\runtime.py") -Raw -Encoding UTF8
+  $async = Get-Content (Join-Path $root "ai-service\app\async_tasks.py") -Raw -Encoding UTF8
+  $routes = Get-Content (Join-Path $root "backend\app\api\routes.py") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  $envExample = Get-Content (Join-Path $root ".env.example") -Raw -Encoding UTF8
+  $start = Get-Content (Join-Path $PSScriptRoot "start.ps1") -Raw -Encoding UTF8
+  $classificationTests = Get-Content (Join-Path $root "ai-service\tests\test_classification.py") -Raw -Encoding UTF8
+  $backendTests = Get-Content (Join-Path $root "backend\tests\test_app.py") -Raw -Encoding UTF8
+  if ($classification -notmatch 'def select_contextual_bicycle_refinement' -or $classification -notmatch 'def contextual_bicycle_temporal_decision') { throw "V0.5.35 thiếu context matcher/trail decision." }
+  if ($worker -notmatch 'AI_BICYCLE_CONTEXT_TEMPORAL_MIN_HITS' -or $worker -notmatch 'bicycle_context_temporal_rescues') { throw "V0.5.35 thiếu Bike trail runtime." }
+  if ($routes -notmatch 'def _two_wheel_rescue_signature_duplicate' -or $routes -notmatch 'two-wheel-rescue-signature') { throw "Backend V0.5.35 thiếu 2W rescue signature dedup." }
+  if ($runtime -notmatch 'two_wheel_signature_duplicates' -or $async -notmatch 'two-wheel-rescue-signature') { throw "V0.5.35 thiếu 2W dedup telemetry." }
+  if ($frontend -notmatch 'Bike ctx match' -or $frontend -notmatch 'Bike trail' -or $frontend -notmatch '2W dedup') { throw "Frontend V0.5.35 thiếu telemetry mới." }
+  if ($envExample -notmatch 'AI_BICYCLE_CONTEXT_TEMPORAL_COMBINED=0.72' -or $start -notmatch 'AI_BICYCLE_CONTEXT_TEMPORAL_CONF') { throw "V0.5.35 thiếu runtime defaults." }
+  if ($classificationTests -notmatch 'test_v0535_context_match_accepts_full_bicycle_near_partial_front_box' -or $backendTests -notmatch 'test_v0535_two_wheel_rescue_signature_is_narrow') { throw "V0.5.35 thiếu regression tests." }
+  Write-Host "[OK] Bicycle Context Trail + 2W Rescue Signature 8.1 V0.5.35" -ForegroundColor Green
+}
+
 function Assert-LegacySemanticCompatibilityV0523R1 {
   Write-Host "`n[Traffic AI] Legacy semantic contract compatibility V0.5.23-R1" -ForegroundColor Cyan
   $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
@@ -1317,6 +1339,7 @@ Assert-GeometricCrossingTimeV0531Contract
 Assert-DeterministicReplayTimeV0532Contract
 Assert-BicyclePrecisionGtAuditV0533Contract
 Assert-TwoWheelContextCenterGateV0534Contract
+Assert-BicycleContextTrailDedupV0535Contract
 Assert-LegacySemanticCompatibilityV0523R1
 
 Write-Host "`n[Traffic AI] Road Zone + Frame Browser V0.5.11" -ForegroundColor Cyan

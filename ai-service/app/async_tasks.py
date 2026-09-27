@@ -104,8 +104,11 @@ class EventDispatcher(threading.Thread):
                             self.state.delivered_events += 1
                             if response.headers.get("X-TrafficAI-Deduplicated") == "1":
                                 self.state.deduplicated_events += 1
-                                if response.headers.get("X-TrafficAI-Dedup-Reason") == "crossing-signature":
+                                dedup_reason = response.headers.get("X-TrafficAI-Dedup-Reason")
+                                if dedup_reason == "crossing-signature":
                                     self.state.crossing_signature_duplicates += 1
+                                elif dedup_reason == "two-wheel-rescue-signature":
+                                    self.state.two_wheel_signature_duplicates += 1
                             else:
                                 self.state.persisted_events += 1
                             delivered = True

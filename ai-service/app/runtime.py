@@ -40,6 +40,8 @@ class PipelineState:
     bicycle_class_rescues: int = 0
     bicycle_context_checks: int = 0
     bicycle_context_rescues: int = 0
+    bicycle_context_target_matches: int = 0
+    bicycle_context_temporal_rescues: int = 0
     truck_class_rescues: int = 0
     bicycle_tracks_seen: int = 0
     truck_tracks_seen: int = 0
@@ -67,6 +69,7 @@ class PipelineState:
     rescue_validation_rejections: int = 0
     adaptive_cooldown_releases: int = 0
     crossing_signature_duplicates: int = 0
+    two_wheel_signature_duplicates: int = 0
     calibration_samples: int = 0
     calibration_tracks: int = 0
     calibration_moving_tracks: int = 0
