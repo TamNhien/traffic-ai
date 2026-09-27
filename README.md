@@ -1,4 +1,47 @@
-# Traffic AI V0.5.38 — Near-Margin Bicycle Context + Ultra-Spatial Rescue Signature 8.3 🚲🎯
+# Traffic AI V0.5.39 — Release EOL Hygiene + PostgreSQL Client Guard 🧰🐘
+
+V0.5.39 là bản hạ tầng/độ ổn định, **không đổi thuật toán đếm AI** so với V0.5.38. Benchmark V0.5.38 mới nhất vẫn giữ GT 149, AI 153, khớp 134, lọt 15, dư 19, Recall 89.9%, Precision 87.6%, F1 88.7%, Class đúng 99.3%; `2W ultra = 1` xác nhận Ultra-Spatial Rescue Signature đã loại thêm một duplicate mà không giảm recall.
+
+## 1. Fix warning LF/CRLF khi `publish.ps1`
+
+Các warning kiểu `LF will be replaced by CRLF the next time Git touches it` xuất hiện vì một số file LF chưa có rule `eol=lf` rõ ràng trong `.gitattributes` (`.gitattributes`, `.gitignore`, `*.dockerignore`, `*.txt`). V0.5.39 bổ sung explicit attributes cho các file này. `scripts/normalize-line-endings.ps1` vẫn là bước chuẩn hóa trước `git add -A`.
+
+Kỳ vọng khi chạy `./scripts/publish.ps1`: không còn nhóm warning EOL giả ở bước commit.
+
+## 2. PostgreSQL / pgAdmin Client Guard
+
+Traffic AI dùng PostgreSQL trong Docker; pgAdmin chỉ là GUI quản trị, không phải dependency runtime của Backend. V0.5.39 bổ sung `scripts/postgres-info.ps1` để kiểm tra health/TCP/SQL và in đúng thông số kết nối cho pgAdmin Desktop:
+
+```text
+Host              127.0.0.1
+Port              POSTGRES_HOST_PORT trong .env (mặc định 5445)
+Maintenance DB    POSTGRES_DB trong .env (mặc định traffic_ai_db)
+Username          POSTGRES_USER trong .env (mặc định traffic_admin)
+Password          đọc từ .env, script không in ra màn hình
+```
+
+Nếu pgAdmin chạy **trong cùng Docker network** thì dùng host `postgres`, port `5432`; nếu pgAdmin là ứng dụng Windows thì dùng `127.0.0.1` và host port (mặc định `5445`).
+
+**Lưu ý quan trọng với database volume cũ:** `POSTGRES_PASSWORD` của image PostgreSQL chỉ dùng để khởi tạo role khi data directory còn trống. Nếu đổi mật khẩu trong `.env` sau khi volume đã được tạo, pgAdmin có thể báo `password authentication failed`. V0.5.39 kiểm tra luôn TCP password-auth. Khi cần đồng bộ, không xóa volume; vào psql và dùng `\password traffic_admin` để đặt lại mật khẩu trùng `.env`.
+
+Chạy kiểm tra:
+
+```powershell
+.\scripts\postgres-info.ps1
+```
+
+Database migration mới chỉ cập nhật version marker, không thay đổi bảng/dữ liệu:
+
+```text
+0052_bike_ultra_v0538
+        ↓
+0053_release_db_v0539
+schema_version = 0.5.39
+```
+
+---
+
+## Traffic AI V0.5.38 — Near-Margin Bicycle Context + Ultra-Spatial Rescue Signature 8.3 🚲🎯
 
 V0.5.38 được xây từ source V0.5.37-R1 và benchmark mới của `clip1.mp4` (GT 149) cùng 184 snapshot trong `camera_1(20260927-123141).rar`. V0.5.37 đã cải thiện precision counting nhưng chưa thay đổi số GT khớp và nhánh bicycle context vẫn chưa promote được ca 04:49.
 

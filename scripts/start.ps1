@@ -328,9 +328,27 @@ if (-not $dashboardOk -or -not $apiOk) {
   throw "Gateway chưa proxy được Dashboard/API sau khi startup (Dashboard=$dashboardOk, API=$apiOk)."
 }
 
+$postgresHostPort = "5445"
+$postgresDbName = "traffic_ai_db"
+$postgresUserName = "traffic_admin"
+if (Test-Path $envPath) {
+  foreach ($line in Get-Content $envPath -Encoding UTF8) {
+    $trimmed = $line.Trim()
+    if (-not $trimmed -or $trimmed.StartsWith("#") -or $trimmed.IndexOf("=") -le 0) { continue }
+    $name, $value = $trimmed.Split("=", 2)
+    $value = $value.Trim().Trim('"').Trim("'")
+    switch ($name.Trim()) {
+      "POSTGRES_HOST_PORT" { if ($value) { $postgresHostPort = $value } }
+      "POSTGRES_DB" { if ($value) { $postgresDbName = $value } }
+      "POSTGRES_USER" { if ($value) { $postgresUserName = $value } }
+    }
+  }
+}
+
 Write-Host ""
-Write-Host "[OK] Traffic AI V0.5.38 đã khởi động." -ForegroundColor Green
+Write-Host "[OK] Traffic AI V0.5.39 đã khởi động." -ForegroundColor Green
 Write-Host "Dashboard : https://traffic-ai.test:8443"
 Write-Host "API Docs  : https://traffic-ai.test:8444/docs"
-Write-Host "PostgreSQL: 127.0.0.1:5445 / traffic_ai_db"
+Write-Host "PostgreSQL: 127.0.0.1:$postgresHostPort / $postgresDbName / $postgresUserName"
+Write-Host "pgAdmin   : chạy .\scripts\postgres-info.ps1 để kiểm tra trước khi Register Server"
 Write-Host "AI stream : https://traffic-ai.test:8443/ai/streams/{camera_id}.mjpg"

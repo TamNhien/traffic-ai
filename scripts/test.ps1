@@ -323,18 +323,18 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.38") { throw "VERSION phải là 0.5.38, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0052_bike_ultra_v0538.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0052_bike_ultra_v0538.py." }
+  if ($version -ne "0.5.39") { throw "VERSION phải là 0.5.39, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0053_release_db_v0539.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0053_release_db_v0539.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0052_bike_ultra_v0538"' -or $migrationText -notmatch 'down_revision = "0051_bike_comp_v0537"' -or $migrationText -notmatch "value='0.5.38'") {
-    throw "Migration 0052_bike_ultra_v0538 không đúng contract V0.5.38."
+  if ($migrationText -notmatch 'revision = "0053_release_db_v0539"' -or $migrationText -notmatch 'down_revision = "0052_bike_ultra_v0538"' -or $migrationText -notmatch "value='0.5.39'") {
+    throw "Migration 0053_release_db_v0539 không đúng contract V0.5.39."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
 
 function Assert-AlembicRevisionSafetyContract {
-  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.38" -ForegroundColor Cyan
+  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.39" -ForegroundColor Cyan
   $versionsDir = Join-Path $root "backend\alembic\versions"
   $bad = @()
   Get-ChildItem $versionsDir -Filter "*.py" | ForEach-Object {
@@ -358,7 +358,7 @@ function Assert-AlembicRevisionSafetyContract {
   if ($v17 -notmatch 'revision = "0017_ai_test_dep_v053"') {
     throw "Migration V0.5.3 chưa dùng revision ID rút gọn an toàn."
   }
-  Write-Host "[OK] Alembic revision-length safety V0.5.38" -ForegroundColor Green
+  Write-Host "[OK] Alembic revision-length safety V0.5.39" -ForegroundColor Green
 }
 
 
@@ -369,8 +369,8 @@ function Assert-ReleaseLineEndingHygieneV0512Contract {
   $normalizerPath = Join-Path $PSScriptRoot "normalize-line-endings.ps1"
   if (-not (Test-Path $normalizerPath)) { throw "Thiếu normalize-line-endings.ps1." }
   $normalizer = Get-Content $normalizerPath -Raw -Encoding UTF8
-  if ($attributes -notmatch '\*\.ps1 text eol=crlf' -or $attributes -notmatch '\*\.json text eol=lf' -or $attributes -notmatch '\*\.py text eol=lf') {
-    throw ".gitattributes chưa chốt CRLF cho PowerShell và LF cho source/config."
+  if ($attributes -notmatch '\*\.ps1 text eol=crlf' -or $attributes -notmatch '\*\.json text eol=lf' -or $attributes -notmatch '\*\.py text eol=lf' -or $attributes -notmatch '\*\.txt text eol=lf' -or $attributes -notmatch '\.gitattributes text eol=lf' -or $attributes -notmatch '\.gitignore text eol=lf' -or $attributes -notmatch '\*\*/\.dockerignore text eol=lf') {
+    throw ".gitattributes chưa chốt CRLF cho PowerShell và LF cho toàn bộ source/config/text metadata."
   }
   if ($publish -notmatch 'normalize-line-endings\.ps1' -or $publish -notmatch 'git add -A') {
     throw "publish.ps1 chưa normalize line endings trước khi git add."
@@ -1357,6 +1357,25 @@ Write-Host "`n[Traffic AI] Legacy semantic contract compatibility V0.5.23-R1" -F
   Write-Host "[OK] Legacy semantic contract compatibility V0.5.23-R1" -ForegroundColor Green
 }
 
+function Assert-ReleaseDbGuardV0539Contract {
+  Write-Host "`n[Traffic AI] Release EOL Hygiene + PostgreSQL Client Guard V0.5.39" -ForegroundColor Cyan
+  $attributes = Get-Content (Join-Path $root ".gitattributes") -Raw -Encoding UTF8
+  $pgInfoPath = Join-Path $PSScriptRoot "postgres-info.ps1"
+  if (-not (Test-Path $pgInfoPath)) { throw "Thiếu scripts/postgres-info.ps1." }
+  $pgInfo = Get-Content $pgInfoPath -Raw -Encoding UTF8
+  $readme = Get-Content (Join-Path $root "README.md") -Raw -Encoding UTF8
+  if ($attributes -notmatch '\.gitattributes text eol=lf' -or $attributes -notmatch '\.gitignore text eol=lf' -or $attributes -notmatch '\*\*/\.dockerignore text eol=lf' -or $attributes -notmatch '\*\.txt text eol=lf') {
+    throw "V0.5.39 thiếu explicit Git EOL rules cho các file từng phát warning trên Windows."
+  }
+  if ($pgInfo -notmatch 'Test-NetConnection 127\.0\.0\.1' -or $pgInfo -notmatch 'pg_isready' -or $pgInfo -notmatch 'POSTGRES_HOST_PORT' -or $pgInfo -notmatch 'Password.*không in ra màn hình') {
+    throw "postgres-info.ps1 thiếu health/TCP/credential-safe connection diagnostics."
+  }
+  if ($readme -notmatch 'pgAdmin Desktop' -or $readme -notmatch '127\.0\.0\.1' -or $readme -notmatch 'postgres.*5432') {
+    throw "README V0.5.39 thiếu hướng dẫn pgAdmin host-vs-Docker connection."
+  }
+  Write-Host "[OK] Release EOL Hygiene + PostgreSQL Client Guard V0.5.39" -ForegroundColor Green
+}
+
 function Invoke-Step([string]$Title, [scriptblock]$Action) {
   Write-Host "`n[Traffic AI] $Title" -ForegroundColor Cyan
   & $Action
@@ -1414,6 +1433,7 @@ Assert-TwoWheelContextCenterGateV0534Contract
 Assert-BicycleContextTrailDedupV0535Contract
 Assert-CompetitiveBikeSpatialSignatureV0537Contract
 Assert-NearMarginUltraSpatialV0538Contract
+Assert-ReleaseDbGuardV0539Contract
 Assert-LegacySemanticCompatibilityV0523R1
 
 Write-Host "`n[Traffic AI] Road Zone + Frame Browser V0.5.11" -ForegroundColor Cyan
