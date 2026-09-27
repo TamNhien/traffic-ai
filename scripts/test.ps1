@@ -323,18 +323,18 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.39") { throw "VERSION phải là 0.5.39, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0053_release_db_v0539.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0053_release_db_v0539.py." }
+  if ($version -ne "0.5.40") { throw "VERSION phải là 0.5.40, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0054_bike_gate_v0540.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0054_bike_gate_v0540.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0053_release_db_v0539"' -or $migrationText -notmatch 'down_revision = "0052_bike_ultra_v0538"' -or $migrationText -notmatch "value='0.5.39'") {
-    throw "Migration 0053_release_db_v0539 không đúng contract V0.5.39."
+  if ($migrationText -notmatch 'revision = "0054_bike_gate_v0540"' -or $migrationText -notmatch 'down_revision = "0053_release_db_v0539"' -or $migrationText -notmatch "value='0.5.40'") {
+    throw "Migration 0054_bike_gate_v0540 không đúng contract V0.5.40."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
 
 function Assert-AlembicRevisionSafetyContract {
-  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.39" -ForegroundColor Cyan
+  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.40" -ForegroundColor Cyan
   $versionsDir = Join-Path $root "backend\alembic\versions"
   $bad = @()
   Get-ChildItem $versionsDir -Filter "*.py" | ForEach-Object {
@@ -358,7 +358,7 @@ function Assert-AlembicRevisionSafetyContract {
   if ($v17 -notmatch 'revision = "0017_ai_test_dep_v053"') {
     throw "Migration V0.5.3 chưa dùng revision ID rút gọn an toàn."
   }
-  Write-Host "[OK] Alembic revision-length safety V0.5.39" -ForegroundColor Green
+  Write-Host "[OK] Alembic revision-length safety V0.5.40" -ForegroundColor Green
 }
 
 
@@ -1376,6 +1376,42 @@ function Assert-ReleaseDbGuardV0539Contract {
   Write-Host "[OK] Release EOL Hygiene + PostgreSQL Client Guard V0.5.39" -ForegroundColor Green
 }
 
+function Assert-CrossFrameBikeGateAuditV0540Contract {
+  Write-Host "`n[Traffic AI] Cross-Frame Bicycle Context + Gate-Span Benchmark Audit 8.4 V0.5.40" -ForegroundColor Cyan
+  $classification = Get-Content (Join-Path $root "ai-service\app\classification.py") -Raw -Encoding UTF8
+  $worker = Get-Content (Join-Path $root "ai-service\app\worker.py") -Raw -Encoding UTF8
+  $runtime = Get-Content (Join-Path $root "ai-service\app\runtime.py") -Raw -Encoding UTF8
+  $trace = Get-Content (Join-Path $root "ai-service\app\benchmark_trace.py") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  $envExample = Get-Content (Join-Path $root ".env.example") -Raw -Encoding UTF8
+  $migrationPath = Join-Path $root "backend\alembic\versions\0054_bike_gate_v0540.py"
+  if (-not (Test-Path $migrationPath)) { throw "Thiếu migration 0054_bike_gate_v0540.py." }
+  $migration = Get-Content $migrationPath -Raw -Encoding UTF8
+
+  if ($classification -notmatch 'class ContextTwoWheelEvidenceAccumulator' -or $classification -notmatch 'def contextual_bicycle_cross_frame_decision') {
+    throw "V0.5.40 thiếu accumulator hoặc cross-frame bicycle decision."
+  }
+  if ($worker -notmatch 'AI_BICYCLE_CONTEXT_XFRAME' -or $worker -notmatch '_observe_bicycle_context_xframe' -or $worker -notmatch 'bicycle_context_xframe_rescues' -or $worker -notmatch 'gate_tracks') {
+    throw "V0.5.40 worker thiếu pre-crossing bicycle context hoặc gate-track trace."
+  }
+  if ($runtime -notmatch 'bicycle_context_xframe_checks' -or $runtime -notmatch 'bicycle_context_xframe_rescues') {
+    throw "V0.5.40 runtime thiếu telemetry Bike X-scan / Bike X-frame."
+  }
+  if ($trace -notmatch 'crossing_anchor_span_reject' -or $trace -notmatch 'crossing_center_only_span' -or $trace -notmatch 'crossing_near_no_span' -or $trace -notmatch 'nearest_gate_distance') {
+    throw "V0.5.40 benchmark trace thiếu Gate-Span diagnostic split."
+  }
+  if ($frontend -notmatch 'Bike X-scan' -or $frontend -notmatch 'Bike X-frame' -or $frontend -notmatch 'Anchor đã băng qua vạch' -or $frontend -notmatch 'Tâm xe băng qua vạch nhưng anchor chưa băng đủ hai phía') {
+    throw "V0.5.40 frontend thiếu telemetry hoặc nhãn Gate-Span audit."
+  }
+  if ($envExample -notmatch 'AI_BICYCLE_CONTEXT_XFRAME=1' -or $envExample -notmatch 'AI_BICYCLE_CONTEXT_XFRAME_MIN_FRAMES=2' -or $envExample -notmatch 'AI_BICYCLE_CONTEXT_XFRAME_MIN_SOURCES=2') {
+    throw ".env.example thiếu fail-safe defaults cho Cross-Frame Bicycle Context V0.5.40."
+  }
+  if ($migration -notmatch 'revision = "0054_bike_gate_v0540"' -or $migration -notmatch 'down_revision = "0053_release_db_v0539"' -or $migration -notmatch "value='0.5.40'") {
+    throw "Migration V0.5.40 không đúng chain/schema version."
+  }
+  Write-Host "[OK] Cross-Frame Bicycle Context + Gate-Span Benchmark Audit 8.4 V0.5.40" -ForegroundColor Green
+}
+
 function Invoke-Step([string]$Title, [scriptblock]$Action) {
   Write-Host "`n[Traffic AI] $Title" -ForegroundColor Cyan
   & $Action
@@ -1434,6 +1470,7 @@ Assert-BicycleContextTrailDedupV0535Contract
 Assert-CompetitiveBikeSpatialSignatureV0537Contract
 Assert-NearMarginUltraSpatialV0538Contract
 Assert-ReleaseDbGuardV0539Contract
+Assert-CrossFrameBikeGateAuditV0540Contract
 Assert-LegacySemanticCompatibilityV0523R1
 
 Write-Host "`n[Traffic AI] Road Zone + Frame Browser V0.5.11" -ForegroundColor Cyan

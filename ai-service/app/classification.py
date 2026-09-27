@@ -391,6 +391,140 @@ def contextual_bicycle_near_margin_decision(
     return "bicycle", bike_fused
 
 
+
+class ContextTwoWheelEvidenceAccumulator:
+    """Keep a short, source-aware trail of bicycle-vs-motorcycle context.
+
+    V0.5.38 only compared the two context refiners on the exact crossing frame.
+    In dense traffic one source can see the bicycle frame/basket one frame while
+    the other source sees it a few frames later.  This accumulator preserves only
+    a very short pre-crossing window and keeps the source identity, allowing the
+    crossing decision to require *both independent models* without requiring them
+    to peak on the same source frame.
+    """
+
+    def __init__(self, history_frames: int = 18, max_observations: int = 64) -> None:
+        self.history_frames = max(4, int(history_frames))
+        self.max_observations = max(16, int(max_observations))
+        self._samples: dict[int, deque[tuple[int, str, float, float]]] = defaultdict(
+            lambda: deque(maxlen=self.max_observations)
+        )
+
+    def update(
+        self,
+        track_id: int,
+        frame_index: int,
+        source: str,
+        bicycle_confidence: float,
+        motorcycle_confidence: float,
+    ) -> None:
+        self._samples[int(track_id)].append((
+            int(frame_index),
+            str(source),
+            max(0.0, min(1.0, float(bicycle_confidence))),
+            max(0.0, min(1.0, float(motorcycle_confidence))),
+        ))
+
+    def recent(self, track_id: int, frame_index: int) -> list[tuple[int, str, float, float]]:
+        current = int(frame_index)
+        result: list[tuple[int, str, float, float]] = []
+        for observed_frame, source, bicycle, motorcycle in self._samples.get(int(track_id), ()):
+            age = current - int(observed_frame)
+            if age < 0 or age > self.history_frames:
+                continue
+            # Mild decay prevents an old weak guess from dominating the actual
+            # crossing frame while preserving evidence only a few frames apart.
+            decay = 0.985 ** age
+            result.append((
+                int(observed_frame), str(source),
+                float(bicycle) * decay, float(motorcycle) * decay,
+            ))
+        return result
+
+    def merge_track(self, source_track_id: int, target_track_id: int) -> None:
+        source = int(source_track_id)
+        target = int(target_track_id)
+        if source == target:
+            return
+        source_samples = list(self._samples.pop(source, ()))
+        if not source_samples:
+            return
+        merged = list(self._samples.get(target, ())) + source_samples
+        merged.sort(key=lambda item: item[0])
+        bucket = deque(maxlen=self.max_observations)
+        bucket.extend(merged[-self.max_observations :])
+        self._samples[target] = bucket
+
+
+def contextual_bicycle_cross_frame_decision(
+    observations: list[tuple[int, str, float, float]],
+    *,
+    detector_confidence: float,
+    max_motorcycle_confidence: float = 0.52,
+    min_bicycle_confidence: float = 0.08,
+    min_distinct_frames: int = 2,
+    min_sources: int = 2,
+    min_source_win: float = 0.015,
+    max_motorcycle_veto: float = 0.10,
+    min_strongest_bicycle: float = 0.14,
+    dual_fused_confidence: float = 0.30,
+    fused_margin: float = 0.015,
+) -> tuple[str, float] | None:
+    """Fuse context evidence from adjacent frames without lowering global class rules.
+
+    The fallback opens only for a weak primary motorcycle.  It requires bicycle
+    evidence on at least two distinct frames and from at least two independent
+    sources.  Per source we keep the observation with the best bicycle-vs-motor
+    margin; a material motorcycle win on either source vetoes the rescue.  This
+    targets the GT bicycle around 04:49 where `Bike ctx match` is non-zero but the
+    two refiners do not necessarily peak on the exact same frame.
+    """
+    if float(detector_confidence) > float(max_motorcycle_confidence):
+        return None
+
+    qualifying = [
+        (int(frame), str(source), max(0.0, min(1.0, float(bike))), max(0.0, min(1.0, float(moto))))
+        for frame, source, bike, moto in observations
+        if float(bike) >= float(min_bicycle_confidence)
+    ]
+    if not qualifying:
+        return None
+    if len({frame for frame, _source, _bike, _moto in qualifying}) < max(2, int(min_distinct_frames)):
+        return None
+
+    best_by_source: dict[str, tuple[float, float, int]] = {}
+    for frame, source, bike, moto in qualifying:
+        previous = best_by_source.get(source)
+        candidate_key = (bike - moto, bike, frame)
+        if previous is None or candidate_key > (previous[0] - previous[1], previous[0], previous[2]):
+            best_by_source[source] = (bike, moto, frame)
+
+    if len(best_by_source) < max(2, int(min_sources)):
+        return None
+
+    deltas = [bike - moto for bike, moto, _frame in best_by_source.values()]
+    if max(deltas) < float(min_source_win):
+        return None
+    if any((-delta) > float(max_motorcycle_veto) for delta in deltas):
+        return None
+
+    strongest = max(bike for bike, _moto, _frame in best_by_source.values())
+    if strongest < float(min_strongest_bicycle):
+        return None
+
+    bike_miss = 1.0
+    moto_miss = 1.0
+    for bike, moto, _frame in best_by_source.values():
+        bike_miss *= max(0.0, 1.0 - bike)
+        moto_miss *= max(0.0, 1.0 - moto)
+    bike_fused = 1.0 - bike_miss
+    moto_fused = 1.0 - moto_miss
+    if bike_fused < float(dual_fused_confidence):
+        return None
+    if bike_fused < moto_fused + float(fused_margin):
+        return None
+    return "bicycle", bike_fused
+
 def contextual_bicycle_temporal_decision(
     observations: list[tuple[str, float]],
     *,

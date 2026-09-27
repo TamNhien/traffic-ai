@@ -1,3 +1,100 @@
+# Traffic AI V0.5.40 — Cross-Frame Bicycle Context + Gate-Span Benchmark Audit 8.4 🚲🧭
+
+V0.5.40 được xây từ replay V0.5.39 mới nhất trên `clip1.mp4`, Benchmark GT 149 và 184 snapshot trong `camera_1(20260927-144517).rar`. V0.5.39 là bản hạ tầng nên kết quả AI đúng như kỳ vọng vẫn giữ nguyên baseline V0.5.38: **AI 153 / khớp 134 / lọt 15 / dư 19 / Recall 89.9% / Precision 87.6% / F1 88.7% / Class đúng 99.3%**. Telemetry mới nhất cho thấy `Bike ctx match = 10` nhưng toàn bộ nhánh promote bicycle vẫn bằng 0 (`Bike context / trail / weak-MC / margin / near-M = 0`), trong khi `2W center = 9`, `2W dedup = 3`, `2W spatial = 3`, `2W ultra = 1`.
+
+Điểm quan trọng của V0.5.40 là **không hạ threshold bicycle toàn cục** và **không nới Crossing Gate**. Bản này xử lý đúng hai nút thắt mà benchmark mới chỉ ra: context bicycle xuất hiện nhưng không đồng thời trên cùng frame, và 8 miss vẫn bị gom chung dưới nhãn “Track trong đường nhưng Crossing Gate không phát event”.
+
+## 1. Cross-Frame Bicycle Context
+
+V0.5.38 chỉ có thể dùng hai refiner khi chúng cùng cho bicycle evidence trên chính crossing frame. Với ca `04:49.450`, snapshot vẫn cho primary `motorcycle` yếu quanh `0.49 -> 0.39`, nhưng `Bike ctx match = 10` chứng minh context matcher đã nhìn thấy bicycle ở một số lần kiểm tra. V0.5.40 thêm một trail rất ngắn trước vạch:
+
+```text
+weak motorcycle gần vạch
+        ↓
+DOMAIN context ở frame A
+GENERAL context ở frame B
+        ↓
+chỉ giữ cửa sổ 18 frame
+        ↓
+actual crossing đã được geometry chứng minh
+        ↓
+2 nguồn độc lập + >= 2 frame
++ bicycle thắng aggregate motorcycle
++ không có motorcycle veto mạnh
+        ↓
+Bike X-frame
+```
+
+Mặc định mới:
+
+```ini
+AI_BICYCLE_CONTEXT_XFRAME=1
+AI_BICYCLE_CONTEXT_XFRAME_HISTORY=18
+AI_BICYCLE_CONTEXT_XFRAME_GATE_DISTANCE_RATIO=0.070
+AI_BICYCLE_CONTEXT_XFRAME_INTERVAL=4
+AI_BICYCLE_CONTEXT_XFRAME_MAX_PER_FRAME=1
+AI_BICYCLE_CONTEXT_XFRAME_MAX_MOTOR_CONF=0.52
+AI_BICYCLE_CONTEXT_XFRAME_MIN_SOURCE_CONF=0.08
+AI_BICYCLE_CONTEXT_XFRAME_MIN_FRAMES=2
+AI_BICYCLE_CONTEXT_XFRAME_MIN_SOURCES=2
+AI_BICYCLE_CONTEXT_XFRAME_SOURCE_WIN=0.015
+AI_BICYCLE_CONTEXT_XFRAME_MOTOR_VETO=0.10
+AI_BICYCLE_CONTEXT_XFRAME_MIN_STRONG=0.14
+AI_BICYCLE_CONTEXT_XFRAME_DUAL_CONF=0.30
+AI_BICYCLE_CONTEXT_XFRAME_FUSED_MARGIN=0.015
+```
+
+Telemetry mới:
+
+- `Bike X-scan`: số lần low-confidence motorcycle gần vạch được lấy mẫu context trước crossing.
+- `Bike X-frame`: số crossing được đổi `motorcycle -> bicycle` nhờ hai nguồn context ở các frame khác nhau.
+
+Một pre-scan **không tự tạo event và không tự đổi class**. Nó chỉ ghi evidence vào RAM. Chỉ khi Crossing Engine đã chứng minh một crossing thật thì trail mới được phép tham gia quyết định class. Motorcycle primary > `0.52`, single-source trail, single-frame trail hoặc bất kỳ source nào có motorcycle thắng bicycle quá `0.10` đều bị từ chối.
+
+## 2. Gate-Span Benchmark Audit 8.4
+
+V0.5.39 vẫn còn 15 miss, trong đó nhóm lớn nhất là `crossing_gate_miss`. Nhãn cũ chỉ nói “có track trong road zone nhưng không có event”, chưa cho biết quỹ đạo đã thật sự span qua line hay chỉ đi sát line. V0.5.40 ghi một trace cực gọn cho các track đã ở gần vạch (`<= 0.14` theo signed-distance ratio):
+
+- `track_id`;
+- class hiển thị;
+- signed distance của **motion-leading anchor**;
+- signed distance của **box center**;
+- vị trí anchor/center chuẩn hóa.
+
+Benchmark diagnostic giờ tách `crossing_gate_miss` thành ba trường hợp mới khi có đủ trace:
+
+```text
+crossing_anchor_span_reject
+  → anchor đã đi từ bên này sang bên kia nhưng Gate vẫn không phát event
+
+crossing_center_only_span
+  → center span qua vạch nhưng motion-leading anchor chưa span đủ
+
+crossing_near_no_span
+  → track tới gần vạch nhưng trajectory chưa đi đủ hai phía
+```
+
+Các reason cũ `detector_miss`, `tracker_miss`, `road_zone_reject`, `crossing_confirmation_reject`, `crossing_cooldown_reject` vẫn có ưu tiên cao hơn, nên audit mới không che lấp nguyên nhân đã xác định. Mục tiêu là vòng replay kế tiếp sẽ cho biết 8 miss nên xử lý ở anchor geometry, center rescue hay không nên rescue, thay vì nới gate theo cảm tính.
+
+## 3. Phần giữ nguyên
+
+- Không nới `direct/direct` dedup; `2W ultra = 1` đã giảm một duplicate mà không giảm recall.
+- Không siết rescue gap toàn cục vì benchmark vẫn có 15 miss.
+- Center-Gate Rescue 8.0 giữ nguyên (`2W center = 9`).
+- Truck Semantic Lock / Canonical 4W Fusion / Human Guard 2.1 / deterministic replay giữ nguyên.
+- V0.5.39 PostgreSQL Client Guard và EOL hygiene vẫn giữ nguyên.
+
+Database migration mới chỉ cập nhật version marker, không đổi bảng/dữ liệu:
+
+```text
+0053_release_db_v0539
+        ↓
+0054_bike_gate_v0540
+schema_version = 0.5.40
+```
+
+---
+
 # Traffic AI V0.5.39 — Release EOL Hygiene + PostgreSQL Client Guard 🧰🐘
 
 V0.5.39 là bản hạ tầng/độ ổn định, **không đổi thuật toán đếm AI** so với V0.5.38. Benchmark V0.5.38 mới nhất vẫn giữ GT 149, AI 153, khớp 134, lọt 15, dư 19, Recall 89.9%, Precision 87.6%, F1 88.7%, Class đúng 99.3%; `2W ultra = 1` xác nhận Ultra-Spatial Rescue Signature đã loại thêm một duplicate mà không giảm recall.

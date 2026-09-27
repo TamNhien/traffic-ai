@@ -346,7 +346,7 @@ if (Test-Path $envPath) {
 }
 
 Write-Host ""
-Write-Host "[OK] Traffic AI V0.5.39 đã khởi động." -ForegroundColor Green
+Write-Host "[OK] Traffic AI V0.5.40 đã khởi động." -ForegroundColor Green
 Write-Host "Dashboard : https://traffic-ai.test:8443"
 Write-Host "API Docs  : https://traffic-ai.test:8444/docs"
 Write-Host "PostgreSQL: 127.0.0.1:$postgresHostPort / $postgresDbName / $postgresUserName"
