@@ -359,3 +359,55 @@ def test_v0536_weak_motor_dual_context_rejects_single_source() -> None:
     assert contextual_bicycle_weak_motor_decision(
         [("domain", 0.72)], detector_confidence=0.49
     ) is None
+
+
+def test_v0537_competitive_context_rescues_weak_motor_when_bicycle_wins_both_sources() -> None:
+    from app.classification import contextual_bicycle_competitive_decision
+    result = contextual_bicycle_competitive_decision(
+        [
+            ("domain", 0.21, 0.05),
+            ("general", 0.20, 0.04),
+        ],
+        detector_confidence=0.49,
+        max_motorcycle_confidence=0.55,
+        min_bicycle_confidence=0.12,
+        min_source_margin=0.06,
+        dual_fused_confidence=0.34,
+        fused_margin=0.08,
+    )
+    assert result is not None
+    assert result[0] == "bicycle"
+
+
+def test_v0537_competitive_context_rejects_when_motorcycle_wins_target() -> None:
+    from app.classification import contextual_bicycle_competitive_decision
+    assert contextual_bicycle_competitive_decision(
+        [
+            ("domain", 0.34, 0.46),
+            ("general", 0.31, 0.44),
+        ],
+        detector_confidence=0.48,
+    ) is None
+
+
+def test_v0537_competitive_context_rejects_confident_primary_motorcycle() -> None:
+    from app.classification import contextual_bicycle_competitive_decision
+    assert contextual_bicycle_competitive_decision(
+        [
+            ("domain", 0.51, 0.12),
+            ("general", 0.48, 0.10),
+        ],
+        detector_confidence=0.78,
+    ) is None
+
+
+def test_v0537_competitive_single_source_needs_temporal_support() -> None:
+    from app.classification import contextual_bicycle_competitive_decision
+    observations = [("domain", 0.61, 0.08)]
+    assert contextual_bicycle_competitive_decision(
+        observations, detector_confidence=0.44, temporal_hits=1, temporal_fused=0.61
+    ) is None
+    result = contextual_bicycle_competitive_decision(
+        observations, detector_confidence=0.44, temporal_hits=2, temporal_fused=0.57
+    )
+    assert result is not None and result[0] == "bicycle"

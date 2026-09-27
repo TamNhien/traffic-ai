@@ -204,6 +204,134 @@ def select_contextual_bicycle_refinement(
     return best
 
 
+def select_contextual_two_wheel_refinement(
+    target: Rect,
+    candidates: list[RefineCandidate],
+    *,
+    label: str,
+    min_confidence: float = 0.10,
+    max_center_distance_ratio: float = 1.35,
+) -> TargetRefineMatch | None:
+    """V0.5.37 target-matched context evidence for one two-wheel label.
+
+    Bicycle and motorcycle must be compared against the *same* local geometry.
+    This prevents a weak bicycle score from being judged in isolation while a
+    stronger motorcycle score on the exact same target is ignored.
+    """
+    wanted = str(label)
+    filtered = [
+        c for c in candidates
+        if str(c.label) == wanted and float(c.confidence) >= float(min_confidence)
+    ]
+    if not filtered:
+        return None
+    if wanted == "bicycle":
+        return select_contextual_bicycle_refinement(
+            target, filtered, min_confidence=min_confidence,
+            max_center_distance_ratio=max_center_distance_ratio,
+        )
+
+    strict = select_target_refinement(
+        target, filtered, min_iou=0.02, min_target_coverage=0.06,
+        min_evidence_coverage=0.12, max_center_distance_ratio=1.15,
+        target_family="two-wheel",
+    )
+    if strict is not None:
+        return strict
+
+    tx1, ty1, tx2, ty2 = [float(v) for v in target]
+    tw = max(1.0, tx2 - tx1)
+    th = max(1.0, ty2 - ty1)
+    tcx = (tx1 + tx2) / 2.0
+    tcy = (ty1 + ty2) / 2.0
+    tdiag = max(hypot(tw, th), 1.0)
+    envelope = (tx1 - 0.80 * tw, ty1 - 0.60 * th, tx2 + 0.80 * tw, ty2 + 0.60 * th)
+    best: TargetRefineMatch | None = None
+    for candidate in filtered:
+        rect = tuple(float(v) for v in candidate.rect)
+        ex1, ey1, ex2, ey2 = rect
+        ecx = (ex1 + ex2) / 2.0
+        ecy = (ey1 + ey2) / 2.0
+        center_ratio = hypot(ecx - tcx, ecy - tcy) / tdiag
+        if center_ratio > float(max_center_distance_ratio):
+            continue
+        envelope_cov = _evidence_coverage(envelope, rect)
+        target_cov = _coverage(target, rect)
+        if envelope_cov < 0.34 and target_cov < 0.05:
+            continue
+        iou = _iou(target, rect)
+        evidence_cov = _evidence_coverage(target, rect)
+        geometry = max(
+            envelope_cov, target_cov,
+            max(0.0, 1.0 - center_ratio / max(1.0, float(max_center_distance_ratio))),
+        )
+        score = float(candidate.confidence) * (0.55 + 0.45 * min(1.0, geometry))
+        match = TargetRefineMatch(
+            label=wanted, confidence=float(candidate.confidence), target_iou=iou,
+            target_coverage=target_cov, evidence_coverage=evidence_cov,
+            center_distance_ratio=center_ratio, score=score,
+        )
+        if best is None or (match.score, match.confidence) > (best.score, best.confidence):
+            best = match
+    return best
+
+
+def contextual_bicycle_competitive_decision(
+    observations: list[tuple[str, float, float]],
+    *,
+    detector_confidence: float,
+    max_motorcycle_confidence: float = 0.55,
+    min_bicycle_confidence: float = 0.12,
+    min_source_margin: float = 0.06,
+    dual_fused_confidence: float = 0.34,
+    fused_margin: float = 0.08,
+    single_source_confidence: float = 0.55,
+    temporal_hits: int = 0,
+    temporal_fused: float = 0.0,
+) -> tuple[str, float] | None:
+    """Compare target-matched bicycle evidence against motorcycle evidence.
+
+    V0.5.36 still required an absolute bicycle score. In the supplied 04:49
+    frames the primary motorcycle itself is weak, so both context refiners can
+    be weak in absolute terms while still preferring bicycle on the same box.
+    Rescue is allowed only for a weak primary motorcycle and only when bicycle
+    wins a target-matched competition; confident scooters remain untouched.
+    """
+    if float(detector_confidence) > float(max_motorcycle_confidence):
+        return None
+    best: dict[str, tuple[float, float]] = {}
+    for source, bicycle_conf, motorcycle_conf in observations:
+        bike = max(0.0, min(1.0, float(bicycle_conf)))
+        moto = max(0.0, min(1.0, float(motorcycle_conf)))
+        key = str(source)
+        previous = best.get(key)
+        if previous is None or bike > previous[0]:
+            best[key] = (bike, moto)
+    supportive = {
+        source: values for source, values in best.items()
+        if values[0] >= float(min_bicycle_confidence)
+        and values[0] >= values[1] + float(min_source_margin)
+    }
+    if len(supportive) >= 2:
+        bike_miss = 1.0
+        moto_miss = 1.0
+        for bike, moto in supportive.values():
+            bike_miss *= max(0.0, 1.0 - bike)
+            moto_miss *= max(0.0, 1.0 - moto)
+        bike_fused = 1.0 - bike_miss
+        moto_fused = 1.0 - moto_miss
+        if bike_fused >= float(dual_fused_confidence) and bike_fused >= moto_fused + float(fused_margin):
+            return "bicycle", bike_fused
+
+    # Single-source rescue is deliberately much stricter and needs repeated
+    # pre-crossing bicycle evidence from the ordinary target-aware refiner.
+    if len(supportive) == 1 and int(temporal_hits) >= 2 and float(temporal_fused) >= 0.45:
+        bike, moto = next(iter(supportive.values()))
+        if bike >= float(single_source_confidence) and bike >= moto + max(0.12, float(min_source_margin)):
+            return "bicycle", max(bike, float(temporal_fused))
+    return None
+
+
 def contextual_bicycle_temporal_decision(
     observations: list[tuple[str, float]],
     *,

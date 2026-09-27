@@ -1,3 +1,26 @@
+# Traffic AI V0.5.37-R1 — Historical 2W Signature Contract Hotfix 🔧
+
+R1 không đổi runtime/AI/database của V0.5.37. Hotfix chỉ sửa `scripts/test.ps1` để contract lịch sử V0.5.35 nhận cả implementation cũ `two-wheel-rescue-signature` và successor V0.5.37 `two-wheel-spatial-signature`. V0.5.37 đã nâng `_two_wheel_rescue_signature_duplicate` thành `_two_wheel_spatial_signature_duplicate`, nên việc bắt literal reason cũ làm local test fail oan dù backend vẫn giữ semantics dedup hẹp và regression tests.
+
+- `VERSION` vẫn là `0.5.37`.
+- Alembic vẫn là `0051_bike_comp_v0537`.
+- Không đổi `.env`, model, benchmark, database hoặc thuật toán đếm.
+
+---
+
+# Traffic AI V0.5.37 — Competitive Bicycle Context + Spatial Rescue Signature 8.2 🚲🎯
+
+V0.5.36 giữ nguyên baseline GT 149 (`156 AI / 134 khớp / 15 lọt / 22 dư / F1 87.9% / class 99.3%`). Telemetry cho thấy `Bike ctx match = 4` nhưng `Bike weak-MC = 0`, nên context đã tìm đúng vùng bicycle nhưng rule tuyệt đối vẫn chưa đủ để cứu `04:49.450`. Spatial audit cũng cho thấy 7 event dư vừa gần thời gian vừa gần điểm cắt của một GT đã khớp.
+
+V0.5.37 xử lý hai điểm này theo hướng precision-first:
+
+- **Competitive Bicycle Context**: mỗi refiner context trả cả bicycle và motorcycle trên cùng target. Một primary `motorcycle` yếu (`<= 0.55`) chỉ được đổi thành bicycle khi bicycle thắng motorcycle theo margin trên cùng vùng hình học. Dual-source có thể dùng confidence tuyệt đối thấp hơn vì đã có đối chứng class; single-source vẫn cần temporal evidence. Telemetry mới: `Bike margin`.
+- **Spatial Rescue Signature 8.2**: backend chỉ mở rộng dedup time window cho cặp two-wheel có `rescued/interpolated`, đồng thời siết crossing-point distance. `direct/direct` không được nới. Telemetry mới: `2W spatial`.
+
+Database: `0051_bike_comp_v0537`, `schema_version = 0.5.37`. Không xóa dữ liệu.
+
+---
+
 # Traffic AI V0.5.36 — Weak-Motor Dual Context + Spatial Benchmark Audit 🚲🔎
 
 V0.5.35 trên GT 149 giữ nguyên counting so với V0.5.34 (`156 AI / 134 khớp / 15 lọt / 22 dư`) nhưng telemetry đã xác định đúng nút thắt mới: `Bike ctx match = 4` trong khi `Bike context = 0`, `Bike trail = 0`; tức crop/matcher đã nhìn thấy bicycle candidate nhưng cổng quyết định vẫn quá chặt. Đồng thời `2W dedup = 0` cho thấy 10 mục benchmark gắn nhãn “event dư gần GT” chưa đủ bằng chứng để xóa runtime chỉ dựa vào thời gian.

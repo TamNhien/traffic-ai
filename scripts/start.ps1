@@ -232,6 +232,12 @@ Ensure-EnvSetting "AI_BICYCLE_CONTEXT_TEMPORAL_COMBINED" "0.72"
 Ensure-EnvSetting "AI_BICYCLE_CONTEXT_WEAK_MOTOR_MAX_CONF" "0.62"
 Ensure-EnvSetting "AI_BICYCLE_CONTEXT_WEAK_MOTOR_DUAL_CONF" "0.58"
 Ensure-EnvSetting "AI_BICYCLE_CONTEXT_WEAK_MOTOR_MIN_STRONG" "0.24"
+Ensure-EnvSetting "AI_BICYCLE_CONTEXT_COMPETITIVE_MAX_MOTOR_CONF" "0.55"
+Ensure-EnvSetting "AI_BICYCLE_CONTEXT_COMPETITIVE_MIN_SOURCE_CONF" "0.12"
+Ensure-EnvSetting "AI_BICYCLE_CONTEXT_COMPETITIVE_SOURCE_MARGIN" "0.06"
+Ensure-EnvSetting "AI_BICYCLE_CONTEXT_COMPETITIVE_DUAL_CONF" "0.34"
+Ensure-EnvSetting "AI_BICYCLE_CONTEXT_COMPETITIVE_FUSED_MARGIN" "0.08"
+Ensure-EnvSetting "AI_BICYCLE_CONTEXT_COMPETITIVE_SINGLE_CONF" "0.55"
 Ensure-EnvSetting "AI_WARMUP" "1"
 
 # V0.2.8: bootstrap HTTPS/hosts tự động.
@@ -317,7 +323,7 @@ if (-not $dashboardOk -or -not $apiOk) {
 }
 
 Write-Host ""
-Write-Host "[OK] Traffic AI V0.5.36 đã khởi động." -ForegroundColor Green
+Write-Host "[OK] Traffic AI V0.5.37 đã khởi động." -ForegroundColor Green
 Write-Host "Dashboard : https://traffic-ai.test:8443"
 Write-Host "API Docs  : https://traffic-ai.test:8444/docs"
 Write-Host "PostgreSQL: 127.0.0.1:5445 / traffic_ai_db"

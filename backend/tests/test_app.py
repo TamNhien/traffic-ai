@@ -20,7 +20,7 @@ def test_root_metadata() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["name"] == "Traffic AI"
-    assert payload["version"] == "0.5.36"
+    assert payload["version"] == "0.5.37"
     assert payload["docs"] == "/docs"
     assert payload["health"] == "/api/health"
 
@@ -158,7 +158,7 @@ def test_benchmark_clone_compatibility_rejects_different_line() -> None:
 
 
 def test_backend_version_metadata() -> None:
-    assert app.version == "0.5.36"
+    assert app.version == "0.5.37"
 
 
 def test_v0531_startup_crossing_signature_guard_is_narrow() -> None:
@@ -179,7 +179,7 @@ def test_v0533_ground_truth_mark_update_schema() -> None:
 
 
 def test_v0533_version() -> None:
-    assert app.version == "0.5.36"
+    assert app.version == "0.5.37"
 
 
 def test_v0533_ground_truth_mark_update_keeps_timecode() -> None:
@@ -214,3 +214,13 @@ def test_v0535_two_wheel_rescue_signature_is_narrow() -> None:
     assert _two_wheel_rescue_signature_duplicate(0.48, 0.030, "rescued", "direct") is False
     assert _two_wheel_rescue_signature_duplicate(0.30, 0.012, "direct", "direct") is False
     assert _two_wheel_rescue_signature_duplicate(0.75, 0.010, "rescued", "direct") is False
+
+
+def test_v0537_two_wheel_spatial_signature_extends_only_secondary_methods() -> None:
+    from app.api.routes import _two_wheel_spatial_signature_duplicate
+    # Longer rescue tail is accepted only with an almost identical crossing point.
+    assert _two_wheel_spatial_signature_duplicate(0.70, 0.010, "rescued", "direct") is True
+    assert _two_wheel_spatial_signature_duplicate(0.70, 0.020, "rescued", "direct") is False
+    # Direct + interpolated may use a small extension; direct/direct never does.
+    assert _two_wheel_spatial_signature_duplicate(0.45, 0.008, "interpolated", "direct") is True
+    assert _two_wheel_spatial_signature_duplicate(0.30, 0.008, "direct", "direct") is False
