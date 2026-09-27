@@ -2682,3 +2682,14 @@ Sau khi chạy ổn:
 - Sửa regression trong `scripts/test.ps1`: contract lịch sử V0.5.8 trước đây ghim cứng `AI_REFINE_MAX_PER_FRAME=1`, trong khi V0.5.26 hợp lệ đã nâng default `1 -> 2` cho Target-aware Class Refiner 3.0.
 - Contract V0.5.8 giờ chấp nhận cả default lịch sử `1` hoặc migration forward-compatible `Set-EnvDefaultUpgrade "AI_REFINE_MAX_PER_FRAME" "1" "2"` + current default `2`.
 - Không đổi runtime counting/classification, model, database schema hay VERSION; đây chỉ là hotfix cho bộ kiểm thử để không chặn một cấu hình V0.5.26 hợp lệ.
+
+
+## V0.5.34-R1 — GitHub Actions Annotation Cleanup
+
+Hotfix R1 không đổi AI/runtime/database. GitHub Actions được làm sạch hai annotation đã xuất hiện khi phát hành v0.5.34:
+
+- Pin toàn bộ GitHub-hosted runner từ `ubuntu-latest` sang `ubuntu-24.04` để workflow không bị annotation về đợt chuyển `ubuntu-latest` sang Ubuntu 26.04 và tránh thay đổi môi trường ngoài ý muốn.
+- Nâng `softprops/action-gh-release@v2` lên `softprops/action-gh-release@v3`; nhánh v3 chạy trên Node.js 24, không còn cảnh báo action Node.js 20.
+- `scripts/test.ps1` có regression contract để chặn việc quay lại `ubuntu-latest` hoặc `action-gh-release@v2`.
+
+Do tag `v0.5.34` đã phát hành, không tạo lại tag cùng phiên bản. Có thể push hotfix này lên `main` rồi chạy thủ công `gh workflow run release.yml --ref main` để xác nhận workflow sạch annotation mà không tạo Release mới; bước tạo Release chỉ chạy khi ref là tag.

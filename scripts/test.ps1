@@ -239,6 +239,20 @@ function Assert-CiNodePortabilityV0510Contract {
   $ciText = Get-Content (Join-Path $root ".github\workflows\ci.yml") -Raw -Encoding UTF8
   $reusableText = Get-Content (Join-Path $root ".github\workflows\ci-release-reusable.yml") -Raw -Encoding UTF8
   foreach ($text in @($releaseText, $ciText, $reusableText)) {
+    if ($text -match '(?m)^\s*runs-on:\s*ubuntu-latest\s*$') {
+      throw "Workflow còn dùng ubuntu-latest; pin ubuntu-24.04 để tránh annotation/migration Ubuntu 26 của GitHub-hosted runner."
+    }
+    if ($text -notmatch '(?m)^\s*runs-on:\s*ubuntu-24\.04\s*$') {
+      throw "Workflow chưa pin GitHub-hosted runner ở ubuntu-24.04."
+    }
+  }
+  if ($releaseText -match 'softprops/action-gh-release@v2') {
+    throw "release.yml còn dùng softprops/action-gh-release@v2 (Node.js 20 deprecated). Hãy dùng @v3 chạy Node.js 24."
+  }
+  if ($releaseText -notmatch 'softprops/action-gh-release@v3') {
+    throw "release.yml chưa dùng softprops/action-gh-release@v3."
+  }
+  foreach ($text in @($releaseText, $ciText, $reusableText)) {
     if ($text -match '\$\{\{\s*runner\.temp') {
       throw "Workflow còn dùng runner.temp trong expression ở cấp job/env; GitHub không chấp nhận context này tại vị trí đó. Hãy dùng RUNNER_TEMP trong một run step rồi ghi qua GITHUB_ENV."
     }
