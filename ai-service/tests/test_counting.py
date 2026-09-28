@@ -704,3 +704,38 @@ def test_v0544_adaptive_rearm_waits_minimum_frames_before_releasing_passage_cycl
     assert counter.update(4401, (50, 20), 100, 100, 4) is None
     assert counter.rejected_cooldown >= 1
     assert counter._tracks[4401].counted_directions == {"in"}
+
+
+def test_v0545_long_gap_rescue_tail_requires_stronger_normal_motion():
+    line = CountingLine(0.1, 0.5, 0.9, 0.5)
+    normal_rescue = LineCrossingCounter(
+        line,
+        history_gap_frames=20,
+        interpolation_gap_frames=3,
+        min_perpendicular_ratio=0.10,
+        rescue_strict_gap_frames=5,
+        rescue_strict_min_normal_ratio=0.50,
+        rescue_strict_max_jump_ratio=0.90,
+        rescue_strict_min_side_distance_ratio=0.05,
+    )
+    assert normal_rescue.update(4501, (10, 40), 100, 100, 1) is None
+    # Gap == strict threshold: retain the V0.5.44 rescue behaviour.
+    assert normal_rescue.update(4501, (90, 60), 100, 100, 6) == "in"
+    assert normal_rescue.rejected_long_gap_rescue == 0
+
+    strict_tail = LineCrossingCounter(
+        CountingLine(0.1, 0.5, 0.9, 0.5),
+        history_gap_frames=20,
+        interpolation_gap_frames=3,
+        min_perpendicular_ratio=0.10,
+        rescue_strict_gap_frames=5,
+        rescue_strict_min_normal_ratio=0.50,
+        rescue_strict_max_jump_ratio=0.90,
+        rescue_strict_min_side_distance_ratio=0.05,
+    )
+    assert strict_tail.update(4502, (10, 40), 100, 100, 1) is None
+    # Same geometry but one frame deeper into the long-gap tail: base gate would
+    # accept it, V0.5.45 rejects because motion is mostly parallel to the gate.
+    assert strict_tail.update(4502, (90, 60), 100, 100, 7) is None
+    assert strict_tail.rejected_long_gap_rescue == 1
+    assert strict_tail.rejected_rescue_validation == 1

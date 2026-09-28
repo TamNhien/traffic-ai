@@ -901,6 +901,10 @@ class LineCrossingCounter:
         rescue_min_normal_ratio: float = 0.0,
         rescue_max_jump_ratio: float = 0.0,
         rescue_min_side_distance_ratio: float = 0.0,
+        rescue_strict_gap_frames: int = 0,
+        rescue_strict_min_normal_ratio: float = 0.0,
+        rescue_strict_max_jump_ratio: float = 0.0,
+        rescue_strict_min_side_distance_ratio: float = 0.0,
         bracket_confirm: bool = False,
         bracket_confirm_min_normal_ratio: float = 0.55,
         bracket_confirm_max_gap_frames: int = 2,
@@ -930,6 +934,10 @@ class LineCrossingCounter:
         self.rescue_min_normal_ratio = max(0.0, min(1.0, float(rescue_min_normal_ratio)))
         self.rescue_max_jump_ratio = max(0.0, float(rescue_max_jump_ratio))
         self.rescue_min_side_distance_ratio = max(0.0, float(rescue_min_side_distance_ratio))
+        self.rescue_strict_gap_frames = max(0, int(rescue_strict_gap_frames))
+        self.rescue_strict_min_normal_ratio = max(0.0, min(1.0, float(rescue_strict_min_normal_ratio)))
+        self.rescue_strict_max_jump_ratio = max(0.0, float(rescue_strict_max_jump_ratio))
+        self.rescue_strict_min_side_distance_ratio = max(0.0, float(rescue_strict_min_side_distance_ratio))
         self.bracket_confirm = bool(bracket_confirm)
         self.bracket_confirm_min_normal_ratio = max(0.0, min(1.0, float(bracket_confirm_min_normal_ratio)))
         self.bracket_confirm_max_gap_frames = max(1, int(bracket_confirm_max_gap_frames))
@@ -953,6 +961,7 @@ class LineCrossingCounter:
         self.bracket_confirm_rescues = 0
         self.origin_rescues = 0
         self.rejected_rescue_validation = 0
+        self.rejected_long_gap_rescue = 0
         self.adaptive_cooldown_releases = 0
         self.passage_cycle_rearms = 0
         self._last_crossing_point: dict[int, Point] = {}
@@ -1219,6 +1228,26 @@ class LineCrossingCounter:
             if rescue_invalid:
                 self.rejected_rescue_validation += 1
                 return None
+
+            # V0.5.45 False Positive Closure 9.1: the longest history bridges
+            # are disproportionately represented in unmatched benchmark events.
+            # Keep ordinary rescue thresholds unchanged, but make only the far
+            # tail prove stronger normal motion, bounded jump and side depth.
+            # Defaults are disabled for unit compatibility; production runtime
+            # enables the stricter tail through environment variables.
+            if self.rescue_strict_gap_frames > 0 and observation_gap > self.rescue_strict_gap_frames:
+                strict_invalid = (
+                    (self.rescue_strict_min_normal_ratio > 0.0 and normal_ratio < self.rescue_strict_min_normal_ratio)
+                    or (self.rescue_strict_max_jump_ratio > 0.0 and jump_ratio > self.rescue_strict_max_jump_ratio)
+                    or (
+                        self.rescue_strict_min_side_distance_ratio > 0.0
+                        and side_depth_ratio < self.rescue_strict_min_side_distance_ratio
+                    )
+                )
+                if strict_invalid:
+                    self.rejected_long_gap_rescue += 1
+                    self.rejected_rescue_validation += 1
+                    return None
 
         if self.road_zone is not None:
             move_x_zone = anchor[0] - previous.point[0]

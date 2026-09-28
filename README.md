@@ -1,3 +1,24 @@
+# Traffic AI V0.5.45 — False Positive Closure 9.1 + Long-Gap Rescue Guard + Canonical Shadow Dedup
+
+V0.5.45 tiếp tục trực tiếp từ benchmark V0.5.44 mới nhất của `clip1(6).mp4` / `camera_1(20260928-121530).rar`: **GT 149 / AI 160 / khớp 138 / lọt 11 / dư 22 / Recall 92.6% / Precision 86.3% / F1 89.3% / class đúng 98.6%**. Recall đã tăng, nhưng 22 event dư cho thấy bước tiếp theo phải ưu tiên Precision thay vì tiếp tục mở Gate.
+
+- **False Positive Closure 9.1 — same-track cycle guard:** giữ semantics “mỗi lượt cắt vạch là một lượt”, nhưng chặn cùng canonical track phát lại cùng hướng ở gần như cùng điểm cắt trong ~3.25 s, hoặc đảo IN/OUT quá nhanh ở cùng điểm cắt. Một lượt quay lại thật ở thời điểm xa hơn vẫn được lưu.
+- **Secondary Shadow Dedup:** đóng khe hẹp còn lại giữa các guard V0.5.35–V0.5.38 khi một crossing direct bị rediscover bởi interpolated/rescued dưới ID khác. Chỉ exact class + điểm cắt cực gần mới được gộp; direct/direct không bao giờ bị nới để bảo vệ xe máy chạy sát nhau.
+- **Long-Gap Rescue Guard:** rescue bình thường giữ nguyên threshold V0.5.44; chỉ phần đuôi gap > 18 frame phải chứng minh normal motion mạnh hơn, jump nhỏ hơn và đủ side depth. Mục tiêu là giảm nhóm benchmark `Rescue qua gap nhưng GT không có` mà không khóa các rescue ngắn đã giúp Recall.
+- **Telemetry mới:** `Rescue dài loại`, `FP track lặp`, `FP đảo hướng`, `FP shadow` giúp phân biệt event bị loại ở engine hay backend dedup.
+- **RAR audit:** đã đối chiếu các frame quanh 00:59 / 01:09 / 03:57 và các case class 04:49 / 10:41. Cảnh có nhiều xe máy sát vạch xác nhận rằng duplicate guard phải dựa cả time + crossing geometry, không thể chỉ tăng cooldown toàn cục. Van ở frame ~16049 vẫn có detector `truck`; V0.5.45 không ép đổi class toàn cục để giữ class accuracy 98.6%.
+- **Version/database:** `VERSION = 0.5.45`, Alembic `0059_fp_closure_v0545`, `schema_version = 0.5.45`; migration chỉ cập nhật marker version, không xóa dữ liệu.
+
+## Kiểm thử V0.5.45
+
+- Python compile: PASS.
+- AI Service: **161/161** unit tests PASS sau khi thêm long-gap rescue-tail regression.
+- Backend: **36/36** unit tests PASS sau khi thêm same-track repeat/flip và secondary-shadow regressions.
+- Tổng Python unit tests: **197/197** PASS trong môi trường đóng gói.
+- Vite/PowerShell/Docker full-suite vẫn cần máy Windows đích xác nhận bằng `scripts\test.ps1`; package được kiểm tra lại sau khi đóng ZIP.
+
+---
+
 # Traffic AI V0.5.44 — Benchmark Review 9.0 + Passage Delivery Semantics + Re-arm Stability
 
 V0.5.44 tiếp tục từ benchmark V0.5.43 mới nhất của `clip1(6).mp4` / `camera_1(20260928-111258).rar`: **GT 149 / AI 155 / khớp 136 / lọt 13 / dư 19 / Recall 91.3% / Precision 87.7% / F1 89.5% / class đúng 98.5%**. Bản này không tự thay đổi ground truth và không nới threshold class toàn cục; trọng tâm là làm phần Lọt/Đếm dư đọc được, tách lệch timecode khỏi mất event thật, và đóng một lỗi persistence có thể làm mất lượt cắt lại của cùng track.

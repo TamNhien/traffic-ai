@@ -116,6 +116,12 @@ class EventDispatcher(threading.Thread):
                                     self.state.two_wheel_signature_duplicates += 1
                                     self.state.two_wheel_spatial_signature_duplicates += 1
                                     self.state.two_wheel_ultra_spatial_signature_duplicates += 1
+                                elif dedup_reason == "same-track-repeat-jitter":
+                                    self.state.same_track_repeat_duplicates += 1
+                                elif dedup_reason == "same-track-direction-flip":
+                                    self.state.direction_flip_duplicates += 1
+                                elif dedup_reason == "secondary-shadow-signature":
+                                    self.state.secondary_shadow_duplicates += 1
                             else:
                                 self.state.persisted_events += 1
                             delivered = True

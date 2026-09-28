@@ -642,6 +642,86 @@ def _two_wheel_ultra_spatial_signature_duplicate(
     return False
 
 
+
+
+def _secondary_shadow_signature_duplicate(
+    time_delta: float,
+    distance: float,
+    current_method: str | None,
+    other_method: str | None,
+) -> bool:
+    """V0.5.45 precision-first shadow-event guard.
+
+    A direct crossing can be rediscovered by an interpolated/rescued branch after
+    an ID switch.  The existing V0.5.35-V0.5.38 guards intentionally leave a
+    narrow gap between their medium/ultra spatial tails.  Benchmark #26 shows
+    six unmatched events almost on top of an already matched GT crossing, so we
+    close only that gap: at least one event must be secondary and the crossing
+    points must be extremely close.  Direct/direct traffic is never collapsed.
+    """
+    methods = {str(current_method or ""), str(other_method or "")}
+    if not methods or methods == {"direct"}:
+        return False
+    if "rescued" in methods:
+        return float(time_delta) <= 0.85 and float(distance) <= 0.014
+    if "interpolated" in methods:
+        return float(time_delta) <= 0.75 and float(distance) <= 0.012
+    return False
+
+
+def _crossing_point_distance(payload: VehicleEventCreate, existing: VehicleEvent | None) -> float | None:
+    if existing is None:
+        return None
+    if payload.crossing_x is None or payload.crossing_y is None:
+        return None
+    if existing.crossing_x is None or existing.crossing_y is None:
+        return None
+    dx = float(payload.crossing_x) - float(existing.crossing_x)
+    dy = float(payload.crossing_y) - float(existing.crossing_y)
+    return (dx * dx + dy * dy) ** 0.5
+
+
+def _same_track_cycle_duplicate_reason(payload: VehicleEventCreate, existing: VehicleEvent | None) -> str | None:
+    """Reject only geometrically implausible rapid re-crossings for one canonical track.
+
+    Passage semantics remain intact: a vehicle may cross again later.  The guard
+    applies only near the same point and inside a short source-video interval.
+    Same-direction repeats cannot be a second traversal of the same finite line
+    without an intervening opposite traversal (or a loop around an endpoint), so
+    a very-near repeat inside ~3 s is treated as track/gate jitter.  Opposite
+    direction keeps the legacy 2 s guard and gains a spatially-gated tail to 3 s.
+    """
+    if existing is None:
+        return None
+    frame_delta = None
+    time_delta = None
+    if payload.source_frame_index is not None and existing.source_frame_index is not None:
+        frame_delta = abs(int(payload.source_frame_index) - int(existing.source_frame_index))
+    if payload.source_time_seconds is not None and existing.source_time_seconds is not None:
+        time_delta = abs(float(payload.source_time_seconds) - float(existing.source_time_seconds))
+    distance = _crossing_point_distance(payload, existing)
+    same_direction = str(getattr(payload.direction, "value", payload.direction)) == str(getattr(existing.direction, "value", existing.direction))
+
+    # Preserve the long-standing fail-closed opposite-direction window even for
+    # legacy rows that have no crossing coordinates.
+    if not same_direction:
+        if (frame_delta is not None and frame_delta <= 60) or (time_delta is not None and time_delta <= 2.0):
+            return "same-track-direction-flip"
+        extended_close = (
+            distance is not None and distance <= 0.030
+            and ((frame_delta is not None and frame_delta <= 75) or (time_delta is not None and time_delta <= 3.0))
+        )
+        return "same-track-direction-flip" if extended_close else None
+
+    # V0.5.45: same-direction repeat must also be spatially the same crossing.
+    # This deliberately does not use only track lifetime/time, so a genuine later
+    # passage cycle remains countable.
+    if distance is None or distance > 0.035:
+        return None
+    if (frame_delta is not None and frame_delta <= 82) or (time_delta is not None and time_delta <= 3.25):
+        return "same-track-repeat-jitter"
+    return None
+
 def _same_track_delivery_retry(payload: VehicleEventCreate, existing: VehicleEvent | None) -> bool:
     """Return True only when a same-track/same-direction row is a delivery retry.
 
@@ -694,29 +774,20 @@ def internal_event(payload: VehicleEventCreate, response: Response, x_ai_token: 
         response.headers["X-TrafficAI-Dedup-Reason"] = "same-track-delivery-retry"
         return existing
 
-    # Crossing Engine 7.0 backend safety: the same canonical track producing an
-    # opposite-direction event a moment later is almost always gate jitter, not
-    # a real vehicle leaving and returning. Keep legitimate later turn-arounds
-    # possible by applying this guard only inside a short source-video window.
+    # V0.5.45 False Positive Closure 9.1: keep genuine later passage cycles, but
+    # close rapid same-track repeats/direction flips that occur at the same gate
+    # point. This targets benchmark-proven jitter without restoring a lifetime
+    # uniqueness rule for tracking_id.
     if payload.session_id is not None and payload.tracking_id is not None:
         recent_same_track = db.scalar(select(VehicleEvent).where(
             VehicleEvent.session_id == payload.session_id,
             VehicleEvent.tracking_id == payload.tracking_id,
         ).order_by(VehicleEvent.id.desc()))
-        if recent_same_track is not None:
-            frame_close = (
-                payload.source_frame_index is not None
-                and recent_same_track.source_frame_index is not None
-                and abs(payload.source_frame_index - recent_same_track.source_frame_index) <= 60
-            )
-            time_close = (
-                payload.source_time_seconds is not None
-                and recent_same_track.source_time_seconds is not None
-                and abs(payload.source_time_seconds - recent_same_track.source_time_seconds) <= 2.0
-            )
-            if frame_close or time_close:
-                response.headers["X-TrafficAI-Deduplicated"] = "1"
-                return recent_same_track
+        cycle_reason = _same_track_cycle_duplicate_reason(payload, recent_same_track)
+        if cycle_reason is not None:
+            response.headers["X-TrafficAI-Deduplicated"] = "1"
+            response.headers["X-TrafficAI-Dedup-Reason"] = cycle_reason
+            return recent_same_track
 
     # Crossing Engine 7.1 cross-ID signature guard. A ByteTrack ID switch can
     # create two canonical IDs for the same physical crossing. Suppress only
@@ -770,6 +841,20 @@ def internal_event(payload: VehicleEventCreate, response: Response, x_ai_token: 
             if time_delta <= 0.22 and distance <= 0.025:
                 response.headers["X-TrafficAI-Deduplicated"] = "1"
                 response.headers["X-TrafficAI-Dedup-Reason"] = "crossing-signature"
+                return other
+
+            # V0.5.45: close the narrow secondary-shadow gap exposed by
+            # Benchmark #26. Exact class match + ultra-close crossing point are
+            # required; direct/direct dense traffic is never widened.
+            if (
+                str(getattr(other.vehicle_type, "value", other.vehicle_type))
+                == str(getattr(payload.vehicle_type, "value", payload.vehicle_type))
+                and _secondary_shadow_signature_duplicate(
+                    time_delta, distance, payload.crossing_method, other.crossing_method
+                )
+            ):
+                response.headers["X-TrafficAI-Deduplicated"] = "1"
+                response.headers["X-TrafficAI-Dedup-Reason"] = "secondary-shadow-signature"
                 return other
 
             # V0.5.35: secondary two-wheel center/gap rescue can rediscover the

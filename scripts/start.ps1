@@ -353,7 +353,7 @@ if (-not $dashboardOk -or -not $apiOk) {
 }
 
 Write-Host ""
-Write-Host "[OK] Traffic AI V0.5.44 đã khởi động." -ForegroundColor Green
+Write-Host "[OK] Traffic AI V0.5.45 đã khởi động." -ForegroundColor Green
 Write-Host "Dashboard : https://traffic-ai.test:8443"
 Write-Host "API Docs  : https://traffic-ai.test:8444/docs"
 $envNow = Get-Content $envPath -Raw -Encoding UTF8

@@ -79,12 +79,16 @@ class PipelineState:
     fast_confirm_rescues: int = 0
     bracket_confirm_rescues: int = 0
     rescue_validation_rejections: int = 0
+    long_gap_rescue_rejections: int = 0
     adaptive_cooldown_releases: int = 0
     passage_cycle_rearms: int = 0
     crossing_signature_duplicates: int = 0
     two_wheel_signature_duplicates: int = 0
     two_wheel_spatial_signature_duplicates: int = 0
     two_wheel_ultra_spatial_signature_duplicates: int = 0
+    same_track_repeat_duplicates: int = 0
+    direction_flip_duplicates: int = 0
+    secondary_shadow_duplicates: int = 0
     calibration_samples: int = 0
     calibration_tracks: int = 0
     calibration_moving_tracks: int = 0

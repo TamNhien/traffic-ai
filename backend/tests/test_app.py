@@ -20,7 +20,7 @@ def test_root_metadata() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["name"] == "Traffic AI"
-    assert payload["version"] == "0.5.44"
+    assert payload["version"] == "0.5.45"
     assert payload["docs"] == "/docs"
     assert payload["health"] == "/api/health"
 
@@ -158,7 +158,7 @@ def test_benchmark_clone_compatibility_rejects_different_line() -> None:
 
 
 def test_backend_version_metadata() -> None:
-    assert app.version == "0.5.44"
+    assert app.version == "0.5.45"
 
 
 def test_v0531_startup_crossing_signature_guard_is_narrow() -> None:
@@ -179,7 +179,7 @@ def test_v0533_ground_truth_mark_update_schema() -> None:
 
 
 def test_v0533_version() -> None:
-    assert app.version == "0.5.44"
+    assert app.version == "0.5.45"
 
 
 def test_v0533_ground_truth_mark_update_keeps_timecode() -> None:
@@ -277,3 +277,65 @@ def test_v0544_legacy_same_track_delivery_without_source_coordinates_stays_conse
         vehicle_type="motorcycle", direction="in", confidence=0.9,
     )
     assert _same_track_delivery_retry(payload, existing) is True
+
+
+def test_v0545_same_track_cycle_guard_closes_only_rapid_same_point_jitter() -> None:
+    from types import SimpleNamespace
+    from app.api.routes import _same_track_cycle_duplicate_reason
+    from app.schemas.event import VehicleEventCreate
+
+    existing = SimpleNamespace(
+        source_frame_index=100,
+        source_time_seconds=4.0,
+        crossing_x=0.50,
+        crossing_y=0.50,
+        direction="in",
+        crossing_method="direct",
+    )
+    repeat = VehicleEventCreate(
+        camera_id=1, session_id=9, tracking_id=77,
+        vehicle_type="motorcycle", direction="in", confidence=0.9,
+        source_frame_index=170, source_time_seconds=6.8,
+        crossing_x=0.505, crossing_y=0.503, crossing_method="rescued",
+    )
+    later_real_passage = repeat.model_copy(update={
+        "source_frame_index": 400, "source_time_seconds": 16.0,
+    })
+    spatially_distinct = repeat.model_copy(update={"crossing_x": 0.60, "crossing_y": 0.60})
+
+    assert _same_track_cycle_duplicate_reason(repeat, existing) == "same-track-repeat-jitter"
+    assert _same_track_cycle_duplicate_reason(later_real_passage, existing) is None
+    assert _same_track_cycle_duplicate_reason(spatially_distinct, existing) is None
+
+
+def test_v0545_same_track_direction_flip_extends_only_with_same_gate_geometry() -> None:
+    from types import SimpleNamespace
+    from app.api.routes import _same_track_cycle_duplicate_reason
+    from app.schemas.event import VehicleEventCreate
+
+    existing = SimpleNamespace(
+        source_frame_index=100,
+        source_time_seconds=4.0,
+        crossing_x=0.50,
+        crossing_y=0.50,
+        direction="in",
+        crossing_method="direct",
+    )
+    near_flip = VehicleEventCreate(
+        camera_id=1, session_id=9, tracking_id=77,
+        vehicle_type="motorcycle", direction="out", confidence=0.9,
+        source_frame_index=170, source_time_seconds=6.7,
+        crossing_x=0.508, crossing_y=0.505, crossing_method="interpolated",
+    )
+    far_flip = near_flip.model_copy(update={"crossing_x": 0.62, "crossing_y": 0.62})
+    assert _same_track_cycle_duplicate_reason(near_flip, existing) == "same-track-direction-flip"
+    assert _same_track_cycle_duplicate_reason(far_flip, existing) is None
+
+
+def test_v0545_secondary_shadow_signature_closes_only_ultra_close_secondary_tail() -> None:
+    from app.api.routes import _secondary_shadow_signature_duplicate
+
+    assert _secondary_shadow_signature_duplicate(0.80, 0.013, "rescued", "direct") is True
+    assert _secondary_shadow_signature_duplicate(0.80, 0.020, "rescued", "direct") is False
+    assert _secondary_shadow_signature_duplicate(0.70, 0.011, "interpolated", "direct") is True
+    assert _secondary_shadow_signature_duplicate(0.30, 0.005, "direct", "direct") is False
