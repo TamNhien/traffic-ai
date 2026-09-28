@@ -669,6 +669,30 @@ def _secondary_shadow_signature_duplicate(
     return False
 
 
+def _secondary_reverse_shadow_duplicate(
+    time_delta: float,
+    distance: float,
+    current_method: str | None,
+    other_method: str | None,
+) -> bool:
+    """V0.5.46 cross-ID reverse shadow guard.
+
+    Opposite-direction direct/direct events can be two real vehicles and are
+    therefore never collapsed here.  When one side of the pair is a secondary
+    interpolated/rescued rediscovery, however, an ultra-close point and short
+    interval is strong evidence that one physical crossing was emitted twice
+    with a transient ID/direction flip.
+    """
+    methods = {str(current_method or ""), str(other_method or "")}
+    if not methods or methods == {"direct"}:
+        return False
+    if "rescued" in methods:
+        return float(time_delta) <= 0.70 and float(distance) <= 0.012
+    if "interpolated" in methods:
+        return float(time_delta) <= 0.55 and float(distance) <= 0.010
+    return False
+
+
 def _crossing_point_distance(payload: VehicleEventCreate, existing: VehicleEvent | None) -> float | None:
     if existing is None:
         return None
@@ -702,24 +726,33 @@ def _same_track_cycle_duplicate_reason(payload: VehicleEventCreate, existing: Ve
     distance = _crossing_point_distance(payload, existing)
     same_direction = str(getattr(payload.direction, "value", payload.direction)) == str(getattr(existing.direction, "value", existing.direction))
 
-    # Preserve the long-standing fail-closed opposite-direction window even for
-    # legacy rows that have no crossing coordinates.
+    # V0.5.46 Precision Closure 9.2.  Benchmark #27 shows that the dominant
+    # unmatched events are still same canonical-track repeats.  A single finite
+    # gate cannot be crossed twice in the same direction within a few seconds
+    # without an intervening opposite traversal (or an implausibly fast loop
+    # around an endpoint), so the short-window guard no longer depends on the
+    # noisy box-derived crossing point. Genuine later passage cycles stay valid.
     if not same_direction:
-        if (frame_delta is not None and frame_delta <= 60) or (time_delta is not None and time_delta <= 2.0):
+        if (frame_delta is not None and frame_delta <= 75) or (time_delta is not None and time_delta <= 3.0):
             return "same-track-direction-flip"
         extended_close = (
             distance is not None and distance <= 0.030
-            and ((frame_delta is not None and frame_delta <= 75) or (time_delta is not None and time_delta <= 3.0))
+            and ((frame_delta is not None and frame_delta <= 100) or (time_delta is not None and time_delta <= 4.0))
         )
         return "same-track-direction-flip" if extended_close else None
 
-    # V0.5.45: same-direction repeat must also be spatially the same crossing.
-    # This deliberately does not use only track lifetime/time, so a genuine later
-    # passage cycle remains countable.
-    if distance is None or distance > 0.035:
-        return None
-    if (frame_delta is not None and frame_delta <= 82) or (time_delta is not None and time_delta <= 3.25):
+    if (frame_delta is not None and frame_delta <= 100) or (time_delta is not None and time_delta <= 4.0):
         return "same-track-repeat-jitter"
+    # Outside the physical short-cycle window, keep a narrow spatial tail for a
+    # secondary rediscovery, but never restore lifetime uniqueness.
+    if distance is not None and distance <= 0.020:
+        method = str(payload.crossing_method or "")
+        other_method = str(getattr(existing, "crossing_method", "") or "")
+        if {method, other_method} != {"direct"} and (
+            (frame_delta is not None and frame_delta <= 125)
+            or (time_delta is not None and time_delta <= 5.0)
+        ):
+            return "same-track-repeat-jitter"
     return None
 
 def _same_track_delivery_retry(payload: VehicleEventCreate, existing: VehicleEvent | None) -> bool:
@@ -809,8 +842,7 @@ def internal_event(payload: VehicleEventCreate, response: Response, x_ai_token: 
             VehicleEvent.source_time_seconds.is_not(None),
             VehicleEvent.source_time_seconds >= lower,
             VehicleEvent.source_time_seconds <= float(payload.source_time_seconds) + 0.02,
-            VehicleEvent.direction == payload.direction,
-        ).order_by(VehicleEvent.id.desc()).limit(8)).all())
+        ).order_by(VehicleEvent.id.desc()).limit(12)).all())
         for other in recent:
             if other.crossing_x is None or other.crossing_y is None:
                 continue
@@ -822,6 +854,25 @@ def internal_event(payload: VehicleEventCreate, response: Response, x_ai_token: 
             dy = float(payload.crossing_y) - float(other.crossing_y)
             distance = (dx * dx + dy * dy) ** 0.5
             time_delta = abs(float(payload.source_time_seconds) - float(other.source_time_seconds or 0.0))
+            same_direction_pair = str(getattr(other.direction, "value", other.direction)) == str(
+                getattr(payload.direction, "value", payload.direction)
+            )
+
+            # V0.5.46: cross-ID reverse shadows are considered only when one
+            # event is secondary and the crossing point is ultra-close.  The
+            # direct/direct opposite-direction case is intentionally preserved.
+            if not same_direction_pair:
+                if (
+                    str(getattr(other.vehicle_type, "value", other.vehicle_type))
+                    == str(getattr(payload.vehicle_type, "value", payload.vehicle_type))
+                    and _secondary_reverse_shadow_duplicate(
+                        time_delta, distance, payload.crossing_method, other.crossing_method
+                    )
+                ):
+                    response.headers["X-TrafficAI-Deduplicated"] = "1"
+                    response.headers["X-TrafficAI-Dedup-Reason"] = "secondary-reverse-shadow"
+                    return other
+                continue
 
             # V0.5.31 startup ghost pair guard. Local video can legitimately start
             # with one vehicle already straddling the gate; tracker/bootstrap may

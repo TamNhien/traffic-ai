@@ -964,6 +964,7 @@ class LineCrossingCounter:
         self.rejected_long_gap_rescue = 0
         self.adaptive_cooldown_releases = 0
         self.passage_cycle_rearms = 0
+        self.rejected_same_direction_cycle = 0
         self._last_crossing_point: dict[int, Point] = {}
         self._last_crossing_frame: dict[int, float] = {}
 
@@ -1009,28 +1010,16 @@ class LineCrossingCounter:
         if not state.armed:
             state.history.append(sample)
             if abs(distance) >= rearm_distance:
+                # V0.5.46 separates geometric re-arm from passage identity.
+                # Geometry may watch for a return as soon as the vehicle has
+                # clearly left the dead band, while counted_directions keeps the
+                # last accepted direction until an opposite traversal is proven.
+                # Cooldown/adaptive release below still decides whether that
+                # opposite return is temporally plausible.
                 state.armed = True
-                state.history = deque(list(state.history)[-5:], maxlen=48)
-            return None
-
-        # V0.5.44 Passage Re-arm Stability: counted_directions still belongs
-        # to one passage cycle, but adaptive release may no longer clear it a
-        # couple of frames after the original crossing merely because the box
-        # moved far away.  A genuine return needs a bounded minimum elapsed
-        # interval and the *current* anchor must actually be beyond the wider
-        # release distance. Full cooldown still releases normally.
-        if state.counted_directions and state.last_count_frame > -10_000 and abs(distance) >= rearm_distance:
-            elapsed = sample.frame_index - state.last_count_frame
-            release_distance = scale * self.cooldown_release_ratio
-            far_release = (
-                self.adaptive_cooldown
-                and release_distance > 0.0
-                and elapsed >= self.passage_rearm_min_frames
-                and abs(distance) >= release_distance
-            )
-            if elapsed >= self.crossing_cooldown_frames or far_release:
-                state.counted_directions.clear()
                 self.passage_cycle_rearms += 1
+                state.history = deque([sample], maxlen=48)
+            return None
 
         state.history.append(sample)
         if sample.frame_index <= self.startup_grace_frames:
@@ -1291,9 +1280,14 @@ class LineCrossingCounter:
 
         direction = "in" if previous.side < 0 < side else "out"
         if direction in state.counted_directions:
+            self.rejected_same_direction_cycle += 1
             return None
 
-        state.counted_directions.add(direction)
+        # Keep only the most recently accepted direction.  The opposite
+        # traversal is the proof that a later same-direction passage is a new
+        # cycle, so alternating IN→OUT→IN remains countable without ever using
+        # a lifetime unique tracking ID.
+        state.counted_directions = {direction}
         state.armed = False
         state.last_count_frame = sample.frame_index
         state.max_abs_distance_since_count = 0.0
@@ -1362,10 +1356,11 @@ class LineCrossingCounter:
             return False
         state = self._tracks.setdefault(tid, _TrackGateState())
         if direction in state.counted_directions:
+            self.rejected_same_direction_cycle += 1
             return False
         if int(frame_index) - state.last_count_frame < self.crossing_cooldown_frames:
             return False
-        state.counted_directions.add(direction)
+        state.counted_directions = {direction}
         state.armed = False
         state.last_count_frame = int(frame_index)
         state.max_abs_distance_since_count = 0.0
@@ -1449,7 +1444,13 @@ class LineCrossingCounter:
             origin_history = list(dst.origin_history) + list(src.origin_history)
             origin_history.sort(key=lambda sample: sample.frame_index)
             dst.origin_history = deque(origin_history[-20:], maxlen=20)
-            dst.counted_directions.update(src.counted_directions)
+            # V0.5.46: counted_directions represents the latest accepted
+            # passage direction, not a lifetime set.  Canonical fusion must keep
+            # the newer passage state instead of unioning IN and OUT forever.
+            if src.last_count_frame > dst.last_count_frame:
+                dst.counted_directions = set(src.counted_directions)
+            elif src.last_count_frame == dst.last_count_frame and not dst.counted_directions:
+                dst.counted_directions = set(src.counted_directions)
             dst.last_count_frame = max(dst.last_count_frame, src.last_count_frame)
             dst.armed = dst.armed and src.armed if dst.counted_directions else (dst.armed or src.armed)
             dst.first_frame = min([value for value in (dst.first_frame, src.first_frame) if value is not None], default=None)

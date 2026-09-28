@@ -739,3 +739,47 @@ def test_v0545_long_gap_rescue_tail_requires_stronger_normal_motion():
     assert strict_tail.update(4502, (90, 60), 100, 100, 7) is None
     assert strict_tail.rejected_long_gap_rescue == 1
     assert strict_tail.rejected_rescue_validation == 1
+
+
+def test_v0546_passage_cycle_requires_opposite_crossing_before_same_direction_recount():
+    counter = LineCrossingCounter(
+        CountingLine(0.1, 0.5, 0.9, 0.5),
+        dead_band_ratio=0.01,
+        rearm_distance_ratio=0.10,
+        crossing_cooldown_frames=5,
+        passage_rearm_min_frames=5,
+        startup_grace_frames=0,
+    )
+    assert counter.update(4601, (50, 20), 100, 100, 1) is None
+    assert counter.update(4601, (50, 80), 100, 100, 2) == "in"
+
+    # Bounce back while the gate is still disarmed. This is not a confirmed OUT
+    # traversal and therefore must not unlock a second IN event.
+    assert counter.update(4601, (50, 20), 100, 100, 3) is None
+    assert counter.update(4601, (50, 20), 100, 100, 7) is None
+    assert counter._tracks[4601].armed is True
+    assert counter._tracks[4601].counted_directions == {"in"}
+    assert counter.update(4601, (50, 80), 100, 100, 8) is None
+    assert counter.rejected_same_direction_cycle == 1
+    assert counter.in_count == 1
+
+    # A real opposite traversal closes the previous cycle and makes a later IN
+    # eligible again under the same canonical tracking ID.
+    assert counter.update(4601, (50, 20), 100, 100, 9) == "out"
+    assert counter.update(4601, (50, 10), 100, 100, 14) is None
+    assert counter.update(4601, (50, 80), 100, 100, 15) == "in"
+    assert counter.in_count == 2
+    assert counter.out_count == 1
+
+
+def test_v0546_external_crossing_keeps_only_latest_passage_direction():
+    counter = LineCrossingCounter(
+        CountingLine(0.1, 0.5, 0.9, 0.5),
+        crossing_cooldown_frames=0,
+    )
+    assert counter.register_external_crossing(4602, "in", 10, (50.0, 50.0)) is True
+    assert counter.register_external_crossing(4602, "in", 20, (50.0, 50.0)) is False
+    assert counter.rejected_same_direction_cycle == 1
+    assert counter.register_external_crossing(4602, "out", 30, (50.0, 50.0)) is True
+    assert counter._tracks[4602].counted_directions == {"out"}
+    assert counter.register_external_crossing(4602, "in", 40, (50.0, 50.0)) is True

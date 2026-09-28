@@ -20,7 +20,7 @@ def test_root_metadata() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["name"] == "Traffic AI"
-    assert payload["version"] == "0.5.45"
+    assert payload["version"] == "0.5.46"
     assert payload["docs"] == "/docs"
     assert payload["health"] == "/api/health"
 
@@ -158,7 +158,7 @@ def test_benchmark_clone_compatibility_rejects_different_line() -> None:
 
 
 def test_backend_version_metadata() -> None:
-    assert app.version == "0.5.45"
+    assert app.version == "0.5.46"
 
 
 def test_v0531_startup_crossing_signature_guard_is_narrow() -> None:
@@ -179,7 +179,7 @@ def test_v0533_ground_truth_mark_update_schema() -> None:
 
 
 def test_v0533_version() -> None:
-    assert app.version == "0.5.45"
+    assert app.version == "0.5.46"
 
 
 def test_v0533_ground_truth_mark_update_keeps_timecode() -> None:
@@ -301,11 +301,17 @@ def test_v0545_same_track_cycle_guard_closes_only_rapid_same_point_jitter() -> N
     later_real_passage = repeat.model_copy(update={
         "source_frame_index": 400, "source_time_seconds": 16.0,
     })
-    spatially_distinct = repeat.model_copy(update={"crossing_x": 0.60, "crossing_y": 0.60})
+    # V0.5.46: crossing-point jitter must not let an impossible 2.8 s
+    # same-direction repeat escape the physical short-cycle closure.
+    spatially_distinct_short = repeat.model_copy(update={"crossing_x": 0.60, "crossing_y": 0.60})
+    spatially_distinct_late = spatially_distinct_short.model_copy(update={
+        "source_frame_index": 400, "source_time_seconds": 16.0,
+    })
 
     assert _same_track_cycle_duplicate_reason(repeat, existing) == "same-track-repeat-jitter"
+    assert _same_track_cycle_duplicate_reason(spatially_distinct_short, existing) == "same-track-repeat-jitter"
     assert _same_track_cycle_duplicate_reason(later_real_passage, existing) is None
-    assert _same_track_cycle_duplicate_reason(spatially_distinct, existing) is None
+    assert _same_track_cycle_duplicate_reason(spatially_distinct_late, existing) is None
 
 
 def test_v0545_same_track_direction_flip_extends_only_with_same_gate_geometry() -> None:
@@ -328,8 +334,12 @@ def test_v0545_same_track_direction_flip_extends_only_with_same_gate_geometry() 
         crossing_x=0.508, crossing_y=0.505, crossing_method="interpolated",
     )
     far_flip = near_flip.model_copy(update={"crossing_x": 0.62, "crossing_y": 0.62})
+    late_far_flip = far_flip.model_copy(update={
+        "source_frame_index": 210, "source_time_seconds": 8.5,
+    })
     assert _same_track_cycle_duplicate_reason(near_flip, existing) == "same-track-direction-flip"
-    assert _same_track_cycle_duplicate_reason(far_flip, existing) is None
+    assert _same_track_cycle_duplicate_reason(far_flip, existing) == "same-track-direction-flip"
+    assert _same_track_cycle_duplicate_reason(late_far_flip, existing) is None
 
 
 def test_v0545_secondary_shadow_signature_closes_only_ultra_close_secondary_tail() -> None:
@@ -339,3 +349,35 @@ def test_v0545_secondary_shadow_signature_closes_only_ultra_close_secondary_tail
     assert _secondary_shadow_signature_duplicate(0.80, 0.020, "rescued", "direct") is False
     assert _secondary_shadow_signature_duplicate(0.70, 0.011, "interpolated", "direct") is True
     assert _secondary_shadow_signature_duplicate(0.30, 0.005, "direct", "direct") is False
+
+
+def test_v0546_secondary_reverse_shadow_requires_secondary_method_and_ultra_close_point() -> None:
+    from app.api.routes import _secondary_reverse_shadow_duplicate
+
+    assert _secondary_reverse_shadow_duplicate(0.60, 0.010, "rescued", "direct") is True
+    assert _secondary_reverse_shadow_duplicate(0.50, 0.009, "interpolated", "direct") is True
+    assert _secondary_reverse_shadow_duplicate(0.20, 0.004, "direct", "direct") is False
+    assert _secondary_reverse_shadow_duplicate(0.80, 0.010, "rescued", "direct") is False
+    assert _secondary_reverse_shadow_duplicate(0.50, 0.020, "interpolated", "direct") is False
+
+
+def test_v0546_same_track_short_cycle_is_physical_not_spatial() -> None:
+    from types import SimpleNamespace
+    from app.api.routes import _same_track_cycle_duplicate_reason
+    from app.schemas.event import VehicleEventCreate
+
+    existing = SimpleNamespace(
+        source_frame_index=100, source_time_seconds=4.0,
+        crossing_x=0.10, crossing_y=0.50, direction="in", crossing_method="direct",
+    )
+    impossible_repeat = VehicleEventCreate(
+        camera_id=1, session_id=9, tracking_id=77,
+        vehicle_type="motorcycle", direction="in", confidence=0.9,
+        source_frame_index=195, source_time_seconds=7.8,
+        crossing_x=0.88, crossing_y=0.50, crossing_method="direct",
+    )
+    later_passage = impossible_repeat.model_copy(update={
+        "source_frame_index": 350, "source_time_seconds": 14.0,
+    })
+    assert _same_track_cycle_duplicate_reason(impossible_repeat, existing) == "same-track-repeat-jitter"
+    assert _same_track_cycle_duplicate_reason(later_passage, existing) is None

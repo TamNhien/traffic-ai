@@ -89,6 +89,8 @@ class PipelineState:
     same_track_repeat_duplicates: int = 0
     direction_flip_duplicates: int = 0
     secondary_shadow_duplicates: int = 0
+    reverse_shadow_duplicates: int = 0
+    same_direction_cycle_rejections: int = 0
     calibration_samples: int = 0
     calibration_tracks: int = 0
     calibration_moving_tracks: int = 0

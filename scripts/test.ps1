@@ -323,18 +323,18 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.45") { throw "VERSION phải là 0.5.45, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0059_fp_closure_v0545.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0059_fp_closure_v0545.py." }
+  if ($version -ne "0.5.46") { throw "VERSION phải là 0.5.46, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0060_precision_closure_v0546.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0060_precision_closure_v0546.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0059_fp_closure_v0545"' -or $migrationText -notmatch 'down_revision = "0058_benchmark_review_v0544"' -or $migrationText -notmatch "value='0.5.45'") {
-    throw "Migration 0059_fp_closure_v0545 không đúng contract V0.5.45."
+  if ($migrationText -notmatch 'revision = "0060_precision_closure_v0546"' -or $migrationText -notmatch 'down_revision = "0059_fp_closure_v0545"' -or $migrationText -notmatch "value='0.5.46'") {
+    throw "Migration 0060_precision_closure_v0546 không đúng contract V0.5.46."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
 
 function Assert-AlembicRevisionSafetyContract {
-  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.45" -ForegroundColor Cyan
+  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.46" -ForegroundColor Cyan
   $versionsDir = Join-Path $root "backend\alembic\versions"
   $bad = @()
   Get-ChildItem $versionsDir -Filter "*.py" | ForEach-Object {
@@ -358,7 +358,7 @@ function Assert-AlembicRevisionSafetyContract {
   if ($v17 -notmatch 'revision = "0017_ai_test_dep_v053"') {
     throw "Migration V0.5.3 chưa dùng revision ID rút gọn an toàn."
   }
-  Write-Host "[OK] Alembic revision-length safety V0.5.45" -ForegroundColor Green
+  Write-Host "[OK] Alembic revision-length safety V0.5.46" -ForegroundColor Green
 }
 
 
@@ -1457,7 +1457,7 @@ function Assert-BenchmarkReviewPassageSemanticsV0544Contract {
   if ($styles -notmatch 'audit-diff-row' -or $styles -notmatch 'grid-template-areas:\"time meta\" \"reason reason\"' -or $styles -notmatch 'scrollbar-gutter:stable both-edges') { throw "CSS V0.5.44 chưa bảo vệ layout Lọt/Đếm dư khỏi chồng chữ/scrollbar." }
   if ($benchmarking -notmatch '_attach_unmatched_review_candidates' -or $benchmarking -notmatch 'unmatched_review_links' -or $backendTests -notmatch 'test_v0544_unmatched_review_links_near_gt_and_ai_without_changing_scores') { throw "Backend V0.5.44 thiếu review-link GT lọt ↔ AI dư ngoài cửa sổ ghép." }
   if ($routes -notmatch '_same_track_delivery_retry' -or $routes -notmatch 'same-track-delivery-retry' -or $backendTests -notmatch 'test_v0544_same_track_delivery_retry_uses_source_position_not_track_lifetime') { throw "Backend V0.5.44 chưa sửa lifetime dedup cùng tracking_id/cùng hướng." }
-  if ($counting -notmatch 'passage_rearm_min_frames' -or $worker -notmatch 'AI_GATE_PASSAGE_REARM_MIN_FRAMES' -or $envExample -notmatch 'AI_GATE_PASSAGE_REARM_MIN_FRAMES=10' -or $aiTests -notmatch 'test_v0544_adaptive_rearm_waits_minimum_frames_before_releasing_passage_cycle') { throw "AI V0.5.44 thiếu Passage Re-arm Stability guard." }
+  if ($counting -notmatch 'passage_rearm_min_frames' -or $worker -notmatch 'AI_GATE_PASSAGE_REARM_MIN_FRAMES' -or $envExample -notmatch 'AI_GATE_PASSAGE_REARM_MIN_FRAMES=16' -or $aiTests -notmatch 'test_v0544_adaptive_rearm_waits_minimum_frames_before_releasing_passage_cycle') { throw "AI V0.5.44 thiếu Passage Re-arm Stability guard." }
   Write-Host "[OK] Benchmark Review 9.0 + Passage Delivery Semantics V0.5.44" -ForegroundColor Green
 }
 
@@ -1481,6 +1481,28 @@ function Assert-FalsePositiveClosureV0545Contract {
   if ($backendTests -notmatch 'test_v0545_same_track_cycle_guard_closes_only_rapid_same_point_jitter' -or $backendTests -notmatch 'test_v0545_secondary_shadow_signature_closes_only_ultra_close_secondary_tail') { throw "Backend V0.5.45 thiếu regression test false-positive closure." }
   if ($aiTests -notmatch 'test_v0545_long_gap_rescue_tail_requires_stronger_normal_motion') { throw "AI V0.5.45 thiếu regression test long-gap rescue." }
   Write-Host "[OK] False Positive Closure 9.1 + Long-Gap Rescue Guard V0.5.45" -ForegroundColor Green
+}
+
+
+function Assert-PrecisionClosureV0546Contract {
+  Write-Host "`n[Traffic AI] Precision Closure 9.2 + Passage Cycle State V0.5.46" -ForegroundColor Cyan
+  $routes = Get-Content (Join-Path $root "backend\app\api\routes.py") -Raw -Encoding UTF8
+  $counting = Get-Content (Join-Path $root "ai-service\app\counting.py") -Raw -Encoding UTF8
+  $worker = Get-Content (Join-Path $root "ai-service\app\worker.py") -Raw -Encoding UTF8
+  $runtime = Get-Content (Join-Path $root "ai-service\app\runtime.py") -Raw -Encoding UTF8
+  $async = Get-Content (Join-Path $root "ai-service\app\async_tasks.py") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  $envExample = Get-Content (Join-Path $root ".env.example") -Raw -Encoding UTF8
+  $startScript = Get-Content (Join-Path $root "scripts\start.ps1") -Raw -Encoding UTF8
+  $backendTests = Get-Content (Join-Path $root "backend\tests\test_app.py") -Raw -Encoding UTF8
+  $aiTests = Get-Content (Join-Path $root "ai-service\tests\test_counting.py") -Raw -Encoding UTF8
+  if ($counting -notmatch 'rejected_same_direction_cycle' -or $counting -notmatch 'counted_directions = \{direction\}' -or $aiTests -notmatch 'test_v0546_passage_cycle_requires_opposite_crossing_before_same_direction_recount') { throw "AI V0.5.46 thiếu passage-cycle closure theo hướng đối nghịch." }
+  if ($worker -notmatch 'AI_GATE_PASSAGE_REARM_MIN_FRAMES.*16' -or $envExample -notmatch 'AI_GATE_PASSAGE_REARM_MIN_FRAMES=16' -or $startScript -notmatch 'AI_GATE_PASSAGE_REARM_MIN_FRAMES.*10.*16') { throw "Runtime V0.5.46 chưa tăng/migrate passage re-arm guard lên 16 frame." }
+  if ($routes -notmatch '_secondary_reverse_shadow_duplicate' -or $routes -notmatch 'secondary-reverse-shadow' -or $backendTests -notmatch 'test_v0546_secondary_reverse_shadow_requires_secondary_method_and_ultra_close_point') { throw "Backend V0.5.46 thiếu cross-ID reverse-shadow closure." }
+  if ($routes -notmatch 'frame_delta -le 100' -and $routes -notmatch 'frame_delta.*100') { throw "Backend V0.5.46 thiếu physical short-cycle same-track guard." }
+  if ($runtime -notmatch 'reverse_shadow_duplicates' -or $runtime -notmatch 'same_direction_cycle_rejections' -or $async -notmatch 'secondary-reverse-shadow') { throw "Runtime/dispatcher V0.5.46 thiếu precision telemetry." }
+  if ($frontend -notmatch 'FP reverse shadow' -or $frontend -notmatch 'Gate cùng hướng loại') { throw "Frontend V0.5.46 thiếu precision closure telemetry." }
+  Write-Host "[OK] Precision Closure 9.2 + Passage Cycle State V0.5.46" -ForegroundColor Green
 }
 
 
@@ -1546,6 +1568,7 @@ Assert-FullSourceContractClosureV0542Contract
 Assert-CrossingClosureV0543Contract
 Assert-BenchmarkReviewPassageSemanticsV0544Contract
 Assert-FalsePositiveClosureV0545Contract
+Assert-PrecisionClosureV0546Contract
 Assert-LegacySemanticCompatibilityV0523R1
 
 Write-Host "`n[Traffic AI] Road Zone + Frame Browser V0.5.11" -ForegroundColor Cyan

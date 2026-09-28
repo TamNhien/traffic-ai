@@ -930,7 +930,7 @@ class PipelineWorker(threading.Thread):
                 startup_grace_frames=startup_grace_frames,
                 side_confirm_samples=int(os.getenv("AI_GATE_SIDE_CONFIRM_SAMPLES", "2")),
                 crossing_cooldown_frames=int(os.getenv("AI_GATE_COOLDOWN_FRAMES", "60")),
-                passage_rearm_min_frames=int(os.getenv("AI_GATE_PASSAGE_REARM_MIN_FRAMES", "10")),
+                passage_rearm_min_frames=int(os.getenv("AI_GATE_PASSAGE_REARM_MIN_FRAMES", "16")),
                 road_anchor_margin_ratio=float(os.getenv("AI_ROAD_ANCHOR_MARGIN_RATIO", "0.012")),
                 fast_confirm_distance_ratio=float(os.getenv("AI_GATE_FAST_CONFIRM_DISTANCE_RATIO", "0.018")),
                 adaptive_cooldown=os.getenv("AI_GATE_ADAPTIVE_COOLDOWN", "1").strip().lower() not in {"0", "false", "no"},
@@ -1358,6 +1358,7 @@ class PipelineWorker(threading.Thread):
                         self.state.long_gap_rescue_rejections = counter.rejected_long_gap_rescue
                         self.state.adaptive_cooldown_releases = counter.adaptive_cooldown_releases
                         self.state.passage_cycle_rearms = counter.passage_cycle_rearms
+                        self.state.same_direction_cycle_rejections = counter.rejected_same_direction_cycle
                         self.state.verified_anchor_span_rescues = anchor_span_rescuer.verified_anchor_span_rescues
                         self.state.post_confirm_closures = anchor_span_rescuer.post_confirm_closures
                         self.state.post_confirm_jitter_holds = anchor_span_rescuer.post_confirm_jitter_holds
@@ -1600,6 +1601,7 @@ class PipelineWorker(threading.Thread):
                         "long_gap_rescue_rejections": counter.rejected_long_gap_rescue,
                         "adaptive_cooldown_releases": counter.adaptive_cooldown_releases,
                         "passage_cycle_rearms": counter.passage_cycle_rearms,
+                        "same_direction_cycle_rejections": counter.rejected_same_direction_cycle,
                         "class_refine_checks": self.state.class_refine_checks,
                         "class_refine_target_matches": self.state.class_refine_target_matches,
                         "class_refine_target_rejects": self.state.class_refine_target_rejects,
