@@ -173,6 +173,79 @@ def _false_positive_diagnostics(
     return diagnostics, dict(reason_counts), dominant
 
 
+def _attach_unmatched_review_candidates(
+    missed_items: list[dict],
+    false_positive_events: list[TimedCrossing],
+    false_positive_items: list[dict],
+    tolerance: float,
+) -> int:
+    """Link missed GT rows to nearby unmatched AI events for human review.
+
+    This is an *audit-only* pairing. It never changes benchmark metrics or the
+    official global temporal assignment.  V0.5.44 uses it to make the two audit
+    lists actionable: a missed GT can show the nearest unmatched AI event just
+    outside the matching window, and the corresponding false-positive row can
+    point back to that GT.  That makes time-sync drift distinguishable from a
+    genuine detector/gate miss without silently inflating Recall/Precision.
+    """
+
+    if not missed_items or not false_positive_events or not false_positive_items:
+        return 0
+
+    # The review window is deliberately wider than the scoring tolerance, but
+    # still bounded so unrelated traffic in a dense scene is not paired merely
+    # for display. For the default ±0.75 s benchmark this becomes 1.50 s.
+    review_window = max(float(tolerance) + 0.25, min(2.0, float(tolerance) * 2.0))
+    candidates: list[tuple[float, int, int]] = []
+    for miss_index, miss in enumerate(missed_items):
+        miss_time = float(miss.get("time", 0.0))
+        for event_index, event in enumerate(false_positive_events):
+            delta = abs(float(event.source_time_seconds) - miss_time)
+            if delta <= review_window:
+                candidates.append((delta, miss_index, event_index))
+
+    # Greedy-by-distance is sufficient here because this secondary pairing has
+    # no scoring effect. Uniqueness prevents one unmatched AI row from being
+    # advertised as the likely candidate for several different GT crossings.
+    candidates.sort(key=lambda item: (item[0], item[1], item[2]))
+    used_misses: set[int] = set()
+    used_events: set[int] = set()
+    fp_by_id = {int(item.get("ai_event_id", -1)): item for item in false_positive_items}
+    linked = 0
+    for delta, miss_index, event_index in candidates:
+        if miss_index in used_misses or event_index in used_events:
+            continue
+        miss = missed_items[miss_index]
+        event = false_positive_events[event_index]
+        fp_item = fp_by_id.get(int(event.id))
+        if fp_item is None:
+            continue
+
+        signed_delta = float(event.source_time_seconds) - float(miss.get("time", 0.0))
+        miss["review_candidate"] = {
+            "ai_event_id": int(event.id),
+            "time": round(float(event.source_time_seconds), 3),
+            "delta_seconds": round(signed_delta, 3),
+            "outside_scoring_window": abs(signed_delta) > float(tolerance),
+            "direction": event.direction,
+            "vehicle_type": event.vehicle_type,
+            "tracking_id": event.tracking_id,
+            "crossing_method": event.crossing_method,
+        }
+        fp_item["review_ground_truth"] = {
+            "ground_truth_id": int(miss.get("ground_truth_id", 0)),
+            "time": round(float(miss.get("time", 0.0)), 3),
+            "delta_seconds": round(-signed_delta, 3),
+            "outside_scoring_window": abs(signed_delta) > float(tolerance),
+            "direction": miss.get("direction"),
+            "vehicle_type": miss.get("vehicle_type"),
+        }
+        used_misses.add(miss_index)
+        used_events.add(event_index)
+        linked += 1
+    return linked
+
+
 def _global_temporal_pairs(
     gt: list[TimedCrossing], ai: list[TimedCrossing], tolerance: float
 ) -> list[tuple[int, int]]:
@@ -283,6 +356,9 @@ def match_crossings(ground_truth: Iterable[Any], ai_events: Iterable[Any], toler
     false_positive_items, false_positive_reason_counts, dominant_false_positive_reason = _false_positive_diagnostics(
         false_positive_events, ai, matched, tolerance
     )
+    unmatched_review_links = _attach_unmatched_review_candidates(
+        missed, false_positive_events, false_positive_items, tolerance
+    )
 
     gt_total = len(gt)
     ai_total = len(ai)
@@ -355,6 +431,7 @@ def match_crossings(ground_truth: Iterable[Any], ai_events: Iterable[Any], toler
         "false_positive_items": false_positive_items,
         "false_positive_reason_counts": false_positive_reason_counts,
         "dominant_false_positive_reason": dominant_false_positive_reason,
+        "unmatched_review_links": unmatched_review_links,
         "per_class": per_class,
         "per_direction": per_direction,
     }

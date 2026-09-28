@@ -1,3 +1,26 @@
+# Traffic AI V0.5.44 — Benchmark Review 9.0 + Passage Delivery Semantics + Re-arm Stability
+
+V0.5.44 tiếp tục từ benchmark V0.5.43 mới nhất của `clip1(6).mp4` / `camera_1(20260928-111258).rar`: **GT 149 / AI 155 / khớp 136 / lọt 13 / dư 19 / Recall 91.3% / Precision 87.7% / F1 89.5% / class đúng 98.5%**. Bản này không tự thay đổi ground truth và không nới threshold class toàn cục; trọng tâm là làm phần Lọt/Đếm dư đọc được, tách lệch timecode khỏi mất event thật, và đóng một lỗi persistence có thể làm mất lượt cắt lại của cùng track.
+
+- **Benchmark Review 9.0 UI:** các mục `Lọt không đếm` và `AI đếm dư` chuyển thành card nhiều dòng: timecode, hướng/loại xe, nguyên nhân, chi tiết audit và `Δt/Δxy` nằm ở các hàng riêng; scrollbar có gutter ổn định, không còn đè lên chữ. Report panel có minimum width lớn hơn trên desktop và tự xếp 1 cột khi màn hình hẹp.
+- **Near-unmatched review link:** sau global temporal matching chính thức, backend ghép phụ một-một giữa GT lọt và AI dư gần nhau trong cửa sổ review rộng hơn để hiển thị `AI gần nhất` / `GT gần nhất`. Đây chỉ là **audit**, không làm thay đổi `matched`, Recall, Precision hay F1. Chip `Review gần` cho biết có bao nhiêu cặp cần xem lại vì có khả năng lệch timecode.
+- **Same-track delivery semantics:** backend không còn coi `session + tracking_id + direction` là khóa duy nhất cho cả phiên. Retry mạng gần như cùng frame/time vẫn dedup, nhưng cùng canonical track quay lại cắt cùng hướng ở thời điểm sau được phép lưu thành lượt mới — đúng nguyên tắc **mỗi lần cắt vạch là một lượt**.
+- **Passage Re-arm Stability:** adaptive re-arm production thêm guard tối thiểu `AI_GATE_PASSAGE_REARM_MIN_FRAMES=10` và yêu cầu anchor hiện tại thực sự ra khỏi release distance trước khi mở chu kỳ mới. Điều này tránh V0.5.43 re-arm quá sớm vài frame sau crossing rồi sinh bounce/duplicate, trong khi full cooldown vẫn cho phép xe quay lại hợp lệ.
+- **Giữ class guard an toàn:** các frame quanh ca `04:49.450` vẫn cho thấy bicycle bị detector/refiner giữ ở motorcycle; ca `10:41.981` là van lớn bị gắn truck. V0.5.44 không ép đổi class bằng một rule ảnh đơn để tránh làm giảm class accuracy 98.5%; hai ca tiếp tục được giữ trong audit để refinement có mục tiêu.
+- **Version/database:** `VERSION = 0.5.44`, Alembic `0058_benchmark_review_v0544`, `schema_version = 0.5.44`; migration chỉ cập nhật version marker, không xóa camera, event, session, benchmark, ground truth, dataset, training run hay model.
+
+## Kiểm thử V0.5.44
+
+- Python compile: PASS.
+- AI Service: **160/160** unit tests PASS.
+- Backend: **33/33** unit tests PASS bằng SQLite test override.
+- Tổng Python unit tests: **193/193** PASS.
+- Có regression test cho review-link không làm đổi score, same-track delivery retry, legacy payload dedup bảo thủ và minimum-frame passage re-arm.
+- Vite production build vẫn cần máy Windows đích vì sandbox hiện có Node 22 trong khi project yêu cầu Node >= 26.10.0 và không có dependency cache.
+- PowerShell/Docker full-suite vẫn cần xác nhận bằng `scripts\test.ps1` trên máy đích.
+
+---
+
 # Traffic AI V0.5.43 — Crossing Closure 8.6 + Passage Re-arm + X-Frame Priority
 
 V0.5.43 tiếp tục trực tiếp từ benchmark V0.5.42 (GT 149 / AI 153 / khớp 135 / lọt 14 / dư 18 / F1 89.4%). Bản này giữ threshold detector/class toàn cục, tập trung vào các failure mode đã nhìn thấy trong benchmark và ảnh `camera_1(20260928-081907).rar`.

@@ -323,18 +323,18 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.43") { throw "VERSION phải là 0.5.43, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0057_cross_closure_v0543.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0057_cross_closure_v0543.py." }
+  if ($version -ne "0.5.44") { throw "VERSION phải là 0.5.44, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0058_benchmark_review_v0544.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0058_benchmark_review_v0544.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0057_cross_closure_v0543"' -or $migrationText -notmatch 'down_revision = "0056_contract_closure_v0542"' -or $migrationText -notmatch "value='0.5.43'") {
-    throw "Migration 0057_cross_closure_v0543 không đúng contract V0.5.43."
+  if ($migrationText -notmatch 'revision = "0058_benchmark_review_v0544"' -or $migrationText -notmatch 'down_revision = "0057_cross_closure_v0543"' -or $migrationText -notmatch "value='0.5.44'") {
+    throw "Migration 0058_benchmark_review_v0544 không đúng contract V0.5.44."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
 
 function Assert-AlembicRevisionSafetyContract {
-  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.43" -ForegroundColor Cyan
+  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.44" -ForegroundColor Cyan
   $versionsDir = Join-Path $root "backend\alembic\versions"
   $bad = @()
   Get-ChildItem $versionsDir -Filter "*.py" | ForEach-Object {
@@ -358,7 +358,7 @@ function Assert-AlembicRevisionSafetyContract {
   if ($v17 -notmatch 'revision = "0017_ai_test_dep_v053"') {
     throw "Migration V0.5.3 chưa dùng revision ID rút gọn an toàn."
   }
-  Write-Host "[OK] Alembic revision-length safety V0.5.43" -ForegroundColor Green
+  Write-Host "[OK] Alembic revision-length safety V0.5.44" -ForegroundColor Green
 }
 
 
@@ -1441,6 +1441,26 @@ function Assert-CrossingClosureV0543Contract {
   Write-Host "[OK] Crossing Closure 8.6 + Passage Re-arm + X-Frame Priority V0.5.43" -ForegroundColor Green
 }
 
+
+function Assert-BenchmarkReviewPassageSemanticsV0544Contract {
+  Write-Host "`n[Traffic AI] Benchmark Review 9.0 + Passage Delivery Semantics V0.5.44" -ForegroundColor Cyan
+  $benchmarking = Get-Content (Join-Path $root "backend\app\benchmarking.py") -Raw -Encoding UTF8
+  $routes = Get-Content (Join-Path $root "backend\app\api\routes.py") -Raw -Encoding UTF8
+  $counting = Get-Content (Join-Path $root "ai-service\app\counting.py") -Raw -Encoding UTF8
+  $worker = Get-Content (Join-Path $root "ai-service\app\worker.py") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  $styles = Get-Content (Join-Path $root "frontend\src\styles.css") -Raw -Encoding UTF8
+  $backendTests = (Get-Content (Join-Path $root "backend\tests\test_benchmarking.py") -Raw -Encoding UTF8) + (Get-Content (Join-Path $root "backend\tests\test_app.py") -Raw -Encoding UTF8)
+  $aiTests = Get-Content (Join-Path $root "ai-service\tests\test_counting.py") -Raw -Encoding UTF8
+  $envExample = Get-Content (Join-Path $root ".env.example") -Raw -Encoding UTF8
+  if ($frontend -notmatch 'missedAuditDetail' -or $frontend -notmatch 'falsePositiveAuditDetail' -or $frontend -notmatch 'benchmark-audit-list' -or $frontend -notmatch 'unmatched_review_links') { throw "V0.5.44 thiếu Benchmark Review card UI cho Lọt/Đếm dư." }
+  if ($styles -notmatch 'audit-diff-row' -or $styles -notmatch 'grid-template-areas:\"time meta\" \"reason reason\"' -or $styles -notmatch 'scrollbar-gutter:stable both-edges') { throw "CSS V0.5.44 chưa bảo vệ layout Lọt/Đếm dư khỏi chồng chữ/scrollbar." }
+  if ($benchmarking -notmatch '_attach_unmatched_review_candidates' -or $benchmarking -notmatch 'unmatched_review_links' -or $backendTests -notmatch 'test_v0544_unmatched_review_links_near_gt_and_ai_without_changing_scores') { throw "Backend V0.5.44 thiếu review-link GT lọt ↔ AI dư ngoài cửa sổ ghép." }
+  if ($routes -notmatch '_same_track_delivery_retry' -or $routes -notmatch 'same-track-delivery-retry' -or $backendTests -notmatch 'test_v0544_same_track_delivery_retry_uses_source_position_not_track_lifetime') { throw "Backend V0.5.44 chưa sửa lifetime dedup cùng tracking_id/cùng hướng." }
+  if ($counting -notmatch 'passage_rearm_min_frames' -or $worker -notmatch 'AI_GATE_PASSAGE_REARM_MIN_FRAMES' -or $envExample -notmatch 'AI_GATE_PASSAGE_REARM_MIN_FRAMES=10' -or $aiTests -notmatch 'test_v0544_adaptive_rearm_waits_minimum_frames_before_releasing_passage_cycle') { throw "AI V0.5.44 thiếu Passage Re-arm Stability guard." }
+  Write-Host "[OK] Benchmark Review 9.0 + Passage Delivery Semantics V0.5.44" -ForegroundColor Green
+}
+
 function Invoke-Step([string]$Title, [scriptblock]$Action) {
   Write-Host "`n[Traffic AI] $Title" -ForegroundColor Cyan
   & $Action
@@ -1501,6 +1521,7 @@ Assert-NearMarginUltraSpatialV0538Contract
 Assert-VerifiedAnchorSpanBikeAuditV0541Contract
 Assert-FullSourceContractClosureV0542Contract
 Assert-CrossingClosureV0543Contract
+Assert-BenchmarkReviewPassageSemanticsV0544Contract
 Assert-LegacySemanticCompatibilityV0523R1
 
 Write-Host "`n[Traffic AI] Road Zone + Frame Browser V0.5.11" -ForegroundColor Cyan

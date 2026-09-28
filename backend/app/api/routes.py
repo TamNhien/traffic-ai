@@ -642,25 +642,56 @@ def _two_wheel_ultra_spatial_signature_duplicate(
     return False
 
 
+def _same_track_delivery_retry(payload: VehicleEventCreate, existing: VehicleEvent | None) -> bool:
+    """Return True only when a same-track/same-direction row is a delivery retry.
+
+    Before V0.5.44 the backend treated ``session + tracking_id + direction`` as a
+    lifetime-unique key.  That contradicted passage semantics: the same physical
+    vehicle can leave, loop around and cross the gate in the same direction again
+    while ByteTrack keeps its canonical ID.  Network retries, however, still need
+    to be idempotent.  Source frame/time identify the physical crossing, so only
+    near-identical source positions are collapsed. Legacy payloads with no source
+    coordinates keep the conservative old behaviour.
+    """
+
+    if existing is None:
+        return False
+    comparable = False
+    if payload.source_frame_index is not None and existing.source_frame_index is not None:
+        comparable = True
+        if abs(int(payload.source_frame_index) - int(existing.source_frame_index)) <= 2:
+            return True
+    if payload.source_time_seconds is not None and existing.source_time_seconds is not None:
+        comparable = True
+        if abs(float(payload.source_time_seconds) - float(existing.source_time_seconds)) <= 0.12:
+            return True
+    if payload.detected_at is not None and existing.detected_at is not None:
+        comparable = True
+        try:
+            if abs((payload.detected_at - existing.detected_at).total_seconds()) <= 0.25:
+                return True
+        except TypeError:
+            pass
+    return not comparable
+
+
 @router.post("/internal/events", response_model=VehicleEventRead, status_code=201)
 def internal_event(payload: VehicleEventCreate, response: Response, x_ai_token: str | None = Header(default=None), db: Session = Depends(get_db)) -> VehicleEvent:
     _assert_ai_token(x_ai_token)
 
-    # Event delivery is retried by the AI service. Make this endpoint idempotent
-    # for one ByteTrack ID inside one counting session so a network retry cannot
-    # double-count a vehicle.
+    # Event delivery is retried by the AI service. V0.5.44 keeps retries
+    # idempotent by source frame/time instead of treating one tracking ID and
+    # direction as lifetime-unique. This preserves genuine later passage cycles.
     existing = None
     if payload.session_id is not None and payload.tracking_id is not None:
-        # One ByteTrack ID may legitimately cross the gate once in each direction
-        # (two-way traffic / turn-around). Network retries for the same crossing
-        # must remain idempotent, so direction is part of the key.
         existing = db.scalar(select(VehicleEvent).where(
             VehicleEvent.session_id == payload.session_id,
             VehicleEvent.tracking_id == payload.tracking_id,
             VehicleEvent.direction == payload.direction,
         ).order_by(VehicleEvent.id.desc()))
-    if existing is not None:
+    if _same_track_delivery_retry(payload, existing):
         response.headers["X-TrafficAI-Deduplicated"] = "1"
+        response.headers["X-TrafficAI-Dedup-Reason"] = "same-track-delivery-retry"
         return existing
 
     # Crossing Engine 7.0 backend safety: the same canonical track producing an

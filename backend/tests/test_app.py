@@ -20,7 +20,7 @@ def test_root_metadata() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["name"] == "Traffic AI"
-    assert payload["version"] == "0.5.43"
+    assert payload["version"] == "0.5.44"
     assert payload["docs"] == "/docs"
     assert payload["health"] == "/api/health"
 
@@ -158,7 +158,7 @@ def test_benchmark_clone_compatibility_rejects_different_line() -> None:
 
 
 def test_backend_version_metadata() -> None:
-    assert app.version == "0.5.43"
+    assert app.version == "0.5.44"
 
 
 def test_v0531_startup_crossing_signature_guard_is_narrow() -> None:
@@ -179,7 +179,7 @@ def test_v0533_ground_truth_mark_update_schema() -> None:
 
 
 def test_v0533_version() -> None:
-    assert app.version == "0.5.43"
+    assert app.version == "0.5.44"
 
 
 def test_v0533_ground_truth_mark_update_keeps_timecode() -> None:
@@ -240,3 +240,40 @@ def test_v0538_two_wheel_ultra_spatial_signature_extends_only_ultra_close_second
     assert _two_wheel_ultra_spatial_signature_duplicate(0.85, 0.006, "interpolated", "direct") is True
     # Dense direct/direct traffic is never collapsed by this successor rule.
     assert _two_wheel_ultra_spatial_signature_duplicate(0.30, 0.004, "direct", "direct") is False
+
+
+def test_v0544_same_track_delivery_retry_uses_source_position_not_track_lifetime() -> None:
+    from types import SimpleNamespace
+    from app.api.routes import _same_track_delivery_retry
+    from app.schemas.event import VehicleEventCreate
+
+    existing = SimpleNamespace(
+        source_frame_index=100,
+        source_time_seconds=4.0,
+        detected_at=None,
+    )
+    retry = VehicleEventCreate(
+        camera_id=1, session_id=9, tracking_id=77,
+        vehicle_type="motorcycle", direction="in", confidence=0.9,
+        source_frame_index=100, source_time_seconds=4.0,
+    )
+    later_passage = VehicleEventCreate(
+        camera_id=1, session_id=9, tracking_id=77,
+        vehicle_type="motorcycle", direction="in", confidence=0.9,
+        source_frame_index=350, source_time_seconds=14.0,
+    )
+    assert _same_track_delivery_retry(retry, existing) is True
+    assert _same_track_delivery_retry(later_passage, existing) is False
+
+
+def test_v0544_legacy_same_track_delivery_without_source_coordinates_stays_conservative() -> None:
+    from types import SimpleNamespace
+    from app.api.routes import _same_track_delivery_retry
+    from app.schemas.event import VehicleEventCreate
+
+    existing = SimpleNamespace(source_frame_index=None, source_time_seconds=None, detected_at=None)
+    payload = VehicleEventCreate(
+        camera_id=1, session_id=9, tracking_id=77,
+        vehicle_type="motorcycle", direction="in", confidence=0.9,
+    )
+    assert _same_track_delivery_retry(payload, existing) is True

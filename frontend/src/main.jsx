@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './styles.css'
 
-const APP_VERSION = '0.5.43'
+const APP_VERSION = '0.5.44'
 const vehicleLabels = {
   motorcycle: 'Xe máy', bicycle: 'Xe đạp', car: 'Ô tô', bus: 'Xe buýt', truck: 'Xe tải', other: 'Khác'
 }
@@ -28,6 +28,39 @@ const falsePositiveReasonLabels = {
   interpolated_unmatched: 'Nội suy qua vạch nhưng GT không có',
   direct_unmatched: 'Direct crossing nhưng GT không có',
   unmatched_ai_event: 'AI event chưa xác định nguyên nhân',
+}
+
+const signedSeconds = value => {
+  const number = Number(value)
+  if (!Number.isFinite(number)) return '—'
+  return `${number >= 0 ? '+' : ''}${number.toFixed(3)}s`
+}
+
+const missedAuditDetail = item => {
+  const diagnosis = item?.diagnosis || {}
+  const parts = []
+  if (diagnosis.max_det != null || diagnosis.max_track != null || diagnosis.max_road != null) {
+    parts.push(`DET ${diagnosis.max_det ?? 0} · track ${diagnosis.max_track ?? 0} · road ${diagnosis.max_road ?? 0}`)
+  }
+  const review = item?.review_candidate
+  if (review) {
+    const label = vehicleLabels[review.vehicle_type] || review.vehicle_type || 'khác'
+    const window = review.outside_scoring_window ? 'ngoài cửa sổ ghép' : 'candidate chưa ghép'
+    parts.push(`AI gần nhất ${signedSeconds(review.delta_seconds)} · ${String(review.direction || '').toUpperCase()} ${label} · ${review.crossing_method || 'method ?'} · ${window}`)
+  }
+  return parts.join(' · ')
+}
+
+const falsePositiveAuditDetail = item => {
+  const parts = []
+  if (item?.detail) parts.push(item.detail)
+  const review = item?.review_ground_truth
+  if (review) {
+    const label = vehicleLabels[review.vehicle_type] || review.vehicle_type || 'khác'
+    const window = review.outside_scoring_window ? 'ngoài cửa sổ ghép' : 'GT chưa ghép'
+    parts.push(`GT gần nhất ${signedSeconds(review.delta_seconds)} · ${String(review.direction || '').toUpperCase()} ${label} · ${window}`)
+  }
+  return parts.join(' · ')
 }
 
 const clamp01 = value => Math.min(1, Math.max(0, Number(value)))
@@ -658,7 +691,7 @@ function GroundTruthBenchmark({ selectedCameraId, sessions }) {
       {detail && <><div className="tolerance-row"><label>Cửa sổ ghép ± giây<input type="number" min="0.05" max="3" step="0.05" value={tolerance} onChange={e=>setTolerance(e.target.value)} /></label><button className="secondary" disabled={busy || reconciling} onClick={saveTolerance}>Áp dụng</button><button disabled={busy || reconciling} onClick={reconcileBenchmark}>{reconciling ? 'Đang đối chiếu…' : 'Đối chiếu lại'}</button></div>{reconcileStatus && <div className="benchmark-reconcile-status">{reconcileStatus}</div>}</>}
       {report ? <>
         <div className="benchmark-metrics"><div><span>Ground truth</span><strong>{report.ground_truth_total}</strong></div><div><span>AI đếm</span><strong>{report.ai_total}</strong></div><div><span>Khớp</span><strong>{report.matched}</strong></div><div className={report.missed ? 'metric-bad' : ''}><span>Lọt không đếm</span><strong>{report.missed}</strong></div><div className={report.false_positives ? 'metric-warn' : ''}><span>Đếm dư</span><strong>{report.false_positives}</strong></div><div><span>Sai số tổng</span><strong>{report.count_error > 0 ? '+' : ''}{report.count_error}</strong></div></div>
-        <div className="benchmark-scores"><span>Counting Recall <strong>{(Number(report.counting_recall || 0)*100).toFixed(1)}%</strong></span><span>Precision <strong>{(Number(report.counting_precision || 0)*100).toFixed(1)}%</strong></span><span>F1 <strong>{(Number(report.counting_f1 || 0)*100).toFixed(1)}%</strong></span><span>Class đúng <strong>{report.class_accuracy == null ? '—' : `${(report.class_accuracy*100).toFixed(1)}%`}</strong></span></div>
+        <div className="benchmark-scores"><span>Counting Recall <strong>{(Number(report.counting_recall || 0)*100).toFixed(1)}%</strong></span><span>Precision <strong>{(Number(report.counting_precision || 0)*100).toFixed(1)}%</strong></span><span>F1 <strong>{(Number(report.counting_f1 || 0)*100).toFixed(1)}%</strong></span><span>Class đúng <strong>{report.class_accuracy == null ? '—' : `${(report.class_accuracy*100).toFixed(1)}%`}</strong></span><span title="GT lọt và AI dư gần nhau ngoài cửa sổ chấm điểm; chỉ phục vụ review, không đổi Recall/Precision">Review gần <strong>{report.unmatched_review_links ?? 0}</strong></span></div>
         {report.integrity && <div className={`source-status ${report.integrity.ok ? 'ok' : 'warn'}`}><strong>{report.integrity.ok ? '✓ Benchmark Integrity OK' : '⚠ Benchmark Integrity cần chú ý'}</strong><span>Worker đề xuất {report.integrity.worker_total} · DB lưu {report.integrity.persisted_events} · event có timecode {report.integrity.timed_events} · backend gộp {report.integrity.dedup_suppressed_events} · Human Guard loại {report.integrity.human_guard_rejections}{report.integrity.missing_timecode ? ` · thiếu timecode ${report.integrity.missing_timecode}` : ''}.</span></div>}
         {report.dominant_miss_reason && <div className="source-status bad"><strong>Nguyên nhân lọt nổi bật: {missReasonLabels[report.dominant_miss_reason] || report.dominant_miss_reason}</strong><span>{Object.entries(report.miss_reason_counts || {}).map(([reason,count])=>`${missReasonLabels[reason] || reason}: ${count}`).join(' · ')}</span></div>}
         {report.dominant_false_positive_reason && <div className="source-status warn"><strong>Nguyên nhân đếm dư nghi ngờ: {falsePositiveReasonLabels[report.dominant_false_positive_reason] || report.dominant_false_positive_reason}</strong><span>{Object.entries(report.false_positive_reason_counts || {}).map(([reason,count])=>`${falsePositiveReasonLabels[reason] || reason}: ${count}`).join(' · ')}</span></div>}
@@ -666,9 +699,9 @@ function GroundTruthBenchmark({ selectedCameraId, sessions }) {
         <h3 className="benchmark-subhead">Sai loại phương tiện ({report.class_mismatch_items?.length || 0})</h3>
         <div className="benchmark-diff-list">{report.class_mismatch_items?.length ? report.class_mismatch_items.map(item=><div key={`c-${item.ground_truth_id}-${item.ai_event_id}`} className="diff-row false-positive class-audit-row"><button className="time-link" onClick={()=>seekTo(item.time)}><strong>{formatVideoTime(item.time)}</strong></button><span>{String(item.direction).toUpperCase()} · GT {vehicleLabels[item.ground_truth_vehicle_type] || item.ground_truth_vehicle_type}</span><em>AI → {vehicleLabels[item.ai_vehicle_type] || item.ai_vehicle_type}</em><select className="gt-class-edit" value={item.ground_truth_vehicle_type} disabled={busy} title="Sửa class GT tại timecode này" onChange={e=>updateMarkVehicle(item.ground_truth_id,e.target.value)}>{Object.entries(vehicleLabels).map(([key,label])=><option key={key} value={key}>{label}</option>)}</select></div>) : <div className="empty">Không có event đã khớp thời gian nhưng sai loại xe.</div>}</div>
         <h3 className="benchmark-subhead">Lọt không đếm ({report.missed_items?.length || 0})</h3>
-        <div className="benchmark-diff-list">{report.missed_items?.length ? report.missed_items.map(item=><button key={`m-${item.ground_truth_id}`} className="diff-row missed" onClick={()=>seekTo(item.time)}><strong>{formatVideoTime(item.time)}</strong><span>{String(item.direction).toUpperCase()} · {vehicleLabels[item.vehicle_type] || item.vehicle_type}</span><em>{item.diagnosis?.reason ? (missReasonLabels[item.diagnosis.reason] || item.diagnosis.reason) : 'GT có · AI không có'}</em></button>) : <div className="empty">Chưa có xe lọt trong cửa sổ ghép hiện tại.</div>}</div>
+        <div className="benchmark-diff-list benchmark-audit-list">{report.missed_items?.length ? report.missed_items.map(item=>{const detail=missedAuditDetail(item);return <button key={`m-${item.ground_truth_id}`} className="diff-row audit-diff-row missed" onClick={()=>seekTo(item.time)}><strong className="diff-time">{formatVideoTime(item.time)}</strong><span className="diff-meta">{String(item.direction).toUpperCase()} · {vehicleLabels[item.vehicle_type] || item.vehicle_type}</span><em className="diff-reason">{item.diagnosis?.reason ? (missReasonLabels[item.diagnosis.reason] || item.diagnosis.reason) : 'GT có · AI không có'}</em>{detail && <small className="diff-detail">{detail}</small>}</button>}) : <div className="empty">Chưa có xe lọt trong cửa sổ ghép hiện tại.</div>}</div>
         <h3 className="benchmark-subhead">AI đếm dư ({report.false_positive_items?.length || 0})</h3>
-        <div className="benchmark-diff-list">{report.false_positive_items?.length ? report.false_positive_items.map(item=><button key={`f-${item.ai_event_id}`} className="diff-row false-positive" onClick={()=>seekTo(item.time)}><strong>{formatVideoTime(item.time)}</strong><span>{String(item.direction).toUpperCase()} · {vehicleLabels[item.vehicle_type] || item.vehicle_type}</span><em>{item.reason ? (falsePositiveReasonLabels[item.reason] || item.reason) : 'AI có · GT không có'}</em>{(item.near_matched_time_delta != null || item.near_matched_spatial_distance != null || item.near_matched_crossing_method) && <small className="diff-tech">{item.near_matched_time_delta != null ? `Δt ${Number(item.near_matched_time_delta).toFixed(3)}s` : ''}{item.near_matched_spatial_distance != null ? ` · Δxy ${Number(item.near_matched_spatial_distance).toFixed(4)}` : ''}{item.near_matched_crossing_method ? ` · ${item.near_matched_crossing_method}→${item.crossing_method || '?'}` : ''}</small>}</button>) : <div className="empty">Chưa có lượt đếm dư trong cửa sổ ghép hiện tại.</div>}</div>
+        <div className="benchmark-diff-list benchmark-audit-list">{report.false_positive_items?.length ? report.false_positive_items.map(item=>{const detail=falsePositiveAuditDetail(item);return <button key={`f-${item.ai_event_id}`} className="diff-row audit-diff-row false-positive" onClick={()=>seekTo(item.time)}><strong className="diff-time">{formatVideoTime(item.time)}</strong><span className="diff-meta">{String(item.direction).toUpperCase()} · {vehicleLabels[item.vehicle_type] || item.vehicle_type}</span><em className="diff-reason">{item.reason ? (falsePositiveReasonLabels[item.reason] || item.reason) : 'AI có · GT không có'}</em>{detail && <small className="diff-detail">{detail}</small>}{(item.near_matched_time_delta != null || item.near_matched_spatial_distance != null || item.near_matched_crossing_method) && <small className="diff-tech">{item.near_matched_time_delta != null ? `Δt ${Number(item.near_matched_time_delta).toFixed(3)}s` : ''}{item.near_matched_spatial_distance != null ? ` · Δxy ${Number(item.near_matched_spatial_distance).toFixed(4)}` : ''}{item.near_matched_crossing_method ? ` · ${item.near_matched_crossing_method}→${item.crossing_method || '?'}` : ''}</small>}</button>}) : <div className="empty">Chưa có lượt đếm dư trong cửa sổ ghép hiện tại.</div>}</div>
         <h3 className="benchmark-subhead">Theo loại phương tiện</h3>
         <div className="benchmark-class-grid">{Object.entries(report.per_class || {}).map(([name,item])=><div key={name}><span>{vehicleLabels[name] || name}</span><strong>GT {item.ground_truth} · AI {item.ai}</strong><small>Δ {item.difference > 0 ? '+' : ''}{item.difference}</small></div>)}</div>
       </> : <div className="empty">Tạo/chọn benchmark để xem Recall, Precision, xe lọt và xe đếm dư theo từng timecode.</div>}

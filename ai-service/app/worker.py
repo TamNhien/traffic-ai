@@ -930,6 +930,7 @@ class PipelineWorker(threading.Thread):
                 startup_grace_frames=startup_grace_frames,
                 side_confirm_samples=int(os.getenv("AI_GATE_SIDE_CONFIRM_SAMPLES", "2")),
                 crossing_cooldown_frames=int(os.getenv("AI_GATE_COOLDOWN_FRAMES", "60")),
+                passage_rearm_min_frames=int(os.getenv("AI_GATE_PASSAGE_REARM_MIN_FRAMES", "10")),
                 road_anchor_margin_ratio=float(os.getenv("AI_ROAD_ANCHOR_MARGIN_RATIO", "0.012")),
                 fast_confirm_distance_ratio=float(os.getenv("AI_GATE_FAST_CONFIRM_DISTANCE_RATIO", "0.018")),
                 adaptive_cooldown=os.getenv("AI_GATE_ADAPTIVE_COOLDOWN", "1").strip().lower() not in {"0", "false", "no"},

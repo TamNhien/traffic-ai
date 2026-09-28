@@ -93,3 +93,16 @@
 
 /* V0.5.43: panels keep intrinsic height; a tall telemetry column no longer stretches Camera Preview. */
 .content-grid>.panel{align-self:start}
+
+/* V0.5.44 Benchmark Review 9.0: readable missed/extra audit cards. */
+@media(min-width:1181px){.benchmark-layout{grid-template-columns:minmax(0,1.05fr) minmax(420px,.95fr)}}
+@media(max-width:1180px){.benchmark-layout{grid-template-columns:1fr}}
+.benchmark-audit-list{max-height:360px;overflow-y:auto;overflow-x:hidden;scrollbar-gutter:stable both-edges;padding:2px 6px 2px 1px}
+.panel .audit-diff-row{width:100%;min-width:0;display:grid;grid-template-columns:minmax(92px,auto) minmax(0,1fr);grid-template-areas:"time meta" "reason reason" "detail detail" "tech tech";gap:4px 10px;align-items:start;padding:10px 11px;white-space:normal;line-height:1.28}
+.panel .audit-diff-row>.diff-time{grid-area:time;justify-self:start;white-space:nowrap;padding:4px 7px;border-radius:7px;background:#17375f;color:#bae6fd;font-size:.92rem}
+.panel .audit-diff-row>.diff-meta{grid-area:meta;min-width:0;align-self:center;color:#dbe7f5;font-weight:700;overflow-wrap:anywhere}
+.panel .audit-diff-row>.diff-reason{grid-area:reason;min-width:0;margin-top:2px;font-style:normal;font-size:.76rem;font-weight:800;line-height:1.35;overflow-wrap:anywhere}
+.panel .audit-diff-row>.diff-detail{grid-area:detail;min-width:0;color:#9db1c8;font-size:.69rem;font-weight:500;line-height:1.4;overflow-wrap:anywhere}
+.panel .audit-diff-row>.diff-tech{grid-area:tech;min-width:0;color:#7dd3fc;font-size:.68rem;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.panel .audit-diff-row.missed>.diff-reason{color:#fca5a5}.panel .audit-diff-row.false-positive>.diff-reason{color:#fcd34d}
+@media(max-width:560px){.panel .audit-diff-row{grid-template-columns:1fr;grid-template-areas:"time" "meta" "reason" "detail" "tech"}.benchmark-audit-list{max-height:420px}}

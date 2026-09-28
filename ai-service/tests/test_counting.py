@@ -681,3 +681,26 @@ def test_v0543_same_track_can_count_same_direction_on_a_later_passage_cycle():
     assert counter.in_count == 2
     assert counter.out_count == 1
     assert counter.passage_cycle_rearms >= 2
+
+
+def test_v0544_adaptive_rearm_waits_minimum_frames_before_releasing_passage_cycle():
+    counter = LineCrossingCounter(
+        CountingLine(0.1, 0.5, 0.9, 0.5),
+        dead_band_ratio=0.01,
+        rearm_distance_ratio=0.10,
+        crossing_cooldown_frames=60,
+        adaptive_cooldown=True,
+        cooldown_release_ratio=0.20,
+        passage_rearm_min_frames=10,
+        startup_grace_frames=0,
+    )
+    assert counter.update(4401, (50, 20), 100, 100, 1) is None
+    assert counter.update(4401, (50, 80), 100, 100, 2) == "in"
+    # Move well away immediately. V0.5.43 could clear the passage here because
+    # the release distance was already reached; V0.5.44 must hold it.
+    assert counter.update(4401, (50, 95), 100, 100, 3) is None
+    assert counter._tracks[4401].counted_directions == {"in"}
+    # A fast bounce back through the line remains inside the protected interval.
+    assert counter.update(4401, (50, 20), 100, 100, 4) is None
+    assert counter.rejected_cooldown >= 1
+    assert counter._tracks[4401].counted_directions == {"in"}

@@ -893,6 +893,7 @@ class LineCrossingCounter:
         startup_grace_frames: int = 0,
         side_confirm_samples: int = 1,
         crossing_cooldown_frames: int = 0,
+        passage_rearm_min_frames: int = 8,
         road_anchor_margin_ratio: float = 0.0,
         fast_confirm_distance_ratio: float = 0.0,
         adaptive_cooldown: bool = False,
@@ -921,6 +922,7 @@ class LineCrossingCounter:
         self.startup_grace_frames = max(0, int(startup_grace_frames))
         self.side_confirm_samples = max(1, int(side_confirm_samples))
         self.crossing_cooldown_frames = max(0, int(crossing_cooldown_frames))
+        self.passage_rearm_min_frames = max(1, int(passage_rearm_min_frames))
         self.road_anchor_margin_ratio = max(0.0, float(road_anchor_margin_ratio))
         self.fast_confirm_distance_ratio = max(0.0, float(fast_confirm_distance_ratio))
         self.adaptive_cooldown = bool(adaptive_cooldown)
@@ -1002,18 +1004,20 @@ class LineCrossingCounter:
                 state.history = deque(list(state.history)[-5:], maxlen=48)
             return None
 
-        # V0.5.43 passage semantics: counted_directions belongs to one passage
-        # cycle, not the lifetime of a ByteTrack ID.  After the vehicle has
-        # moved materially away from the gate and the cooldown (or adaptive
-        # far-away release) is satisfied, a later loop may legitimately cross
-        # the same direction again and must be counted as another passage.
+        # V0.5.44 Passage Re-arm Stability: counted_directions still belongs
+        # to one passage cycle, but adaptive release may no longer clear it a
+        # couple of frames after the original crossing merely because the box
+        # moved far away.  A genuine return needs a bounded minimum elapsed
+        # interval and the *current* anchor must actually be beyond the wider
+        # release distance. Full cooldown still releases normally.
         if state.counted_directions and state.last_count_frame > -10_000 and abs(distance) >= rearm_distance:
             elapsed = sample.frame_index - state.last_count_frame
             release_distance = scale * self.cooldown_release_ratio
             far_release = (
                 self.adaptive_cooldown
                 and release_distance > 0.0
-                and state.max_abs_distance_since_count >= release_distance
+                and elapsed >= self.passage_rearm_min_frames
+                and abs(distance) >= release_distance
             )
             if elapsed >= self.crossing_cooldown_frames or far_release:
                 state.counted_directions.clear()
@@ -1137,10 +1141,12 @@ class LineCrossingCounter:
                 self.rejected_unconfirmed_side += 1
                 return None
         if sample.frame_index - state.last_count_frame < self.crossing_cooldown_frames:
+            elapsed_since_count = sample.frame_index - state.last_count_frame
             release_distance = scale * self.cooldown_release_ratio
             can_release = (
                 self.adaptive_cooldown
                 and release_distance > 0.0
+                and elapsed_since_count >= self.passage_rearm_min_frames
                 and state.max_abs_distance_since_count >= release_distance
             )
             if can_release:

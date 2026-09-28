@@ -147,3 +147,21 @@ def test_v0538_spatial_duplicate_diagnostic_exposes_delta_distance_and_method() 
     assert diagnostic["near_matched_spatial_distance"] < 0.008
     assert diagnostic["near_matched_crossing_method"] == "direct"
     assert "method direct" in diagnostic["detail"]
+
+
+def test_v0544_unmatched_review_links_near_gt_and_ai_without_changing_scores() -> None:
+    gt = [rich_item(401, 10.00, "in", "motorcycle")]
+    ai = [rich_item(402, 10.92, "in", "motorcycle", tracking_id=77, crossing_method="rescued")]
+    result = match_crossings(gt, ai, 0.75)
+    assert result["matched"] == 0
+    assert result["missed"] == 1
+    assert result["false_positives"] == 1
+    assert result["unmatched_review_links"] == 1
+    review = result["missed_items"][0]["review_candidate"]
+    assert review["ai_event_id"] == 402
+    assert review["outside_scoring_window"] is True
+    assert review["delta_seconds"] == 0.92
+    reverse = result["false_positive_items"][0]["review_ground_truth"]
+    assert reverse["ground_truth_id"] == 401
+    assert reverse["outside_scoring_window"] is True
+    assert reverse["delta_seconds"] == -0.92
