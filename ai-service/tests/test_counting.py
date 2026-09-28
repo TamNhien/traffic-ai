@@ -18,6 +18,29 @@ def test_line_crossing_out() -> None:
     assert counter.out_count == 1
 
 
+
+
+def test_v0541_direction_is_screen_stable_when_gate_endpoints_are_reversed() -> None:
+    # Even if a user drags/stores the line right-to-left, top -> bottom must stay IN.
+    counter = LineCrossingCounter(CountingLine(0.9, 0.5, 0.1, 0.5))
+    assert counter.line.x1 == pytest.approx(0.1)
+    assert counter.line.x2 == pytest.approx(0.9)
+    assert counter.update(541, (50, 25), 100, 100) is None
+    assert counter.update(541, (50, 75), 100, 100) == "in"
+    assert counter.in_count == 1
+
+    reverse = LineCrossingCounter(CountingLine(0.9, 0.5, 0.1, 0.5))
+    assert reverse.update(542, (50, 75), 100, 100) is None
+    assert reverse.update(542, (50, 25), 100, 100) == "out"
+    assert reverse.out_count == 1
+
+    # The same screen-direction contract also holds for a slanted gate.
+    slanted = LineCrossingCounter(CountingLine(0.8, 0.45, 0.2, 0.55))
+    assert slanted.update(543, (50, 25), 100, 100) is None
+    assert slanted.update(543, (50, 75), 100, 100) == "in"
+    assert slanted.in_count == 1
+
+
 def test_crossing_outside_segment_is_not_counted() -> None:
     counter = LineCrossingCounter(CountingLine(0.2, 0.5, 0.8, 0.5), segment_margin=0.0)
     assert counter.update(30, (5, 25), 100, 100) is None

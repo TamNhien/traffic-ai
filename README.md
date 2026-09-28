@@ -1,8 +1,22 @@
-# Traffic AI V0.5.41 — Historical Contract Compatibility Hotfix
+# Traffic AI V0.5.42 — Full-Source Contract Closure + Compact Telemetry Compatibility
 
-- Sửa `scripts/test.ps1` V0.5.33: kiểm tra GT class editor/passage semantics bằng các marker chức năng thật (`updateMarkVehicle`, `gt-class-edit`, `class-audit-row`) thay vì phụ thuộc chuỗi changelog `Bicycle Precision 4.0` đã được chủ động bỏ khỏi Dashboard V0.5.41.
-- Không thay đổi thuật toán AI, database schema, migration hay telemetry V0.5.41.
-- Giữ Dashboard gọn; lịch sử phiên bản tiếp tục nằm trong README/GitHub Release.
+V0.5.42 là bản hotfix tăng version từ V0.5.41 theo policy phát hành mới: **mỗi lần fix phải tăng version**. Bản này không nới threshold AI; mục tiêu là đóng các false-fail contract lịch sử sau khi Dashboard được rút gọn và rà toàn bộ full source trước khi đóng gói.
+
+- Sửa contract **Full-frame Detect + Strict Road Count V0.5.14**: bỏ phụ thuộc literal DETECT/ROI đã được loại khỏi Dashboard; kiểm tra capability thật ở `worker.py`/`runtime.py`.
+- Giữ diagnostics frontend `detections_current_frame`, `active_tracks`, `road_tracks_current_frame`.
+- Quét toàn bộ các biểu thức frontend `-notmatch` trong `scripts/test.ps1`; không còn marker bắt buộc nào thiếu trong source ở thời điểm đóng gói.
+- Thêm contract V0.5.42 bảo vệ Dashboard compact/full-width và telemetry V0.5.14.
+- Thêm migration marker dữ liệu-an-toàn `0056_contract_closure_v0542`, `schema_version = 0.5.42`; không xóa dữ liệu.
+- Giữ nguyên V0.5.41 Anchor-Span Recovery, Post-Confirm Closure, Bicycle Decision Audit 8.5 và semantics **trên → dưới = IN / dưới → trên = OUT**.
+
+# Traffic AI V0.5.41 — Dashboard Full-Width + Stable IN/OUT Direction Hotfix
+
+- Dashboard desktop dùng toàn bộ chiều rộng khả dụng (`main max-width: none`), giảm vùng trống bên phải; Live AI chia lại Camera/Vehicle Count cho màn hình rộng.
+- Bỏ hai đoạn mô tả dài dưới Vehicle Count và bỏ chuỗi `INFERENCE ...` dài cạnh ô chọn Camera; telemetry vẫn nằm trong các ô trạng thái/counter chuyên dụng.
+- Chuẩn hóa vạch theo thứ tự trái → phải ở Counting Engine để semantics không bị đảo khi người dùng kéo hai đầu vạch qua nhau: **trên → dưới = IN**, **dưới → trên = OUT**.
+- Benchmark overlay và Line Editor dùng cùng semantics với engine; legend hiển thị rõ `↓ IN · ↑ OUT`.
+- Thêm regression test cho trường hợp endpoint lưu theo thứ tự phải → trái.
+- Cập nhật contract V0.5.33/V0.5.41 để kiểm tra chức năng thật thay vì bắt Dashboard phải giữ văn bản giải thích/changelog.
 
 # Traffic AI V0.5.41 — Verified Anchor-Span Recovery + Post-Confirm Closure + Cross-Frame Bicycle Decision Audit 8.5 🚦🚲
 
@@ -77,7 +91,7 @@ Trace cũng ghi `bicycle_xframe_decision_audit` để xem chính xác X-frame b�
 
 ### 5. Dashboard cleanup
 
-Dashboard không còn nhồi toàn bộ changelog nhiều phiên bản. Panel Vehicle Count chỉ giữ telemetry hiện tại và một dòng mô tả V0.5.41. Lịch sử thay đổi vẫn nằm trong README/Release notes.
+Dashboard không còn nhồi changelog hoặc đoạn giải thích dài. Panel Vehicle Count chỉ giữ số đếm và telemetry hiện tại; phần chọn Camera cũng không lặp chuỗi INFERENCE dài. Lịch sử thay đổi vẫn nằm trong README/Release notes.
 
 - Sửa false-fail contract V0.5.25 trong `scripts/test.ps1`: kiểm tra trực tiếp các telemetry key `human_guard_pending_crossings`, `human_guard_deferred_commits`, `bracket_confirm_rescues` thay vì bắt Dashboard phải giữ literal lịch sử `Crossing Engine 7.2`.
 
@@ -102,21 +116,22 @@ Chuỗi marker migration bảo toàn dữ liệu:
 
 ## Benchmark đầu vào đã đối chiếu
 
-Benchmark V0.5.40 trong bộ ảnh ngày 27/09/2026 ghi nhận:
+Replay V0.5.41 mới nhất do máy đích ghi nhận ở Session #143 / Benchmark #23 (28/09/2026):
 
 ```text
 GT                  149
 AI                  153
-Khớp                134
-Lọt                  15
-Dư                   19
-Recall              89.9%
-Precision           87.6%
-F1                  88.7%
-Class đúng          99.3%
+Khớp                135
+Lọt                  14
+Dư                   18
+Sai số tổng           +4
+Recall              90.6%
+Precision           88.2%
+F1                  89.4%
+Class đúng          98.5%
 ```
 
-Ảnh diagnostic cho thấy các miss còn tập trung ở `crossing_confirmation_reject` và các quỹ đạo anchor đã span vạch nhưng Gate chưa phát event. Bộ snapshot trong `camera_1(20260927-154039).rar` được dùng để đối chiếu trực quan các mốc miss và ca bicycle 04:49.450. V0.5.41 **không ghi đè số benchmark mới khi chưa chạy lại full inference**; sau khi triển khai trên máy có model/GPU, hãy chạy lại Ground-truth Benchmark để đo Recall/Precision/F1 thật của bản này.
+So với benchmark trước, số khớp tăng 1, lọt giảm 1 và dư giảm 1. Hai lỗi class còn thấy rõ trong report là `04:49.450 GT Xe đạp -> AI Xe máy` và `10:41.981 GT Ô tô -> AI Xe tải`. Bộ snapshot `camera_1(20260928-071404).rar` có frame gần đúng cả hai timecode (frame 7242/7250 và frame 16049), dùng làm evidence cho vòng tinh chỉnh class tiếp theo. Đây là số đo replay trên máy đích, không phải số suy đoán từ sandbox đóng gói.
 
 ## Kiểm thử
 
@@ -125,7 +140,7 @@ cd D:\LienThongDH\DoAn\traffic-ai
 .\scripts\test.ps1
 ```
 
-Bộ unit test bao gồm regression cho Cross-Frame Bicycle Decision, strict anchor-span recovery, Post-Confirm Closure và Gate-Span Audit. Ở môi trường đóng gói V0.5.41: Python compile PASS, AI Service `152/152` PASS, Backend `30/30` PASS, Alembic single head = `0055_span_recovery_v0541`, JSON/YAML config PASS. Vite/Docker/PowerShell end-to-end vẫn phải được `scripts\test.ps1` xác nhận trên máy Windows đích vì sandbox đóng gói không có Docker/PowerShell và không có npm dependency cache.
+Bộ unit test bao gồm regression cho Cross-Frame Bicycle Decision, strict anchor-span recovery, Post-Confirm Closure và Gate-Span Audit. Ở môi trường đóng gói V0.5.42: Python compile PASS, AI Service `153/153` PASS, Backend `30/30` PASS (tổng `183/183`), Alembic single head = `0056_contract_closure_v0542`, JSON/YAML config PASS. Vite/Docker/PowerShell end-to-end vẫn phải được `scripts\test.ps1` xác nhận trên máy Windows đích vì sandbox đóng gói không có Docker/PowerShell và không có npm dependency cache. Contract Smooth Playback hiện kiểm tra capability thật (`nativeVideoUrl`, `overlayStreamUrl`, `previewMode`, runtime lag/progress) thay vì bắt Dashboard phải hiện chuỗi telemetry/changelog đã được yêu cầu loại bỏ.
 
 ## Chạy hệ thống
 

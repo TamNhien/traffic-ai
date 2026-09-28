@@ -15,6 +15,14 @@ class CountingLine:
     x2: float = 0.9
     y2: float = 0.5
 
+    def __post_init__(self) -> None:
+        # Image coordinates grow downward. Canonicalizing the gate left-to-right
+        # makes signed_side() positive below the gate, so negative -> positive is
+        # always top -> bottom = IN and the reverse is OUT. This also prevents
+        # endpoint dragging/order changes from silently flipping direction labels.
+        if self.x2 < self.x1:
+            self.x1, self.y1, self.x2, self.y2 = self.x2, self.y2, self.x1, self.y1
+
     def denormalize(self, width: int, height: int) -> tuple[Point, Point]:
         return (self.x1 * width, self.y1 * height), (self.x2 * width, self.y2 * height)
 

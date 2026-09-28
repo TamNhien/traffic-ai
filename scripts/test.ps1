@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
   [switch]$SkipDockerBuild
 )
@@ -323,18 +323,18 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.41") { throw "VERSION phải là 0.5.41, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0055_span_recovery_v0541.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0055_span_recovery_v0541.py." }
+  if ($version -ne "0.5.42") { throw "VERSION phải là 0.5.42, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0056_contract_closure_v0542.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0056_contract_closure_v0542.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0055_span_recovery_v0541"' -or $migrationText -notmatch 'down_revision = "0054_bike_gate_v0540"' -or $migrationText -notmatch "value='0.5.41'") {
-    throw "Migration 0055_span_recovery_v0541 không đúng contract V0.5.41."
+  if ($migrationText -notmatch 'revision = "0056_contract_closure_v0542"' -or $migrationText -notmatch 'down_revision = "0055_span_recovery_v0541"' -or $migrationText -notmatch "value='0.5.42'") {
+    throw "Migration 0056_contract_closure_v0542 không đúng contract V0.5.42."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
 
 function Assert-AlembicRevisionSafetyContract {
-  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.41" -ForegroundColor Cyan
+  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.42" -ForegroundColor Cyan
   $versionsDir = Join-Path $root "backend\alembic\versions"
   $bad = @()
   Get-ChildItem $versionsDir -Filter "*.py" | ForEach-Object {
@@ -358,7 +358,7 @@ function Assert-AlembicRevisionSafetyContract {
   if ($v17 -notmatch 'revision = "0017_ai_test_dep_v053"') {
     throw "Migration V0.5.3 chưa dùng revision ID rút gọn an toàn."
   }
-  Write-Host "[OK] Alembic revision-length safety V0.5.41" -ForegroundColor Green
+  Write-Host "[OK] Alembic revision-length safety V0.5.42" -ForegroundColor Green
 }
 
 
@@ -453,8 +453,10 @@ function Assert-FullFrameDetectStrictRoadCountV0514Contract {
   if ($runtime -notmatch 'active_tracks' -or $runtime -notmatch 'road_tracks_current_frame' -or $runtime -notmatch 'detection_roi_mode: str = "full"') {
     throw "PipelineState thiếu telemetry realtime hoặc default full detection V0.5.14."
   }
-  if ($frontend -notmatch 'DETECT.*TOUPPER' -and $frontend -notmatch 'DETECT.*toUpperCase') {
-    throw "Frontend thiếu telemetry mode quét detector V0.5.14."
+  # V0.5.42: Dashboard compact không còn in literal DETECT/ROI.
+  # Kiểm tra mode detector tại source-of-truth worker/runtime thay vì phụ thuộc text UI.
+  if ($worker -notmatch 'ROI \{self\.detection_roi_mode\.upper\(\)\}' -or $runtime -notmatch 'detection_roi_mode: str = "full"') {
+    throw "V0.5.14 detector-mode capability bị mất khỏi worker/runtime."
   }
   if ($frontend -notmatch 'detections_current_frame' -or $frontend -notmatch 'active_tracks' -or $frontend -notmatch 'road_tracks_current_frame') {
     throw "Frontend thiếu DET/track/road telemetry để chẩn đoán bỏ sót."
@@ -493,8 +495,9 @@ function Assert-HybridRecallTrackRescueV0515Contract {
   if ($startText -notmatch 'AI_HYBRID_POLICY_V0515' -or $startText -notmatch 'AI_IMGSZ=960') {
     throw "start.ps1 chưa nâng .env cũ sang high-recall profile V0.5.15."
   }
-  if ($frontend -notmatch 'YOLO thấy xe nhưng ByteTrack chưa cấp ID' -or $frontend -notmatch 'untracked_detections' -or $frontend -notmatch 'HYBRID detect') {
-    throw "Frontend thiếu telemetry/cảnh báo DET nhưng chưa có track ID."
+  $hasUntrackedWarning = $frontend -match 'YOLO thấy xe nhưng ByteTrack chưa cấp ID' -and $frontend -match 'detections_current_frame' -and $frontend -match 'active_tracks'
+  if (-not $hasUntrackedWarning) {
+    throw "Frontend thiếu cảnh báo DET nhưng chưa có track ID."
   }
   if ($schema -notmatch 'default=0\.06' -or $schema -notmatch 'ge=0\.02') {
     throw "Camera confidence chưa hạ baseline để cứu xe nhỏ/nhanh."
@@ -549,7 +552,8 @@ function Assert-SingleVehicleGuardV0517Contract {
   if ($worker -notmatch 'agnostic_nms=self\.agnostic_nms' -or $worker -notmatch 'single_heavy_vehicle_plan' -or $worker -notmatch 'alias_raw_id' -or $worker -notmatch 'AI_HEAVY_DUP_IOU') {
     throw "AI worker chưa chặn cross-class NMS / BUS-TRUCK overlap trước counting."
   }
-  if ($runtime -notmatch 'suppressed_class_duplicates_current_frame' -or $frontend -notmatch 'gộp bus/truck') {
+  $hasHeavyDedupUi = $frontend -match 'suppressed_class_duplicates_current_frame' -and $frontend -match 'gộp detection bus/truck'
+  if ($runtime -notmatch 'suppressed_class_duplicates_current_frame' -or -not $hasHeavyDedupUi) {
     throw "Thiếu telemetry Single-Object Guard V0.5.17."
   }
   if ($envExample -notmatch 'AI_AGNOSTIC_NMS=0' -or $envExample -notmatch 'AI_HEAVY_DUP_IOU=0\.68') {
@@ -643,8 +647,9 @@ function Assert-BenchmarkGateOverlayV0520Contract {
   if ($frontend -notmatch 'function BenchmarkGateOverlay' -or $frontend -notmatch 'VẠCH ĐẾM' -or $frontend -notmatch '>IN<' -or $frontend -notmatch '>OUT<') {
     throw "Frontend benchmark chưa vẽ vạch và nhãn IN/OUT."
   }
-  if ($frontend -notmatch 'signed_side\(\)' -or $frontend -notmatch 'negative -> positive') {
-    throw "Overlay IN/OUT chưa bám cùng quy ước signed-side với Counting Engine."
+  $hasCanonicalDirectionOverlay = $frontend -match 'signed_side\(\)' -and $frontend -match 'if \(x2 < x1\)' -and $frontend -match '↓ IN · ↑ OUT'
+  if (-not $hasCanonicalDirectionOverlay) {
+    throw "Overlay IN/OUT chưa bám cùng quy ước signed-side/canonical endpoint với Counting Engine."
   }
   if ($css -notmatch '\.benchmark-gate-overlay' -or $css -notmatch '\.benchmark-count-line' -or $css -notmatch '\.benchmark-road-zone') {
     throw "CSS thiếu lớp overlay vạch/Road Zone cho Benchmark V0.5.20."
@@ -743,7 +748,10 @@ function Assert-SmoothPlaybackContract {
   if ($aiMain -notmatch "/media/video" -or $aiMain -notmatch "FileResponse") {
     throw "AI Service thiếu endpoint phát video native cho browser."
   }
-  if ($frontend -notmatch "Phát mượt" -or $frontend -notmatch "<video" -or $frontend -notmatch "AI Overlay" -or $frontend -notmatch "processing_progress") {
+  $hasNativePlayback = $frontend -match 'const\s+nativeVideoUrl\s*=' -and $frontend -match '<video' -and $frontend -match 'native-preview'
+  $hasOverlayMode = $frontend -match 'const\s+overlayStreamUrl\s*=' -and $frontend -match 'overlay-preview' -and $frontend -match "setPreviewMode\('overlay'\)"
+  $hasSmoothMode = $frontend -match "setPreviewMode\('smooth'\)" -and $frontend -match 'smooth-badge'
+  if (-not $hasNativePlayback -or -not $hasOverlayMode -or -not $hasSmoothMode) {
     throw "Frontend chưa có Smooth Playback/native video + chế độ AI Overlay."
   }
   if ($worker -notmatch "AI_VIDEO_PACE" -or $worker -notmatch "playback_lag_seconds" -or $worker -notmatch "_latest_jpeg_sequence") {
@@ -1220,12 +1228,14 @@ function Assert-BicyclePrecisionGtAuditV0533Contract {
   $routes = Get-Content (Join-Path $root "backend\app\api\routes.py") -Raw -Encoding UTF8
   $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
   $styles = Get-Content (Join-Path $root "frontend\src\styles.css") -Raw -Encoding UTF8
+  $countingTests = Get-Content (Join-Path $root "ai-service\tests\test_counting.py") -Raw -Encoding UTF8
   $envExample = Get-Content (Join-Path $root ".env.example") -Raw -Encoding UTF8
   $start = Get-Content (Join-Path $PSScriptRoot "start.ps1") -Raw -Encoding UTF8
   if ($classification -notmatch 'def source_count' -or $classification -notmatch 'bicycle_min_sources') { throw "V0.5.33 thiếu bicycle source-diversity consensus." }
   if ($worker -notmatch 'AI_BICYCLE_CONSENSUS_MIN_SOURCES' -or $worker -notmatch 'AI_BICYCLE_REFINE_OVERRIDE_CONF.*0\.90') { throw "V0.5.33 thiếu bicycle precision runtime policy." }
   if ($routes -notmatch 'GroundTruthMarkUpdate' -or $routes -notmatch '@router.patch\("/benchmarks/\{benchmark_id\}/marks/\{mark_id\}"\)') { throw "Backend V0.5.33 thiếu chỉnh class Ground Truth tại chỗ." }
-  if ($frontend -notmatch 'updateMarkVehicle' -or $frontend -notmatch 'Đơn vị là lượt cắt vạch' -or $frontend -notmatch 'gt-class-edit' -or $frontend -notmatch 'class-audit-row') { throw "Frontend V0.5.33 thiếu GT class editor hoặc passage semantics." }
+  if ($frontend -notmatch 'updateMarkVehicle' -or $frontend -notmatch 'gt-class-edit' -or $frontend -notmatch 'class-audit-row') { throw "Frontend V0.5.33 thiếu GT class editor." }
+  if ($countingTests -notmatch 'test_same_track_can_cross_in_then_out') { throw "V0.5.33 thiếu regression test passage semantics." }
   if ($styles -notmatch 'class-audit-row.*grid-template-areas' -or $styles -notmatch 'scrollbar-gutter:stable') { throw "Frontend V0.5.33 thiếu responsive layout cho danh sách Sai loại phương tiện." }
   if ($envExample -notmatch 'AI_BICYCLE_CONSENSUS_MIN_SOURCES=2' -or $start -notmatch 'AI_BICYCLE_CONSENSUS_CONF.*0.60.*0.78') { throw "V0.5.33 thiếu migration tuning bicycle cũ -> mới." }
   Write-Host "[OK] Bicycle Precision 4.0 + GT Class Audit V0.5.33" -ForegroundColor Green
@@ -1340,13 +1350,18 @@ function Assert-VerifiedAnchorSpanBikeAuditV0541Contract {
   $worker = Get-Content (Join-Path $root "ai-service\app\worker.py") -Raw -Encoding UTF8
   $trace = Get-Content (Join-Path $root "ai-service\app\benchmark_trace.py") -Raw -Encoding UTF8
   $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  $styles = Get-Content (Join-Path $root "frontend\src\styles.css") -Raw -Encoding UTF8
+  $countingTests = Get-Content (Join-Path $root "ai-service\tests\test_counting.py") -Raw -Encoding UTF8
   $envExample = Get-Content (Join-Path $root ".env.example") -Raw -Encoding UTF8
   $attrs = Get-Content (Join-Path $root ".gitattributes") -Raw -Encoding UTF8
   $pg = Get-Content (Join-Path $root "scripts\postgres-info.ps1") -Raw -Encoding UTF8
   if ($counting -notmatch 'class VerifiedAnchorSpanRescuer' -or $counting -notmatch 'post_confirm_closures') { throw "V0.5.41 thiếu Verified Anchor-Span/Post-Confirm Closure." }
   if ($classification -notmatch 'def contextual_bicycle_cross_frame_decision' -or $worker -notmatch 'bicycle_xframe_decision_audit') { throw "V0.5.41 thiếu Cross-Frame Bicycle Decision Audit 8.5." }
   if ($trace -notmatch 'crossing_anchor_span_reject' -or $trace -notmatch 'crossing_center_only_span' -or $trace -notmatch 'crossing_near_no_span') { throw "V0.5.41 thiếu Gate-Span diagnosis chi tiết." }
-  if ($frontend -notmatch 'Bike X-scan' -or $frontend -notmatch 'Anchor-span' -or $frontend -notmatch 'Dashboard chỉ giữ trạng thái phiên hiện tại') { throw "Frontend V0.5.41 thiếu telemetry hoặc Dashboard cleanup." }
+  if ($frontend -notmatch 'Bike X-scan' -or $frontend -notmatch 'Anchor-span') { throw "Frontend V0.5.41 thiếu telemetry mới." }
+  if ($frontend -match 'counting-semantics' -or $frontend -match 'INFERENCE ·' -or $frontend -match 'Dashboard chỉ giữ trạng thái phiên hiện tại') { throw "Frontend V0.5.41 chưa compact Dashboard theo yêu cầu." }
+  if ($styles -notmatch 'main\{[^}]*max-width:none' -or $styles -notmatch 'minmax\(460px') { throw "Frontend V0.5.41 chưa dùng hết chiều rộng desktop." }
+  if ($countingTests -notmatch 'test_v0541_direction_is_screen_stable_when_gate_endpoints_are_reversed') { throw "V0.5.41 thiếu regression test IN/OUT top-down ổn định." }
   if ($frontend -match '<p className="hint"><strong>V0\.5\.40</strong> thêm') { throw "Dashboard vẫn còn changelog dài V0.5.40." }
   if ($envExample -notmatch 'AI_BICYCLE_CONTEXT_XFRAME_HISTORY=18' -or $envExample -notmatch 'AI_GATE_ANCHOR_SPAN_RECOVERY=1') { throw "V0.5.41 thiếu runtime defaults." }
   if ($attrs -notmatch '\.gitattributes text eol=lf' -or $attrs -notmatch '\*\.txt text eol=lf') { throw "V0.5.39 EOL Hygiene chưa được giữ." }
@@ -1377,6 +1392,32 @@ Write-Host "`n[Traffic AI] Legacy semantic contract compatibility V0.5.23-R1" -F
     throw "V0.5.23-R1 thiếu Ground Truth reuse UI tương thích V0.5.21+."
   }
   Write-Host "[OK] Legacy semantic contract compatibility V0.5.23-R1" -ForegroundColor Green
+}
+
+function Assert-FullSourceContractClosureV0542Contract {
+  Write-Host "`n[Traffic AI] Full-source Contract Closure + Compact Telemetry Compatibility V0.5.42" -ForegroundColor Cyan
+  $worker = Get-Content (Join-Path $root "ai-service\app\worker.py") -Raw -Encoding UTF8
+  $runtime = Get-Content (Join-Path $root "ai-service\app\runtime.py") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  $styles = Get-Content (Join-Path $root "frontend\src\styles.css") -Raw -Encoding UTF8
+  $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
+  if ($version -ne "0.5.42") { throw "V0.5.42 closure contract: VERSION không đúng." }
+  if ($worker -notmatch 'detections_current_frame' -or $worker -notmatch 'road_tracks_current_frame' -or $worker -notmatch 'ROI \{self\.detection_roi_mode\.upper\(\)\}') {
+    throw "V0.5.42 làm mất detector/road telemetry V0.5.14."
+  }
+  if ($runtime -notmatch 'detection_roi_mode: str = "full"' -or $runtime -notmatch 'active_tracks' -or $runtime -notmatch 'road_tracks_current_frame') {
+    throw "V0.5.42 làm mất runtime telemetry V0.5.14."
+  }
+  if ($frontend -notmatch 'detections_current_frame' -or $frontend -notmatch 'active_tracks' -or $frontend -notmatch 'road_tracks_current_frame') {
+    throw "V0.5.42 làm mất diagnostics DET/track/road trên frontend."
+  }
+  if ($frontend -match 'INFERENCE ·' -or $frontend -match 'counting-semantics') {
+    throw "V0.5.42 làm Dashboard compact bị dài trở lại."
+  }
+  if ($styles -notmatch 'main\{[^}]*max-width:none' -or $styles -notmatch 'minmax\(460px') {
+    throw "V0.5.42 làm mất bố cục full-width desktop."
+  }
+  Write-Host "[OK] Full-source Contract Closure + Compact Telemetry Compatibility V0.5.42" -ForegroundColor Green
 }
 
 function Invoke-Step([string]$Title, [scriptblock]$Action) {
@@ -1437,6 +1478,7 @@ Assert-BicycleContextTrailDedupV0535Contract
 Assert-CompetitiveBikeSpatialSignatureV0537Contract
 Assert-NearMarginUltraSpatialV0538Contract
 Assert-VerifiedAnchorSpanBikeAuditV0541Contract
+Assert-FullSourceContractClosureV0542Contract
 Assert-LegacySemanticCompatibilityV0523R1
 
 Write-Host "`n[Traffic AI] Road Zone + Frame Browser V0.5.11" -ForegroundColor Cyan
@@ -1478,8 +1520,11 @@ if ($asyncText -notmatch 'queue.Queue' -or $roiText -notmatch 'GateROI') {
 if ($trackerText -notmatch 'track_buffer: 150' -or $smartRoutesText -notmatch 'preview.jpg') {
   throw "Thiếu ByteTrack high-recall profile hoặc endpoint preview để đặt vạch."
 }
-if ($frontendText -notmatch 'realtime_factor' -or $frontendText -notmatch 'playback_lag_seconds' -or $frontendText -notmatch 'Phát mượt' -or $frontendText -notmatch 'AI Overlay') {
-  throw "Frontend thiếu telemetry realtime hoặc chuyển đổi Phát mượt / AI Overlay của Smooth Playback."
+$runtimeText = Get-Content (Join-Path $root "ai-service\app\runtime.py") -Raw -Encoding UTF8
+$hasRealtimeRuntime = $runtimeText -match 'realtime_factor' -and $runtimeText -match 'playback_lag_seconds' -and $runtimeText -match 'processing_progress'
+$hasSmoothPlaybackUi = $frontendText -match 'previewMode' -and $frontendText -match 'nativeVideoUrl' -and $frontendText -match 'overlayStreamUrl' -and $frontendText -match "setPreviewMode\('smooth'\)" -and $frontendText -match "setPreviewMode\('overlay'\)"
+if (-not $hasRealtimeRuntime -or -not $hasSmoothPlaybackUi) {
+  throw "Smooth Playback thiếu runtime telemetry hoặc chuyển đổi native/AI overlay."
 }
 $envExampleText = Get-Content (Join-Path $root ".env.example") -Raw -Encoding UTF8
 if ($envExampleText -notmatch 'AI_MODEL_NAME=yolo26s\.pt' -or $envExampleText -notmatch 'AI_REFINE_MODEL_NAME=yolo26m\.pt' -or $envExampleText -notmatch 'AI_GATE_ROI=1') {
@@ -1491,8 +1536,8 @@ Write-Host "`n[Traffic AI] Smooth telemetry contract alignment V0.5.3" -Foregrou
 if ($frontendText -match 'Smooth Gate 4\.1') {
   Write-Host "[INFO] Frontend có nhãn Smooth Gate 4.1; contract không còn phụ thuộc text hiển thị." -ForegroundColor DarkGray
 }
-if ($frontendText -notmatch 'RT x' -or $frontendText -notmatch 'lag .*s') {
-  throw "Frontend thiếu nhãn RT x / lag cho telemetry runtime."
+if ($runtimeText -notmatch 'realtime_factor' -or $runtimeText -notmatch 'playback_lag_seconds' -or $runtimeText -notmatch 'processing_progress') {
+  throw "Runtime thiếu realtime factor / playback lag / processing progress telemetry."
 }
 Write-Host "[OK] Smooth telemetry contract alignment V0.5.3" -ForegroundColor Green
 
