@@ -13,6 +13,51 @@ def trace_path(session_id: int) -> Path:
     return TRACE_ROOT / f"session_{int(session_id)}.jsonl"
 
 
+def _gate_span_audit(rows: list[dict]) -> dict:
+    tracks: dict[int, dict[str, list[float] | str]] = {}
+    xframe_audits: list[dict] = []
+    for row in rows:
+        for audit in row.get("bicycle_xframe_decision_audit", []) or []:
+            if isinstance(audit, dict):
+                xframe_audits.append(audit)
+        for item in row.get("gate_tracks", []) or []:
+            try:
+                tid = int(item.get("track_id"))
+                anchor = float(item.get("anchor_signed"))
+                center = float(item.get("center_signed"))
+            except (TypeError, ValueError):
+                continue
+            bucket = tracks.setdefault(tid, {"anchor": [], "center": [], "label": str(item.get("label", ""))})
+            bucket["anchor"].append(anchor)
+            bucket["center"].append(center)
+    anchor_span = []
+    center_only = []
+    near = []
+    for tid, item in tracks.items():
+        anchors = item["anchor"]
+        centers = item["center"]
+        a_span = bool(anchors) and min(anchors) < -0.006 and max(anchors) > 0.006
+        c_span = bool(centers) and min(centers) < -0.006 and max(centers) > 0.006
+        min_abs = min([abs(v) for v in anchors] or [999.0])
+        summary = {
+            "track_id": tid, "label": item["label"],
+            "anchor_min": round(min(anchors), 6) if anchors else None,
+            "anchor_max": round(max(anchors), 6) if anchors else None,
+            "center_min": round(min(centers), 6) if centers else None,
+            "center_max": round(max(centers), 6) if centers else None,
+        }
+        if a_span:
+            anchor_span.append(summary)
+        elif c_span:
+            center_only.append(summary)
+        elif min_abs <= 0.020:
+            near.append(summary)
+    return {
+        "anchor_span": anchor_span, "center_only_span": center_only, "near_no_span": near,
+        "bicycle_xframe_audit": xframe_audits[-8:],
+    }
+
+
 def diagnose_trace(session_id: int, times: Iterable[float], window_seconds: float = 0.60) -> dict:
     path = trace_path(session_id)
     if not path.exists():
@@ -43,34 +88,7 @@ def diagnose_trace(session_id: int, times: Iterable[float], window_seconds: floa
         confirm_delta = max(int(row.get("rejected_unconfirmed_side", 0)) for row in nearby) - min(int(row.get("rejected_unconfirmed_side", 0)) for row in nearby)
         cooldown_delta = max(int(row.get("rejected_cooldown", 0)) for row in nearby) - min(int(row.get("rejected_cooldown", 0)) for row in nearby)
         road_edge_rescue_delta = max(int(row.get("road_edge_rescues", 0)) for row in nearby) - min(int(row.get("road_edge_rescues", 0)) for row in nearby)
-
-        # V0.5.40 gate-span audit.  The worker stores only tracks already near the
-        # gate, so this stays compact while allowing a missed GT window to tell
-        # whether the motion-leading anchor crossed, only the box centre crossed,
-        # or the trajectory merely approached the line.
-        gate_samples: dict[int, list[dict]] = {}
-        for row in nearby:
-            for sample in row.get("gate_tracks", []) or []:
-                try:
-                    tid = int(sample.get("track_id"))
-                except (TypeError, ValueError):
-                    continue
-                gate_samples.setdefault(tid, []).append(sample)
-        anchor_span_tracks: list[int] = []
-        center_span_tracks: list[int] = []
-        nearest_gate_distance = None
-        span_band = 0.006
-        for tid, samples in gate_samples.items():
-            anchor_values = [float(item.get("anchor_d", 0.0)) for item in samples]
-            center_values = [float(item.get("center_d", 0.0)) for item in samples]
-            for value in anchor_values:
-                distance = abs(value)
-                nearest_gate_distance = distance if nearest_gate_distance is None else min(nearest_gate_distance, distance)
-            if anchor_values and min(anchor_values) < -span_band and max(anchor_values) > span_band:
-                anchor_span_tracks.append(tid)
-            if center_values and min(center_values) < -span_band and max(center_values) > span_band:
-                center_span_tracks.append(tid)
-
+        gate_audit = _gate_span_audit(nearby)
         if max_det <= 0:
             reason = "detector_miss"
         elif max_track <= 0:
@@ -81,14 +99,15 @@ def diagnose_trace(session_id: int, times: Iterable[float], window_seconds: floa
             reason = "crossing_cooldown_reject"
         elif confirm_delta > 0:
             reason = "crossing_confirmation_reject"
-        elif anchor_span_tracks:
-            reason = "crossing_anchor_span_reject"
-        elif center_span_tracks:
-            reason = "crossing_center_only_span"
-        elif gate_samples:
-            reason = "crossing_near_no_span"
         else:
-            reason = "crossing_gate_miss"
+            if gate_audit["anchor_span"]:
+                reason = "crossing_anchor_span_reject"
+            elif gate_audit["center_only_span"]:
+                reason = "crossing_center_only_span"
+            elif gate_audit["near_no_span"]:
+                reason = "crossing_near_no_span"
+            else:
+                reason = "crossing_gate_miss"
         result.append({
             "time": target,
             "reason": reason,
@@ -100,9 +119,7 @@ def diagnose_trace(session_id: int, times: Iterable[float], window_seconds: floa
             "confirmation_reject_delta": confirm_delta,
             "cooldown_reject_delta": cooldown_delta,
             "road_edge_rescue_delta": road_edge_rescue_delta,
-            "gate_track_candidates": len(gate_samples),
-            "anchor_span_tracks": anchor_span_tracks,
-            "center_span_tracks": center_span_tracks,
-            "nearest_gate_distance": None if nearest_gate_distance is None else round(nearest_gate_distance, 6),
+            "gate_span_audit": gate_audit,
+            "bicycle_xframe_audit": gate_audit["bicycle_xframe_audit"],
         })
     return {"available": True, "session_id": int(session_id), "window_seconds": window, "items": result}

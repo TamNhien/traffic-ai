@@ -464,74 +464,42 @@ def test_v0538_near_margin_context_rejects_confident_primary_or_single_source() 
     ) is None
 
 
-def test_v0540_cross_frame_context_rescues_staggered_dual_source_evidence() -> None:
+def test_v0541_cross_frame_bicycle_accepts_two_sources_on_different_frames():
     from app.classification import contextual_bicycle_cross_frame_decision
-
-    # Domain sees the bicycle one frame, general sees it a few frames later.
-    # No single frame has the two independent sources required by V0.5.38.
-    observations = [
-        (100, "domain", 0.20, 0.14),
-        (103, "general", 0.18, 0.16),
-        (104, "domain", 0.16, 0.14),
-    ]
-    result = contextual_bicycle_cross_frame_decision(
-        observations,
+    decision, audit = contextual_bicycle_cross_frame_decision(
+        [(100, "domain", 0.19, 0.10), (104, "general", 0.18, 0.09)],
         detector_confidence=0.49,
     )
-    assert result is not None
-    assert result[0] == "bicycle"
-    assert result[1] >= 0.30
+    assert decision is not None and decision[0] == "bicycle"
+    assert audit["accepted"] is True
+    assert audit["frames"] == 2 and audit["sources"] == 2
 
 
-def test_v0540_cross_frame_context_rejects_single_source_or_single_frame() -> None:
+def test_v0541_cross_frame_bicycle_rejects_one_frame_even_with_two_sources():
     from app.classification import contextual_bicycle_cross_frame_decision
-
-    assert contextual_bicycle_cross_frame_decision(
-        [
-            (100, "domain", 0.35, 0.10),
-            (103, "domain", 0.31, 0.11),
-        ],
-        detector_confidence=0.45,
-    ) is None
-    assert contextual_bicycle_cross_frame_decision(
-        [
-            (100, "domain", 0.24, 0.12),
-            (100, "general", 0.21, 0.11),
-        ],
-        detector_confidence=0.45,
-    ) is None
-
-
-def test_v0540_cross_frame_context_honors_motorcycle_veto_and_primary_confidence() -> None:
-    from app.classification import contextual_bicycle_cross_frame_decision
-
-    observations = [
-        (100, "domain", 0.20, 0.11),
-        (104, "general", 0.16, 0.30),
-    ]
-    assert contextual_bicycle_cross_frame_decision(
-        observations,
+    decision, audit = contextual_bicycle_cross_frame_decision(
+        [(100, "domain", 0.24, 0.08), (100, "general", 0.23, 0.07)],
         detector_confidence=0.48,
-    ) is None
-
-    safe = [
-        (100, "domain", 0.24, 0.12),
-        (104, "general", 0.21, 0.11),
-    ]
-    assert contextual_bicycle_cross_frame_decision(
-        safe,
-        detector_confidence=0.75,
-    ) is None
+    )
+    assert decision is None
+    assert audit["reason"] == "insufficient_frames"
 
 
-def test_v0540_context_accumulator_keeps_only_short_recent_window() -> None:
-    from app.classification import ContextTwoWheelEvidenceAccumulator
+def test_v0541_cross_frame_bicycle_motorcycle_veto_is_fail_closed():
+    from app.classification import contextual_bicycle_cross_frame_decision
+    decision, audit = contextual_bicycle_cross_frame_decision(
+        [(100, "domain", 0.20, 0.08), (104, "general", 0.15, 0.30)],
+        detector_confidence=0.47,
+    )
+    assert decision is None
+    assert audit["reason"] == "motorcycle_source_veto"
 
-    acc = ContextTwoWheelEvidenceAccumulator(history_frames=10)
-    acc.update(7, 10, "domain", 0.20, 0.10)
-    acc.update(7, 18, "general", 0.22, 0.11)
-    acc.update(7, 20, "domain", 0.24, 0.12)
-    recent = acc.recent(7, 20)
-    assert {item[0] for item in recent} == {10, 18, 20}
-    recent_late = acc.recent(7, 21)
-    assert {item[0] for item in recent_late} == {18, 20}
+
+def test_v0541_cross_frame_bicycle_rejects_strong_primary_motorcycle():
+    from app.classification import contextual_bicycle_cross_frame_decision
+    decision, audit = contextual_bicycle_cross_frame_decision(
+        [(100, "domain", 0.30, 0.08), (104, "general", 0.30, 0.08)],
+        detector_confidence=0.72,
+    )
+    assert decision is None
+    assert audit["reason"] == "primary_motorcycle_too_strong"

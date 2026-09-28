@@ -1,33 +1,54 @@
-# Traffic AI V0.5.40 — Cross-Frame Bicycle Context + Gate-Span Benchmark Audit 8.4 🚲🧭
+# Traffic AI V0.5.41 — Historical Contract Compatibility Hotfix
 
-V0.5.40 được xây từ replay V0.5.39 mới nhất trên `clip1.mp4`, Benchmark GT 149 và 184 snapshot trong `camera_1(20260927-144517).rar`. V0.5.39 là bản hạ tầng nên kết quả AI đúng như kỳ vọng vẫn giữ nguyên baseline V0.5.38: **AI 153 / khớp 134 / lọt 15 / dư 19 / Recall 89.9% / Precision 87.6% / F1 88.7% / Class đúng 99.3%**. Telemetry mới nhất cho thấy `Bike ctx match = 10` nhưng toàn bộ nhánh promote bicycle vẫn bằng 0 (`Bike context / trail / weak-MC / margin / near-M = 0`), trong khi `2W center = 9`, `2W dedup = 3`, `2W spatial = 3`, `2W ultra = 1`.
+- Sửa `scripts/test.ps1` V0.5.33: kiểm tra GT class editor/passage semantics bằng các marker chức năng thật (`updateMarkVehicle`, `gt-class-edit`, `class-audit-row`) thay vì phụ thuộc chuỗi changelog `Bicycle Precision 4.0` đã được chủ động bỏ khỏi Dashboard V0.5.41.
+- Không thay đổi thuật toán AI, database schema, migration hay telemetry V0.5.41.
+- Giữ Dashboard gọn; lịch sử phiên bản tiếp tục nằm trong README/GitHub Release.
 
-Điểm quan trọng của V0.5.40 là **không hạ threshold bicycle toàn cục** và **không nới Crossing Gate**. Bản này xử lý đúng hai nút thắt mà benchmark mới chỉ ra: context bicycle xuất hiện nhưng không đồng thời trên cùng frame, và 8 miss vẫn bị gom chung dưới nhãn “Track trong đường nhưng Crossing Gate không phát event”.
+# Traffic AI V0.5.41 — Verified Anchor-Span Recovery + Post-Confirm Closure + Cross-Frame Bicycle Decision Audit 8.5 🚦🚲
 
-## 1. Cross-Frame Bicycle Context
+V0.5.41 tiếp tục từ V0.5.40 và tập trung đúng các lỗi benchmark còn lại trong `clip1(4).mp4` / `camera_1(20260927-154039).rar`: crossing đã có quỹ đạo anchor span nhưng primary Gate không phát event, crossing dừng ở bước xác nhận phía sau vạch, và bicycle context X-frame có scan nhưng chưa giải thích được quyết định cuối. Dashboard cũng được rút gọn để chỉ hiển thị telemetry hiện tại; changelog chi tiết được giữ trong README/Release notes.
 
-V0.5.38 chỉ có thể dùng hai refiner khi chúng cùng cho bicycle evidence trên chính crossing frame. Với ca `04:49.450`, snapshot vẫn cho primary `motorcycle` yếu quanh `0.49 -> 0.39`, nhưng `Bike ctx match = 10` chứng minh context matcher đã nhìn thấy bicycle ở một số lần kiểm tra. V0.5.40 thêm một trail rất ngắn trước vạch:
+## Điểm chính V0.5.41
 
-```text
-weak motorcycle gần vạch
-        ↓
-DOMAIN context ở frame A
-GENERAL context ở frame B
-        ↓
-chỉ giữ cửa sổ 18 frame
-        ↓
-actual crossing đã được geometry chứng minh
-        ↓
-2 nguồn độc lập + >= 2 frame
-+ bicycle thắng aggregate motorcycle
-+ không có motorcycle veto mạnh
-        ↓
-Bike X-frame
+### 1. Verified Anchor-Span Recovery
+
+- **Không hạ ngưỡng primary Gate**. `LineCrossingCounter` giữ nguyên policy đã ổn định.
+- Thêm `VerifiedAnchorSpanRescuer` chạy **chỉ sau khi primary Gate trả về không có event**.
+- Candidate phải đồng thời thỏa finite counting segment, Road Zone corridor, bounded jump, đủ side depth và chuyển động đủ vuông góc với vạch.
+- Span cực rõ có thể đóng ngay; span chưa đủ mạnh chỉ được giữ làm pending candidate.
+- Telemetry: `verified_anchor_span_rescues`.
+
+### 2. Post-Confirm Closure
+
+- Pending anchor span không tạo event ngay.
+- Khi có observation kế tiếp ở đúng phía đích trong cửa sổ ngắn, crossing mới được đóng.
+- Nếu track quay lại phía cũ hoặc hết cửa sổ xác nhận, candidate bị bỏ.
+- Telemetry: `post_confirm_closures`.
+
+Defaults:
+
+```env
+AI_GATE_ANCHOR_SPAN_RECOVERY=1
+AI_GATE_ANCHOR_SPAN_HISTORY_GAP=12
+AI_GATE_ANCHOR_SPAN_MIN_NORMAL_RATIO=0.40
+AI_GATE_ANCHOR_SPAN_IMMEDIATE_NORMAL_RATIO=0.68
+AI_GATE_ANCHOR_SPAN_MAX_JUMP_RATIO=0.12
+AI_GATE_ANCHOR_SPAN_MIN_SIDE_RATIO=0.006
+AI_GATE_ANCHOR_SPAN_IMMEDIATE_SIDE_RATIO=0.012
+AI_GATE_ANCHOR_SPAN_ROAD_MARGIN_RATIO=0.010
+AI_GATE_POST_CONFIRM_SAMPLES=2
+AI_GATE_POST_CONFIRM_MAX_GAP=6
 ```
 
-Mặc định mới:
+### 3. Cross-Frame Bicycle Decision Audit 8.5
 
-```ini
+V0.5.40 đã cho phép thu context của weak-motorcycle trước crossing. V0.5.41 giữ nguyên nguyên tắc precision-first nhưng tách **decision** thành hàm thuần và ghi audit reason cho từng geometry-proven crossing. Evidence DOMAIN và GENERAL được phép nằm ở **hai frame khác nhau**, nhưng vẫn phải đủ hai nguồn + hai frame.
+
+Audit fail-closed gồm các reason như `primary_motorcycle_too_strong`, `insufficient_frames`, `insufficient_sources`, `motorcycle_source_veto`, `source_win_missing`, `bicycle_evidence_too_weak`, `fused_bicycle_too_weak`, `fused_margin_reject`, hoặc `accepted`.
+
+Defaults V0.5.40/V0.5.41:
+
+```env
 AI_BICYCLE_CONTEXT_XFRAME=1
 AI_BICYCLE_CONTEXT_XFRAME_HISTORY=18
 AI_BICYCLE_CONTEXT_XFRAME_GATE_DISTANCE_RATIO=0.070
@@ -44,101 +65,100 @@ AI_BICYCLE_CONTEXT_XFRAME_DUAL_CONF=0.30
 AI_BICYCLE_CONTEXT_XFRAME_FUSED_MARGIN=0.015
 ```
 
-Telemetry mới:
+### 4. Gate-Span Benchmark Audit 8.5
 
-- `Bike X-scan`: số lần low-confidence motorcycle gần vạch được lấy mẫu context trước crossing.
-- `Bike X-frame`: số crossing được đổi `motorcycle -> bicycle` nhờ hai nguồn context ở các frame khác nhau.
+Frame trace lưu `track_id`, class hiển thị, signed distance chuẩn hóa của motion-leading anchor và box center. Khi detector/tracker/Road Zone/cooldown/confirmation không giải thích được miss, diagnostic chia tiếp:
 
-Một pre-scan **không tự tạo event và không tự đổi class**. Nó chỉ ghi evidence vào RAM. Chỉ khi Crossing Engine đã chứng minh một crossing thật thì trail mới được phép tham gia quyết định class. Motorcycle primary > `0.52`, single-source trail, single-frame trail hoặc bất kỳ source nào có motorcycle thắng bicycle quá `0.10` đều bị từ chối.
+- `crossing_anchor_span_reject`: anchor đã span hai phía nhưng Gate không có event.
+- `crossing_center_only_span`: center span nhưng anchor chưa span đủ.
+- `crossing_near_no_span`: track tới gần vạch nhưng chưa có span hai phía.
 
-## 2. Gate-Span Benchmark Audit 8.4
+Trace cũng ghi `bicycle_xframe_decision_audit` để xem chính xác X-frame bị reject/accept vì lý do nào.
 
-V0.5.39 vẫn còn 15 miss, trong đó nhóm lớn nhất là `crossing_gate_miss`. Nhãn cũ chỉ nói “có track trong road zone nhưng không có event”, chưa cho biết quỹ đạo đã thật sự span qua line hay chỉ đi sát line. V0.5.40 ghi một trace cực gọn cho các track đã ở gần vạch (`<= 0.14` theo signed-distance ratio):
+### 5. Dashboard cleanup
 
-- `track_id`;
-- class hiển thị;
-- signed distance của **motion-leading anchor**;
-- signed distance của **box center**;
-- vị trí anchor/center chuẩn hóa.
+Dashboard không còn nhồi toàn bộ changelog nhiều phiên bản. Panel Vehicle Count chỉ giữ telemetry hiện tại và một dòng mô tả V0.5.41. Lịch sử thay đổi vẫn nằm trong README/Release notes.
 
-Benchmark diagnostic giờ tách `crossing_gate_miss` thành ba trường hợp mới khi có đủ trace:
+- Sửa false-fail contract V0.5.25 trong `scripts/test.ps1`: kiểm tra trực tiếp các telemetry key `human_guard_pending_crossings`, `human_guard_deferred_commits`, `bracket_confirm_rescues` thay vì bắt Dashboard phải giữ literal lịch sử `Crossing Engine 7.2`.
 
-```text
-crossing_anchor_span_reject
-  → anchor đã đi từ bên này sang bên kia nhưng Gate vẫn không phát event
+### 6. Giữ nguyên V0.5.39 infrastructure guard
 
-crossing_center_only_span
-  → center span qua vạch nhưng motion-leading anchor chưa span đủ
+- EOL policy: PowerShell CRLF; source/config LF; bổ sung explicit LF cho `.gitattributes`, `.gitignore`, `**/.dockerignore`, `*.txt`.
+- `scripts/postgres-info.ps1` kiểm tra container health, `pg_isready`, TCP host port và password authentication; thông tin pgAdmin lấy từ `.env`.
+- pgAdmin Desktop dùng host `127.0.0.1` + `POSTGRES_HOST_PORT` (mặc định `5445`), không dùng `postgres:5432` từ Windows.
 
-crossing_near_no_span
-  → track tới gần vạch nhưng trajectory chưa đi đủ hai phía
-```
+## Database / migration
 
-Các reason cũ `detector_miss`, `tracker_miss`, `road_zone_reject`, `crossing_confirmation_reject`, `crossing_cooldown_reject` vẫn có ưu tiên cao hơn, nên audit mới không che lấp nguyên nhân đã xác định. Mục tiêu là vòng replay kế tiếp sẽ cho biết 8 miss nên xử lý ở anchor geometry, center rescue hay không nên rescue, thay vì nới gate theo cảm tính.
-
-## 3. Phần giữ nguyên
-
-- Không nới `direct/direct` dedup; `2W ultra = 1` đã giảm một duplicate mà không giảm recall.
-- Không siết rescue gap toàn cục vì benchmark vẫn có 15 miss.
-- Center-Gate Rescue 8.0 giữ nguyên (`2W center = 9`).
-- Truck Semantic Lock / Canonical 4W Fusion / Human Guard 2.1 / deterministic replay giữ nguyên.
-- V0.5.39 PostgreSQL Client Guard và EOL hygiene vẫn giữ nguyên.
-
-Database migration mới chỉ cập nhật version marker, không đổi bảng/dữ liệu:
+Chuỗi marker migration bảo toàn dữ liệu:
 
 ```text
-0053_release_db_v0539
-        ↓
-0054_bike_gate_v0540
-schema_version = 0.5.40
+0052_bike_ultra_v0538
+  -> 0053_release_db_v0539
+  -> 0054_bike_gate_v0540
+  -> 0055_span_recovery_v0541
 ```
 
----
+`schema_version = 0.5.41`. Các migration V0.5.39–V0.5.41 chỉ cập nhật marker version, không xóa bảng/dữ liệu.
 
-# Traffic AI V0.5.39 — Release EOL Hygiene + PostgreSQL Client Guard 🧰🐘
+## Benchmark đầu vào đã đối chiếu
 
-V0.5.39 là bản hạ tầng/độ ổn định, **không đổi thuật toán đếm AI** so với V0.5.38. Benchmark V0.5.38 mới nhất vẫn giữ GT 149, AI 153, khớp 134, lọt 15, dư 19, Recall 89.9%, Precision 87.6%, F1 88.7%, Class đúng 99.3%; `2W ultra = 1` xác nhận Ultra-Spatial Rescue Signature đã loại thêm một duplicate mà không giảm recall.
-
-## 1. Fix warning LF/CRLF khi `publish.ps1`
-
-Các warning kiểu `LF will be replaced by CRLF the next time Git touches it` xuất hiện vì một số file LF chưa có rule `eol=lf` rõ ràng trong `.gitattributes` (`.gitattributes`, `.gitignore`, `*.dockerignore`, `*.txt`). V0.5.39 bổ sung explicit attributes cho các file này. `scripts/normalize-line-endings.ps1` vẫn là bước chuẩn hóa trước `git add -A`.
-
-Kỳ vọng khi chạy `./scripts/publish.ps1`: không còn nhóm warning EOL giả ở bước commit.
-
-## 2. PostgreSQL / pgAdmin Client Guard
-
-Traffic AI dùng PostgreSQL trong Docker; pgAdmin chỉ là GUI quản trị, không phải dependency runtime của Backend. V0.5.39 bổ sung `scripts/postgres-info.ps1` để kiểm tra health/TCP/SQL và in đúng thông số kết nối cho pgAdmin Desktop:
+Benchmark V0.5.40 trong bộ ảnh ngày 27/09/2026 ghi nhận:
 
 ```text
-Host              127.0.0.1
-Port              POSTGRES_HOST_PORT trong .env (mặc định 5445)
-Maintenance DB    POSTGRES_DB trong .env (mặc định traffic_ai_db)
-Username          POSTGRES_USER trong .env (mặc định traffic_admin)
-Password          đọc từ .env, script không in ra màn hình
+GT                  149
+AI                  153
+Khớp                134
+Lọt                  15
+Dư                   19
+Recall              89.9%
+Precision           87.6%
+F1                  88.7%
+Class đúng          99.3%
 ```
 
-Nếu pgAdmin chạy **trong cùng Docker network** thì dùng host `postgres`, port `5432`; nếu pgAdmin là ứng dụng Windows thì dùng `127.0.0.1` và host port (mặc định `5445`).
+Ảnh diagnostic cho thấy các miss còn tập trung ở `crossing_confirmation_reject` và các quỹ đạo anchor đã span vạch nhưng Gate chưa phát event. Bộ snapshot trong `camera_1(20260927-154039).rar` được dùng để đối chiếu trực quan các mốc miss và ca bicycle 04:49.450. V0.5.41 **không ghi đè số benchmark mới khi chưa chạy lại full inference**; sau khi triển khai trên máy có model/GPU, hãy chạy lại Ground-truth Benchmark để đo Recall/Precision/F1 thật của bản này.
 
-**Lưu ý quan trọng với database volume cũ:** `POSTGRES_PASSWORD` của image PostgreSQL chỉ dùng để khởi tạo role khi data directory còn trống. Nếu đổi mật khẩu trong `.env` sau khi volume đã được tạo, pgAdmin có thể báo `password authentication failed`. V0.5.39 kiểm tra luôn TCP password-auth. Khi cần đồng bộ, không xóa volume; vào psql và dùng `\password traffic_admin` để đặt lại mật khẩu trùng `.env`.
+## Kiểm thử
 
-Chạy kiểm tra:
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+.\scripts\test.ps1
+```
+
+Bộ unit test bao gồm regression cho Cross-Frame Bicycle Decision, strict anchor-span recovery, Post-Confirm Closure và Gate-Span Audit. Ở môi trường đóng gói V0.5.41: Python compile PASS, AI Service `152/152` PASS, Backend `30/30` PASS, Alembic single head = `0055_span_recovery_v0541`, JSON/YAML config PASS. Vite/Docker/PowerShell end-to-end vẫn phải được `scripts\test.ps1` xác nhận trên máy Windows đích vì sandbox đóng gói không có Docker/PowerShell và không có npm dependency cache.
+
+## Chạy hệ thống
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+.\scripts\start.ps1
+```
+
+Dashboard: `https://traffic-ai.test:8443`  
+API Docs: `https://traffic-ai.test:8444/docs`
+
+Kiểm tra PostgreSQL/pgAdmin:
 
 ```powershell
 .\scripts\postgres-info.ps1
 ```
 
-Database migration mới chỉ cập nhật version marker, không thay đổi bảng/dữ liệu:
+## Phát hành một lệnh
 
-```text
-0052_bike_ultra_v0538
-        ↓
-0053_release_db_v0539
-schema_version = 0.5.39
+Sau khi source chạy ổn:
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+.\scripts\publish.ps1
 ```
+
+Script tiếp tục test → commit/push → tag theo `VERSION` → kích hoạt GitHub Actions → tạo GitHub Release/fallback bằng GitHub CLI.
 
 ---
 
-## Traffic AI V0.5.38 — Near-Margin Bicycle Context + Ultra-Spatial Rescue Signature 8.3 🚲🎯
+## Lịch sử trước V0.5.41
+
+### Traffic AI V0.5.38 — Near-Margin Bicycle Context + Ultra-Spatial Rescue Signature 8.3 🚲🎯
 
 V0.5.38 được xây từ source V0.5.37-R1 và benchmark mới của `clip1.mp4` (GT 149) cùng 184 snapshot trong `camera_1(20260927-123141).rar`. V0.5.37 đã cải thiện precision counting nhưng chưa thay đổi số GT khớp và nhánh bicycle context vẫn chưa promote được ca 04:49.
 

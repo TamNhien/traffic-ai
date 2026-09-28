@@ -45,8 +45,12 @@ class PipelineState:
     bicycle_context_weak_motor_rescues: int = 0
     bicycle_context_competitive_rescues: int = 0
     bicycle_context_near_margin_rescues: int = 0
-    bicycle_context_xframe_checks: int = 0
+    bicycle_context_xframe_scans: int = 0
     bicycle_context_xframe_rescues: int = 0
+    bicycle_context_xframe_audit_accepts: int = 0
+    bicycle_context_xframe_audit_rejects: int = 0
+    verified_anchor_span_rescues: int = 0
+    post_confirm_closures: int = 0
     truck_class_rescues: int = 0
     bicycle_tracks_seen: int = 0
     truck_tracks_seen: int = 0

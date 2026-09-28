@@ -16,7 +16,6 @@ from app.benchmark_trace import trace_path
 from app.classification import (
     RefineCandidate,
     RefineEvidenceAccumulator,
-    ContextTwoWheelEvidenceAccumulator,
     TrackLabelSmoother,
     TruckSemanticLock,
     VehicleClassPolicy,
@@ -32,7 +31,7 @@ from app.classification import (
     vehicle_family,
 )
 from app.counting import (
-    CountingLine, HeavyVehicleCrossingRescuer, LineCrossingCounter, RoadZone,
+    CountingLine, HeavyVehicleCrossingRescuer, LineCrossingCounter, RoadZone, VerifiedAnchorSpanRescuer,
     TwoWheelCenterCrossingRescuer, select_event_crossing_frame, signed_distance,
 )
 from app.dedup import single_heavy_vehicle_plan
@@ -104,6 +103,9 @@ class PipelineWorker(threading.Thread):
         self._class_refine_overrides: dict[int, tuple[str, float, int]] = {}
         self._bicycle_class_rescue_tracks: set[int] = set()
         self._bicycle_context_rescue_tracks: set[int] = set()
+        self._bicycle_context_xframe_trail: dict[int, list[tuple[int, str, float, float]]] = {}
+        self._bicycle_context_xframe_last_scan: dict[int, int] = {}
+        self._bicycle_xframe_audit_this_frame: list[dict] = []
         self._truck_class_rescue_tracks: set[int] = set()
         self._class_consensus_rescue_tracks: set[int] = set()
         self._truck_tracks_seen: set[int] = set()
@@ -209,22 +211,20 @@ class PipelineWorker(threading.Thread):
         self.bicycle_context_near_margin_fused_margin = max(0.0, min(1.0, float(os.getenv("AI_BICYCLE_CONTEXT_NEAR_MARGIN_FUSED_MARGIN", "0.02"))))
         self.bicycle_context_xframe_enabled = os.getenv("AI_BICYCLE_CONTEXT_XFRAME", "1").strip().lower() not in {"0", "false", "no"}
         self.bicycle_context_xframe_history = max(4, int(os.getenv("AI_BICYCLE_CONTEXT_XFRAME_HISTORY", "18")))
-        self.bicycle_context_xframe_gate_distance = max(0.01, float(os.getenv("AI_BICYCLE_CONTEXT_XFRAME_GATE_DISTANCE_RATIO", "0.070")))
+        self.bicycle_context_xframe_gate_distance_ratio = max(0.01, float(os.getenv("AI_BICYCLE_CONTEXT_XFRAME_GATE_DISTANCE_RATIO", "0.070")))
         self.bicycle_context_xframe_interval = max(1, int(os.getenv("AI_BICYCLE_CONTEXT_XFRAME_INTERVAL", "4")))
         self.bicycle_context_xframe_max_per_frame = max(0, int(os.getenv("AI_BICYCLE_CONTEXT_XFRAME_MAX_PER_FRAME", "1")))
         self.bicycle_context_xframe_max_motor_conf = max(0.0, min(1.0, float(os.getenv("AI_BICYCLE_CONTEXT_XFRAME_MAX_MOTOR_CONF", "0.52"))))
         self.bicycle_context_xframe_min_source_conf = max(0.0, min(1.0, float(os.getenv("AI_BICYCLE_CONTEXT_XFRAME_MIN_SOURCE_CONF", "0.08"))))
         self.bicycle_context_xframe_min_frames = max(2, int(os.getenv("AI_BICYCLE_CONTEXT_XFRAME_MIN_FRAMES", "2")))
         self.bicycle_context_xframe_min_sources = max(2, int(os.getenv("AI_BICYCLE_CONTEXT_XFRAME_MIN_SOURCES", "2")))
-        self.bicycle_context_xframe_source_win = max(0.0, min(1.0, float(os.getenv("AI_BICYCLE_CONTEXT_XFRAME_SOURCE_WIN", "0.015"))))
-        self.bicycle_context_xframe_motor_veto = max(0.0, min(1.0, float(os.getenv("AI_BICYCLE_CONTEXT_XFRAME_MOTOR_VETO", "0.10"))))
-        self.bicycle_context_xframe_min_strong = max(0.0, min(1.0, float(os.getenv("AI_BICYCLE_CONTEXT_XFRAME_MIN_STRONG", "0.14"))))
-        self.bicycle_context_xframe_dual_conf = max(0.0, min(1.0, float(os.getenv("AI_BICYCLE_CONTEXT_XFRAME_DUAL_CONF", "0.30"))))
-        self.bicycle_context_xframe_fused_margin = max(0.0, min(1.0, float(os.getenv("AI_BICYCLE_CONTEXT_XFRAME_FUSED_MARGIN", "0.015"))))
-        self._bicycle_context_xframe_last_check: dict[int, int] = {}
+        self.bicycle_context_xframe_source_win = max(0.0, float(os.getenv("AI_BICYCLE_CONTEXT_XFRAME_SOURCE_WIN", "0.015")))
+        self.bicycle_context_xframe_motor_veto = max(0.0, float(os.getenv("AI_BICYCLE_CONTEXT_XFRAME_MOTOR_VETO", "0.10")))
+        self.bicycle_context_xframe_min_strong = max(0.0, float(os.getenv("AI_BICYCLE_CONTEXT_XFRAME_MIN_STRONG", "0.14")))
+        self.bicycle_context_xframe_dual_conf = max(0.0, float(os.getenv("AI_BICYCLE_CONTEXT_XFRAME_DUAL_CONF", "0.30")))
+        self.bicycle_context_xframe_fused_margin = max(0.0, float(os.getenv("AI_BICYCLE_CONTEXT_XFRAME_FUSED_MARGIN", "0.015")))
         self.truck_consensus_conf = float(os.getenv("AI_TRUCK_CONSENSUS_CONF", "0.52"))
         self._refine_consensus = RefineEvidenceAccumulator(history_frames=self.refine_consensus_history_frames)
-        self._bicycle_context_xframe = ContextTwoWheelEvidenceAccumulator(history_frames=self.bicycle_context_xframe_history)
         self._truck_semantic_lock = TruckSemanticLock(
             ttl_frames=int(os.getenv("AI_TRUCK_SEMANTIC_LOCK_FRAMES", "450")),
             min_refiner_hits=int(os.getenv("AI_TRUCK_SEMANTIC_LOCK_MIN_HITS", "2")),
@@ -584,6 +584,7 @@ class PipelineWorker(threading.Thread):
         target_track_id: int,
         counter: LineCrossingCounter,
         heavy_rescuer: HeavyVehicleCrossingRescuer | None,
+        anchor_span_rescuer: VerifiedAnchorSpanRescuer | None = None,
     ) -> None:
         """Merge semantic/gate state after one CAR/TRUCK/BUS ID is aliased."""
         source = int(source_track_id)
@@ -593,6 +594,8 @@ class PipelineWorker(threading.Thread):
         counter.merge_track(source, target)
         if heavy_rescuer is not None:
             heavy_rescuer.merge_track(source, target)
+        if anchor_span_rescuer is not None:
+            anchor_span_rescuer.merge_track(source, target)
         self._labels.merge_track(source, target)
         self._refine_consensus.merge_track(source, target)
         self._truck_semantic_lock.rebind(source, target)
@@ -940,6 +943,22 @@ class PipelineWorker(threading.Thread):
                 origin_rescue_distance_ratio=self.video_origin_distance_ratio,
                 origin_rescue_min_normal_ratio=self.video_origin_min_normal_ratio,
             )
+            anchor_span_rescuer = VerifiedAnchorSpanRescuer(
+                counter.line, road_zone=counter.road_zone,
+                enabled=os.getenv("AI_GATE_ANCHOR_SPAN_RECOVERY", "1").strip().lower() not in {"0", "false", "no"},
+                history_gap_frames=int(os.getenv("AI_GATE_ANCHOR_SPAN_HISTORY_GAP", "12")),
+                dead_band_ratio=float(os.getenv("AI_GATE_DEAD_BAND_RATIO", "0.006")),
+                segment_margin=float(os.getenv("AI_GATE_SEGMENT_MARGIN", "0.0")),
+                min_normal_ratio=float(os.getenv("AI_GATE_ANCHOR_SPAN_MIN_NORMAL_RATIO", "0.40")),
+                immediate_min_normal_ratio=float(os.getenv("AI_GATE_ANCHOR_SPAN_IMMEDIATE_NORMAL_RATIO", "0.68")),
+                max_jump_ratio=float(os.getenv("AI_GATE_ANCHOR_SPAN_MAX_JUMP_RATIO", "0.12")),
+                min_side_distance_ratio=float(os.getenv("AI_GATE_ANCHOR_SPAN_MIN_SIDE_RATIO", "0.006")),
+                immediate_min_side_distance_ratio=float(os.getenv("AI_GATE_ANCHOR_SPAN_IMMEDIATE_SIDE_RATIO", "0.012")),
+                road_margin_ratio=float(os.getenv("AI_GATE_ANCHOR_SPAN_ROAD_MARGIN_RATIO", "0.010")),
+                post_confirm_samples=int(os.getenv("AI_GATE_POST_CONFIRM_SAMPLES", "2")),
+                post_confirm_max_gap_frames=int(os.getenv("AI_GATE_POST_CONFIRM_MAX_GAP", "6")),
+            )
+
             heavy_rescuer = HeavyVehicleCrossingRescuer(
                 counter.line,
                 road_zone=counter.road_zone,
@@ -1064,8 +1083,9 @@ class PipelineWorker(threading.Thread):
                 pending_crossing_events: list[tuple[int, str, str, float, int, float | None, str | None, float | None, float | None]] = []
                 refines_used_this_frame = 0
                 bicycle_context_used_this_frame = 0
-                bicycle_context_xframe_used_this_frame = 0
-                gate_trace_tracks: list[dict] = []
+                bicycle_xframe_used_this_frame = 0
+                gate_trace_tracks = []
+                self._bicycle_xframe_audit_this_frame = []
                 boxes = result.boxes
                 self.state.detections_current_frame = int(len(boxes)) if boxes is not None else 0
                 self.state.active_tracks = 0
@@ -1117,7 +1137,9 @@ class PipelineWorker(threading.Thread):
                             displaced = self._continuity.alias_raw_id(int(ids[duplicate_index]), track_id)
                             if displaced is not None and int(displaced) != int(track_id):
                                 self._four_wheel_duplicate_pairs.add(tuple(sorted((int(displaced), int(track_id)))))
-                                self._merge_canonical_track_state(displaced, track_id, counter, heavy_rescuer)
+                                self._merge_canonical_track_state(
+                                    displaced, track_id, counter, heavy_rescuer, anchor_span_rescuer
+                                )
                         self.state.four_wheel_duplicate_suppressed = len(self._four_wheel_duplicate_pairs)
                         if stitched:
                             self.state.stitch_recoveries = self._continuity.stitch_count
@@ -1161,18 +1183,6 @@ class PipelineWorker(threading.Thread):
                             counter.road_zone is None
                             or counter.road_zone.contains_with_margin(anchor, width, height, 0.02)
                         )
-                        if track_on_road and gate_distance_ratio <= 0.14 and len(gate_trace_tracks) < 12:
-                            gate_scale = max(1.0, min(width, height))
-                            gate_trace_tracks.append({
-                                "track_id": int(track_id),
-                                "label": str(display_label),
-                                "anchor_d": round(signed_distance(anchor, line_a, line_b) / gate_scale, 5),
-                                "center_d": round(signed_distance(center, line_a, line_b) / gate_scale, 5),
-                                "anchor_x": round(float(anchor[0]) / max(1.0, float(width)), 5),
-                                "anchor_y": round(float(anchor[1]) / max(1.0, float(height)), 5),
-                                "center_x": round(float(center[0]) / max(1.0, float(width)), 5),
-                                "center_y": round(float(center[1]) / max(1.0, float(height)), 5),
-                            })
                         lag_allows_class_refine = (
                             self.payload.source_type != "video"
                             or self.state.playback_lag_seconds <= self.refine_max_lag
@@ -1245,6 +1255,33 @@ class PipelineWorker(threading.Thread):
                                 device, use_half, velocity=velocity, force=False,
                             )
 
+                        anchor_signed = signed_distance(anchor, line_a, line_b) / max(1.0, min(width, height))
+                        center_signed = signed_distance(center, line_a, line_b) / max(1.0, min(width, height))
+                        gate_trace_tracks.append({
+                            "track_id": int(track_id), "label": str(display_label),
+                            "anchor_signed": round(float(anchor_signed), 6),
+                            "center_signed": round(float(center_signed), 6),
+                        })
+
+                        # V0.5.40/V0.5.41: sample a short pre-crossing context trail
+                        # for weak motorcycle tracks. Sampling never creates an
+                        # event; it only stores target-matched evidence for a
+                        # later geometry-proven crossing decision.
+                        if (
+                            self.bicycle_context_xframe_enabled
+                            and display_label == "motorcycle"
+                            and confidence_f <= self.bicycle_context_xframe_max_motor_conf
+                            and gate_distance_ratio <= self.bicycle_context_xframe_gate_distance_ratio
+                            and bicycle_xframe_used_this_frame < self.bicycle_context_xframe_max_per_frame
+                        ):
+                            last_scan = self._bicycle_context_xframe_last_scan.get(int(track_id), -100000)
+                            if frame_index - last_scan >= self.bicycle_context_xframe_interval:
+                                self._scan_bicycle_xframe_context(
+                                    track_id, frame_index, frame, rect, device, use_half
+                                )
+                                self._bicycle_context_xframe_last_scan[int(track_id)] = int(frame_index)
+                                bicycle_xframe_used_this_frame += 1
+
                         heavy_center_candidate = None
                         if heavy_rescuer is not None and vehicle_family(display_label) == "four-wheel":
                             heavy_center_candidate = heavy_rescuer.update(
@@ -1269,6 +1306,19 @@ class PipelineWorker(threading.Thread):
                                 else None
                             ),
                         )
+                        if direction is None:
+                            span_candidate = anchor_span_rescuer.update(
+                                track_id, anchor, width, height, frame_index
+                            )
+                            if span_candidate is not None:
+                                span_direction, span_point = span_candidate
+                                if counter.register_external_crossing(
+                                    track_id, span_direction, frame_index, span_point, mode="rescued",
+                                    crossing_frame=anchor_span_rescuer.crossing_frame_for(track_id),
+                                ):
+                                    direction = span_direction
+                        else:
+                            anchor_span_rescuer.mark_counted(track_id, direction)
                         if direction is None and heavy_center_candidate is not None:
                             heavy_direction, heavy_crossing_point = heavy_center_candidate
                             heavy_crossing_frame = heavy_rescuer.crossing_frame_for(track_id) if heavy_rescuer is not None else None
@@ -1289,35 +1339,18 @@ class PipelineWorker(threading.Thread):
                             ):
                                 direction = two_wheel_direction
                                 self.state.two_wheel_center_rescues += 1
+                        if direction is not None:
+                            # Keep the secondary gate aligned with every accepted
+                            # crossing path, not only primary/anchor-span events.
+                            anchor_span_rescuer.mark_counted(track_id, direction)
                         self.state.video_start_rescues = counter.origin_rescues
                         self.state.rejected_outside_road = counter.rejected_outside_road
                         self.state.fast_confirm_rescues = counter.fast_confirm_rescues
                         self.state.bracket_confirm_rescues = counter.bracket_confirm_rescues
                         self.state.rescue_validation_rejections = counter.rejected_rescue_validation
                         self.state.adaptive_cooldown_releases = counter.adaptive_cooldown_releases
-
-                        # V0.5.40: collect short pre-crossing context only for a
-                        # weak motorcycle already close to the gate.  This does
-                        # not alter class/count state; the trail can be consumed
-                        # later only if an actual crossing is proven.
-                        last_xframe = self._bicycle_context_xframe_last_check.get(int(track_id), -10_000)
-                        if (
-                            direction is None
-                            and self.bicycle_context_rescue_enabled
-                            and self.bicycle_context_xframe_enabled
-                            and display_label == "motorcycle"
-                            and confidence_f <= self.bicycle_context_xframe_max_motor_conf
-                            and gate_distance_ratio <= self.bicycle_context_xframe_gate_distance
-                            and track_on_road
-                            and lag_allows_class_refine
-                            and frame_index - last_xframe >= self.bicycle_context_xframe_interval
-                            and bicycle_context_xframe_used_this_frame < self.bicycle_context_xframe_max_per_frame
-                        ):
-                            self._observe_bicycle_context_xframe(
-                                track_id, frame_index, frame, rect, device, use_half
-                            )
-                            bicycle_context_xframe_used_this_frame += 1
-
+                        self.state.verified_anchor_span_rescues = anchor_span_rescuer.verified_anchor_span_rescues
+                        self.state.post_confirm_closures = anchor_span_rescuer.post_confirm_closures
                         guard_status = self._human_guard_policy.status(track_id)
                         overlay_label = "PERSON-GUARD" if guard_status == "rejected" else ("HUMAN?" if guard_status == "pending" else display_label)
                         self._draw_detection(
@@ -1553,8 +1586,11 @@ class PipelineWorker(threading.Thread):
                         "bicycle_context_weak_motor_rescues": self.state.bicycle_context_weak_motor_rescues,
                         "bicycle_context_competitive_rescues": self.state.bicycle_context_competitive_rescues,
                         "bicycle_context_near_margin_rescues": self.state.bicycle_context_near_margin_rescues,
-                        "bicycle_context_xframe_checks": self.state.bicycle_context_xframe_checks,
+                        "bicycle_context_xframe_scans": self.state.bicycle_context_xframe_scans,
                         "bicycle_context_xframe_rescues": self.state.bicycle_context_xframe_rescues,
+                        "bicycle_xframe_decision_audit": self._bicycle_xframe_audit_this_frame,
+                        "verified_anchor_span_rescues": self.state.verified_anchor_span_rescues,
+                        "post_confirm_closures": self.state.post_confirm_closures,
                         "gate_tracks": gate_trace_tracks,
                         "truck_class_rescues": self.state.truck_class_rescues,
                         "bicycle_tracks_seen": self.state.bicycle_tracks_seen,
@@ -1852,14 +1888,13 @@ class PipelineWorker(threading.Thread):
                 return None
             bike = select_contextual_two_wheel_refinement(
                 target_crop, candidates, label="bicycle",
-                # V0.5.40 also retains 0.08-0.099 target-matched bicycle
-                # evidence for the short cross-frame trail.  Every decision
-                # branch applies its own stricter threshold later, so collecting
-                # a weaker candidate here does not lower the global class rule.
+                # V0.5.38 must retain 0.10-0.119 bicycle evidence for the
+                # near-margin fallback. Stricter V0.5.37/legacy decisions still
+                # apply their own thresholds later, so collecting it here does
+                # not weaken those branches.
                 min_confidence=min(
                     self.bicycle_context_competitive_min_source_conf,
                     self.bicycle_context_near_margin_min_source_conf,
-                    self.bicycle_context_xframe_min_source_conf,
                 ),
             )
             moto = select_contextual_two_wheel_refinement(
@@ -1874,50 +1909,56 @@ class PipelineWorker(threading.Thread):
         except Exception:
             return None
 
-    def _observe_bicycle_context_xframe(
-        self,
-        track_id: int,
-        frame_index: int,
-        frame,
-        rect,
-        device,
-        use_half: bool,
-    ) -> int:
-        """Collect a short pre-crossing bicycle/motorcycle context trail.
-
-        V0.5.40 runs this only for a low-confidence motorcycle already close to
-        the gate.  It never changes the class by itself; it only stores one
-        target-matched opinion per available refiner source for a later crossing
-        decision.  This avoids lowering the normal one-frame thresholds.
-        """
-        if not self.bicycle_context_xframe_enabled:
-            return 0
-        # Mark the attempt before inference so a no-candidate frame still obeys
-        # the configured scan interval instead of querying both refiners again on
-        # every following frame.
-        self._bicycle_context_xframe_last_check[int(track_id)] = int(frame_index)
-        self.state.bicycle_context_xframe_checks += 1
-        observed = 0
+    def _scan_bicycle_xframe_context(
+        self, track_id: int, frame_index: int, frame, rect, device, use_half: bool,
+    ) -> None:
+        tid = int(track_id)
+        self.state.bicycle_context_xframe_scans += 1
+        trail = self._bicycle_context_xframe_trail.setdefault(tid, [])
         if self._refiner_model is not None and self._refine_ids:
             pair = self._context_two_wheel_from_model(
                 frame, rect, device, use_half, self._refine_ids, self._refiner_model
             )
             if pair is not None:
-                self._bicycle_context_xframe.update(
-                    track_id, frame_index, "domain", pair[0], pair[1]
-                )
-                observed += 1
+                trail.append((int(frame_index), "domain", float(pair[0]), float(pair[1])))
         if self._general_refiner_model is not None and self._general_refine_ids:
             pair = self._context_two_wheel_from_model(
                 frame, rect, device, use_half, self._general_refine_ids, self._general_refiner_model
             )
             if pair is not None:
-                self._bicycle_context_xframe.update(
-                    track_id, frame_index, "general", pair[0], pair[1]
-                )
-                observed += 1
-        return observed
+                trail.append((int(frame_index), "general", float(pair[0]), float(pair[1])))
+        cutoff = int(frame_index) - self.bicycle_context_xframe_history
+        self._bicycle_context_xframe_trail[tid] = [item for item in trail if item[0] >= cutoff][-24:]
 
+    def _audit_cross_frame_bicycle(
+        self, track_id: int, frame_index: int, detector_confidence: float,
+    ) -> tuple[str, float] | None:
+        tid = int(track_id)
+        trail = list(self._bicycle_context_xframe_trail.get(tid, []))
+        cutoff = int(frame_index) - self.bicycle_context_xframe_history
+        trail = [item for item in trail if cutoff <= item[0] <= int(frame_index)]
+        decision, audit = contextual_bicycle_cross_frame_decision(
+            trail, detector_confidence=detector_confidence,
+            max_motorcycle_confidence=self.bicycle_context_xframe_max_motor_conf,
+            min_source_confidence=self.bicycle_context_xframe_min_source_conf,
+            min_frames=self.bicycle_context_xframe_min_frames,
+            min_sources=self.bicycle_context_xframe_min_sources,
+            min_source_win=self.bicycle_context_xframe_source_win,
+            motorcycle_veto=self.bicycle_context_xframe_motor_veto,
+            min_strongest=self.bicycle_context_xframe_min_strong,
+            dual_fused_confidence=self.bicycle_context_xframe_dual_conf,
+            fused_margin=self.bicycle_context_xframe_fused_margin,
+        )
+        audit = {"track_id": tid, "frame_index": int(frame_index), **audit}
+        self._bicycle_xframe_audit_this_frame.append(audit)
+        if decision is None:
+            self.state.bicycle_context_xframe_audit_rejects += 1
+        else:
+            self.state.bicycle_context_xframe_audit_accepts += 1
+        # A crossing consumes its short context trail. A future return crossing
+        # must earn fresh evidence rather than inheriting an old bicycle vote.
+        self._bicycle_context_xframe_trail.pop(tid, None)
+        return decision
 
     def _refine_bicycle_context(
         self,
@@ -1950,9 +1991,6 @@ class PipelineWorker(threading.Thread):
             if pair is not None:
                 bike_conf, moto_conf = pair
                 competitive.append(("domain", bike_conf, moto_conf))
-                self._bicycle_context_xframe.update(
-                    track_id, frame_index, "domain", bike_conf, moto_conf
-                )
                 if bike_conf >= self.bicycle_context_min_source_conf:
                     observations.append(("domain", bike_conf))
         if self._general_refiner_model is not None and self._general_refine_ids:
@@ -1962,9 +2000,6 @@ class PipelineWorker(threading.Thread):
             if pair is not None:
                 bike_conf, moto_conf = pair
                 competitive.append(("general", bike_conf, moto_conf))
-                self._bicycle_context_xframe.update(
-                    track_id, frame_index, "general", bike_conf, moto_conf
-                )
                 if bike_conf >= self.bicycle_context_min_source_conf:
                     observations.append(("general", bike_conf))
 
@@ -2017,19 +2052,7 @@ class PipelineWorker(threading.Thread):
                 self.state.bicycle_context_near_margin_rescues += 1
 
         if decision is None and self.bicycle_context_xframe_enabled:
-            decision = contextual_bicycle_cross_frame_decision(
-                self._bicycle_context_xframe.recent(track_id, frame_index),
-                detector_confidence=detector_confidence,
-                max_motorcycle_confidence=self.bicycle_context_xframe_max_motor_conf,
-                min_bicycle_confidence=self.bicycle_context_xframe_min_source_conf,
-                min_distinct_frames=self.bicycle_context_xframe_min_frames,
-                min_sources=self.bicycle_context_xframe_min_sources,
-                min_source_win=self.bicycle_context_xframe_source_win,
-                max_motorcycle_veto=self.bicycle_context_xframe_motor_veto,
-                min_strongest_bicycle=self.bicycle_context_xframe_min_strong,
-                dual_fused_confidence=self.bicycle_context_xframe_dual_conf,
-                fused_margin=self.bicycle_context_xframe_fused_margin,
-            )
+            decision = self._audit_cross_frame_bicycle(track_id, frame_index, detector_confidence)
             if decision is not None:
                 self.state.bicycle_context_xframe_rescues += 1
 
@@ -2105,7 +2128,7 @@ class PipelineWorker(threading.Thread):
         rt = f"x{self.state.realtime_factor:.2f}" if self.state.source_fps > 0 else "live"
         cv2.putText(
             frame,
-            f"DET {self.state.detections_current_frame} | UNTRACKED {self.state.untracked_detections} | TRACK {self.state.active_tracks} | ROAD {self.state.road_tracks_current_frame} | TOTAL {self.state.total_count} | IN {self.state.in_count} | OUT {self.state.out_count} | FPS {self.state.fps:.1f} ({rt}) | {self.state.inference_ms:.0f}ms | {'HYBRID' if self.hybrid_mode else 'DIRECT'} {Path(self.detector_model_name).name} | ROI {self.detection_roi_mode.upper()} | DIRECT-X {self.state.direct_crossings} | INTERP {self.state.interpolated_crossings} | RESCUE {self.state.rescued_crossings} | ROAD-REJECT {counter.rejected_outside_road} | CONFIRM-REJECT {counter.rejected_unconfirmed_side} | COOL-REJECT {counter.rejected_cooldown} | COOL-REL {counter.adaptive_cooldown_releases} | FAST-CONF {counter.fast_confirm_rescues} | BRACKET+ {counter.bracket_confirm_rescues} | RESCUE-X {counter.rejected_rescue_validation} | CLASS-R {self.state.class_refine_checks} | GEN-R {self.state.general_refine_checks} | CONS+ {self.state.class_consensus_rescues} | BIKE+ {self.state.bicycle_class_rescues} | BIKE-CTX {self.state.bicycle_context_rescues} | BIKE-T {self.state.bicycle_context_temporal_rescues} | BIKE-W+ {self.state.bicycle_context_weak_motor_rescues} | BIKE-M+ {self.state.bicycle_context_competitive_rescues} | BIKE-NM+ {self.state.bicycle_context_near_margin_rescues} | BIKE-XSCAN {self.state.bicycle_context_xframe_checks} | BIKE-X+ {self.state.bicycle_context_xframe_rescues} | 2W-C+ {self.state.two_wheel_center_rescues} | 2W-SIG2 {self.state.two_wheel_spatial_signature_duplicates} | 2W-ULTRA {self.state.two_wheel_ultra_spatial_signature_duplicates} | TRUCK+ {self.state.truck_class_rescues} | TRUCK-SEEN {self.state.truck_tracks_seen} | TRUCK-X {self.state.truck_crossing_tracks} | HEAVY-A {self.state.heavy_anchor_tracks} | HEAVY-C+ {self.state.heavy_center_rescues} | HEAVY-STITCH {self.state.heavy_stitch_recoveries} | 4W-DUP {self.state.four_wheel_duplicate_suppressed} | START+ {self.state.video_start_rescues} | TIME-SYNC {self.state.crossing_time_corrections} | TIME-CLAMP {self.state.crossing_time_clamps} | REPLAY {'DET' if self.state.deterministic_video_replay else 'LIVE'} | HUMAN-X {self.state.human_guard_rejections} | RIDER+ {self.state.rider_guard_rescues} | GUARD-PENDING {self.state.human_guard_pending_crossings} | ROAD-EDGE+ {counter.road_edge_rescues}",
+            f"DET {self.state.detections_current_frame} | UNTRACKED {self.state.untracked_detections} | TRACK {self.state.active_tracks} | ROAD {self.state.road_tracks_current_frame} | TOTAL {self.state.total_count} | IN {self.state.in_count} | OUT {self.state.out_count} | FPS {self.state.fps:.1f} ({rt}) | {self.state.inference_ms:.0f}ms | {'HYBRID' if self.hybrid_mode else 'DIRECT'} {Path(self.detector_model_name).name} | ROI {self.detection_roi_mode.upper()} | DIRECT-X {self.state.direct_crossings} | INTERP {self.state.interpolated_crossings} | RESCUE {self.state.rescued_crossings} | ROAD-REJECT {counter.rejected_outside_road} | CONFIRM-REJECT {counter.rejected_unconfirmed_side} | COOL-REJECT {counter.rejected_cooldown} | COOL-REL {counter.adaptive_cooldown_releases} | FAST-CONF {counter.fast_confirm_rescues} | BRACKET+ {counter.bracket_confirm_rescues} | RESCUE-X {counter.rejected_rescue_validation} | CLASS-R {self.state.class_refine_checks} | GEN-R {self.state.general_refine_checks} | CONS+ {self.state.class_consensus_rescues} | BIKE+ {self.state.bicycle_class_rescues} | BIKE-CTX {self.state.bicycle_context_rescues} | BIKE-T {self.state.bicycle_context_temporal_rescues} | BIKE-W+ {self.state.bicycle_context_weak_motor_rescues} | BIKE-M+ {self.state.bicycle_context_competitive_rescues} | BIKE-NM+ {self.state.bicycle_context_near_margin_rescues} | 2W-C+ {self.state.two_wheel_center_rescues} | 2W-SIG2 {self.state.two_wheel_spatial_signature_duplicates} | 2W-ULTRA {self.state.two_wheel_ultra_spatial_signature_duplicates} | TRUCK+ {self.state.truck_class_rescues} | TRUCK-SEEN {self.state.truck_tracks_seen} | TRUCK-X {self.state.truck_crossing_tracks} | HEAVY-A {self.state.heavy_anchor_tracks} | HEAVY-C+ {self.state.heavy_center_rescues} | HEAVY-STITCH {self.state.heavy_stitch_recoveries} | 4W-DUP {self.state.four_wheel_duplicate_suppressed} | START+ {self.state.video_start_rescues} | TIME-SYNC {self.state.crossing_time_corrections} | TIME-CLAMP {self.state.crossing_time_clamps} | REPLAY {'DET' if self.state.deterministic_video_replay else 'LIVE'} | HUMAN-X {self.state.human_guard_rejections} | RIDER+ {self.state.rider_guard_rescues} | GUARD-PENDING {self.state.human_guard_pending_crossings} | ROAD-EDGE+ {counter.road_edge_rescues}",
             (20, 32),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.62,

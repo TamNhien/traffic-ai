@@ -244,6 +244,30 @@ Ensure-EnvSetting "AI_BICYCLE_CONTEXT_NEAR_MARGIN_SOURCE_WIN" "0.02"
 Ensure-EnvSetting "AI_BICYCLE_CONTEXT_NEAR_MARGIN_MOTOR_VETO" "0.08"
 Ensure-EnvSetting "AI_BICYCLE_CONTEXT_NEAR_MARGIN_DUAL_CONF" "0.28"
 Ensure-EnvSetting "AI_BICYCLE_CONTEXT_NEAR_MARGIN_FUSED_MARGIN" "0.02"
+Ensure-EnvSetting "AI_BICYCLE_CONTEXT_XFRAME" "1"
+Ensure-EnvSetting "AI_BICYCLE_CONTEXT_XFRAME_HISTORY" "18"
+Ensure-EnvSetting "AI_BICYCLE_CONTEXT_XFRAME_GATE_DISTANCE_RATIO" "0.070"
+Ensure-EnvSetting "AI_BICYCLE_CONTEXT_XFRAME_INTERVAL" "4"
+Ensure-EnvSetting "AI_BICYCLE_CONTEXT_XFRAME_MAX_PER_FRAME" "1"
+Ensure-EnvSetting "AI_BICYCLE_CONTEXT_XFRAME_MAX_MOTOR_CONF" "0.52"
+Ensure-EnvSetting "AI_BICYCLE_CONTEXT_XFRAME_MIN_SOURCE_CONF" "0.08"
+Ensure-EnvSetting "AI_BICYCLE_CONTEXT_XFRAME_MIN_FRAMES" "2"
+Ensure-EnvSetting "AI_BICYCLE_CONTEXT_XFRAME_MIN_SOURCES" "2"
+Ensure-EnvSetting "AI_BICYCLE_CONTEXT_XFRAME_SOURCE_WIN" "0.015"
+Ensure-EnvSetting "AI_BICYCLE_CONTEXT_XFRAME_MOTOR_VETO" "0.10"
+Ensure-EnvSetting "AI_BICYCLE_CONTEXT_XFRAME_MIN_STRONG" "0.14"
+Ensure-EnvSetting "AI_BICYCLE_CONTEXT_XFRAME_DUAL_CONF" "0.30"
+Ensure-EnvSetting "AI_BICYCLE_CONTEXT_XFRAME_FUSED_MARGIN" "0.015"
+Ensure-EnvSetting "AI_GATE_ANCHOR_SPAN_RECOVERY" "1"
+Ensure-EnvSetting "AI_GATE_ANCHOR_SPAN_HISTORY_GAP" "12"
+Ensure-EnvSetting "AI_GATE_ANCHOR_SPAN_MIN_NORMAL_RATIO" "0.40"
+Ensure-EnvSetting "AI_GATE_ANCHOR_SPAN_IMMEDIATE_NORMAL_RATIO" "0.68"
+Ensure-EnvSetting "AI_GATE_ANCHOR_SPAN_MAX_JUMP_RATIO" "0.12"
+Ensure-EnvSetting "AI_GATE_ANCHOR_SPAN_MIN_SIDE_RATIO" "0.006"
+Ensure-EnvSetting "AI_GATE_ANCHOR_SPAN_IMMEDIATE_SIDE_RATIO" "0.012"
+Ensure-EnvSetting "AI_GATE_ANCHOR_SPAN_ROAD_MARGIN_RATIO" "0.010"
+Ensure-EnvSetting "AI_GATE_POST_CONFIRM_SAMPLES" "2"
+Ensure-EnvSetting "AI_GATE_POST_CONFIRM_MAX_GAP" "6"
 Ensure-EnvSetting "AI_WARMUP" "1"
 
 # V0.2.8: bootstrap HTTPS/hosts tự động.
@@ -328,27 +352,14 @@ if (-not $dashboardOk -or -not $apiOk) {
   throw "Gateway chưa proxy được Dashboard/API sau khi startup (Dashboard=$dashboardOk, API=$apiOk)."
 }
 
-$postgresHostPort = "5445"
-$postgresDbName = "traffic_ai_db"
-$postgresUserName = "traffic_admin"
-if (Test-Path $envPath) {
-  foreach ($line in Get-Content $envPath -Encoding UTF8) {
-    $trimmed = $line.Trim()
-    if (-not $trimmed -or $trimmed.StartsWith("#") -or $trimmed.IndexOf("=") -le 0) { continue }
-    $name, $value = $trimmed.Split("=", 2)
-    $value = $value.Trim().Trim('"').Trim("'")
-    switch ($name.Trim()) {
-      "POSTGRES_HOST_PORT" { if ($value) { $postgresHostPort = $value } }
-      "POSTGRES_DB" { if ($value) { $postgresDbName = $value } }
-      "POSTGRES_USER" { if ($value) { $postgresUserName = $value } }
-    }
-  }
-}
-
 Write-Host ""
-Write-Host "[OK] Traffic AI V0.5.40 đã khởi động." -ForegroundColor Green
+Write-Host "[OK] Traffic AI V0.5.41 đã khởi động." -ForegroundColor Green
 Write-Host "Dashboard : https://traffic-ai.test:8443"
 Write-Host "API Docs  : https://traffic-ai.test:8444/docs"
-Write-Host "PostgreSQL: 127.0.0.1:$postgresHostPort / $postgresDbName / $postgresUserName"
-Write-Host "pgAdmin   : chạy .\scripts\postgres-info.ps1 để kiểm tra trước khi Register Server"
+$envNow = Get-Content $envPath -Raw -Encoding UTF8
+$pgPortMatch = [regex]::Match($envNow, '(?m)^POSTGRES_HOST_PORT=(.+)$')
+$pgDbMatch = [regex]::Match($envNow, '(?m)^POSTGRES_DB=(.+)$')
+$pgPort = if ($pgPortMatch.Success) { $pgPortMatch.Groups[1].Value.Trim() } else { '5445' }
+$pgDb = if ($pgDbMatch.Success) { $pgDbMatch.Groups[1].Value.Trim() } else { 'traffic_ai_db' }
+Write-Host "PostgreSQL: 127.0.0.1:$pgPort / $pgDb"
 Write-Host "AI stream : https://traffic-ai.test:8443/ai/streams/{camera_id}.mjpg"

@@ -540,3 +540,53 @@ def test_v0534_two_wheel_center_rescue_rejects_long_jump() -> None:
     assert rescue.update(504, (15, 20), 100, 100, 1) is None
     assert rescue.update(504, (85, 80), 100, 100, 2) is None
     assert rescue.rejected_jump == 1
+
+
+def test_v0541_verified_anchor_span_immediate_recovery_is_strict_secondary_gate():
+    from app.counting import CountingLine, VerifiedAnchorSpanRescuer
+    rescue = VerifiedAnchorSpanRescuer(
+        CountingLine(0.1, 0.5, 0.9, 0.5),
+        min_normal_ratio=0.40,
+        immediate_min_normal_ratio=0.68,
+        min_side_distance_ratio=0.006,
+        immediate_min_side_distance_ratio=0.012,
+    )
+    assert rescue.update(7, (500, 460), 1000, 1000, 1) is None
+    result = rescue.update(7, (500, 540), 1000, 1000, 2)
+    assert result is not None and result[0] == "in"
+    assert rescue.verified_anchor_span_rescues == 1
+    assert rescue.post_confirm_closures == 0
+
+
+def test_v0541_post_confirm_closure_waits_for_later_destination_sample():
+    from app.counting import CountingLine, VerifiedAnchorSpanRescuer
+    rescue = VerifiedAnchorSpanRescuer(
+        CountingLine(0.1, 0.5, 0.9, 0.5),
+        min_normal_ratio=0.35,
+        immediate_min_normal_ratio=0.95,
+        post_confirm_samples=2,
+    )
+    assert rescue.update(8, (480, 485), 1000, 1000, 10) is None
+    assert rescue.update(8, (500, 515), 1000, 1000, 11) is None
+    result = rescue.update(8, (515, 535), 1000, 1000, 12)
+    assert result is not None and result[0] == "in"
+    assert rescue.post_confirm_closures == 1
+
+
+def test_v0541_verified_anchor_span_rejects_line_parallel_motion():
+    from app.counting import CountingLine, VerifiedAnchorSpanRescuer
+    rescue = VerifiedAnchorSpanRescuer(
+        CountingLine(0.1, 0.5, 0.9, 0.5),
+        min_normal_ratio=0.60,
+    )
+    assert rescue.update(9, (100, 490), 1000, 1000, 1) is None
+    assert rescue.update(9, (900, 510), 1000, 1000, 2) is None
+    assert rescue.rejected_validation >= 1
+
+
+def test_v0541_verified_anchor_span_mark_counted_prevents_secondary_duplicate():
+    from app.counting import CountingLine, VerifiedAnchorSpanRescuer
+    rescue = VerifiedAnchorSpanRescuer(CountingLine(0.1, 0.5, 0.9, 0.5))
+    rescue.mark_counted(10, "in")
+    assert rescue.update(10, (500, 460), 1000, 1000, 1) is None
+    assert rescue.update(10, (500, 540), 1000, 1000, 2) is None

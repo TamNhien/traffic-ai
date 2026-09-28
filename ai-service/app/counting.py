@@ -280,6 +280,210 @@ class _TrackGateState:
 
 
 @dataclass(slots=True)
+class _AnchorSpanPending:
+    start: _GateSample
+    end: _GateSample
+    direction: str
+    crossing: Point
+    crossing_frame: float
+    destination_side: int
+    confirmations: int = 1
+
+
+@dataclass(slots=True)
+class _AnchorSpanState:
+    history: deque[_GateSample] = field(default_factory=lambda: deque(maxlen=64))
+    pending: _AnchorSpanPending | None = None
+    counted_directions: set[str] = field(default_factory=set)
+
+
+class VerifiedAnchorSpanRescuer:
+    """Precision-first secondary gate for benchmark-proven anchor spans.
+
+    V0.5.41 never loosens :class:`LineCrossingCounter`.  This helper only runs
+    after the primary gate returned no event.  A candidate must span both sides
+    of the *finite* gate with bounded jump, strong gate-normal motion and the
+    normal Road Zone corridor checks.  Very strong spans can close immediately;
+    otherwise a second destination-side observation is required.  The latter is
+    the Post-Confirm Closure path.
+    """
+
+    def __init__(
+        self,
+        line: CountingLine,
+        road_zone: RoadZone | None = None,
+        *,
+        enabled: bool = True,
+        history_gap_frames: int = 12,
+        dead_band_ratio: float = 0.006,
+        segment_margin: float = 0.0,
+        min_normal_ratio: float = 0.40,
+        immediate_min_normal_ratio: float = 0.68,
+        max_jump_ratio: float = 0.12,
+        min_side_distance_ratio: float = 0.006,
+        immediate_min_side_distance_ratio: float = 0.012,
+        road_margin_ratio: float = 0.010,
+        post_confirm_samples: int = 2,
+        post_confirm_max_gap_frames: int = 6,
+    ) -> None:
+        self.line = line
+        self.road_zone = road_zone
+        self.enabled = bool(enabled)
+        self.history_gap_frames = max(2, int(history_gap_frames))
+        self.dead_band_ratio = max(0.0, float(dead_band_ratio))
+        self.segment_margin = max(0.0, float(segment_margin))
+        self.min_normal_ratio = max(0.0, min(1.0, float(min_normal_ratio)))
+        self.immediate_min_normal_ratio = max(self.min_normal_ratio, min(1.0, float(immediate_min_normal_ratio)))
+        self.max_jump_ratio = max(0.01, float(max_jump_ratio))
+        self.min_side_distance_ratio = max(0.0, float(min_side_distance_ratio))
+        self.immediate_min_side_distance_ratio = max(self.min_side_distance_ratio, float(immediate_min_side_distance_ratio))
+        self.road_margin_ratio = max(0.0, float(road_margin_ratio))
+        self.post_confirm_samples = max(1, int(post_confirm_samples))
+        self.post_confirm_max_gap_frames = max(1, int(post_confirm_max_gap_frames))
+        self._tracks: dict[int, _AnchorSpanState] = {}
+        self.verified_candidates = 0
+        self.verified_anchor_span_rescues = 0
+        self.post_confirm_closures = 0
+        self.rejected_validation = 0
+        self._last_crossing_frame: dict[int, float] = {}
+
+    def _road_ok(self, start: _GateSample, end: _GateSample, crossing: Point, width: int, height: int) -> bool:
+        if self.road_zone is None:
+            return True
+        dx = end.point[0] - start.point[0]
+        dy = end.point[1] - start.point[1]
+        length = max(hypot(dx, dy), 1e-6)
+        ux, uy = dx / length, dy / length
+        probe = max(3.0, min(width, height) * 0.018)
+        before = (crossing[0] - ux * probe, crossing[1] - uy * probe)
+        after = (crossing[0] + ux * probe, crossing[1] + uy * probe)
+        return (
+            self.road_zone.contains_with_margin(start.point, width, height, self.road_margin_ratio)
+            and self.road_zone.contains_with_margin(end.point, width, height, self.road_margin_ratio)
+            and self.road_zone.contains(crossing, width, height)
+            and self.road_zone.contains(before, width, height)
+            and self.road_zone.contains(after, width, height)
+        )
+
+    def update(self, track_id: int, anchor: Point, width: int, height: int, frame_index: int) -> tuple[str, Point] | None:
+        if not self.enabled:
+            return None
+        tid = int(track_id)
+        a, b = self.line.denormalize(width, height)
+        scale = max(1.0, min(width, height))
+        distance = signed_distance(anchor, a, b)
+        dead_band = max(2.0, scale * self.dead_band_ratio)
+        side = 0 if abs(distance) <= dead_band else (1 if distance > 0 else -1)
+        sample = _GateSample(int(frame_index), anchor, distance, side)
+        state = self._tracks.setdefault(tid, _AnchorSpanState())
+        state.history.append(sample)
+
+        pending = state.pending
+        if pending is not None:
+            age = sample.frame_index - pending.end.frame_index
+            if age > self.post_confirm_max_gap_frames or side == -pending.destination_side:
+                state.pending = None
+            elif side == pending.destination_side:
+                # Count only distinct later observations. A near-line sample is
+                # enough here because the original span already proved geometry.
+                pending.confirmations += 1
+                if pending.confirmations >= self.post_confirm_samples:
+                    if pending.direction not in state.counted_directions:
+                        state.counted_directions.add(pending.direction)
+                        state.pending = None
+                        self.verified_anchor_span_rescues += 1
+                        self.post_confirm_closures += 1
+                        self._last_crossing_frame[tid] = pending.crossing_frame
+                        return pending.direction, pending.crossing
+                    state.pending = None
+
+        if side == 0:
+            return None
+        previous = None
+        for candidate in reversed(list(state.history)[:-1]):
+            gap = sample.frame_index - candidate.frame_index
+            if gap <= 0:
+                continue
+            if gap > self.history_gap_frames:
+                break
+            if candidate.side == -side:
+                previous = candidate
+                break
+        if previous is None:
+            return None
+        direction = "in" if previous.side < 0 < side else "out"
+        if direction in state.counted_directions:
+            return None
+        crossing = segment_crossing_point(previous.point, sample.point, a, b, segment_margin=self.segment_margin)
+        if crossing is None:
+            return None
+        dx = sample.point[0] - previous.point[0]
+        dy = sample.point[1] - previous.point[1]
+        move_len = max(hypot(dx, dy), 1e-6)
+        normal_ratio = abs(sample.distance - previous.distance) / move_len
+        jump_ratio = move_len / max(hypot(width, height), 1.0)
+        side_depth_ratio = min(abs(sample.distance), abs(previous.distance)) / scale
+        if (
+            normal_ratio < self.min_normal_ratio
+            or jump_ratio > self.max_jump_ratio
+            or side_depth_ratio < self.min_side_distance_ratio
+            or not self._road_ok(previous, sample, crossing, width, height)
+        ):
+            self.rejected_validation += 1
+            return None
+        crossing_frame = crossing_frame_between(previous, sample, crossing)
+        self.verified_candidates += 1
+
+        # An exceptionally clear two-sided span is self-confirming. This is not
+        # a global threshold reduction: it is a separate finite-segment audit
+        # gate with stricter normal-motion/side-depth/jump/road constraints.
+        if (
+            normal_ratio >= self.immediate_min_normal_ratio
+            and side_depth_ratio >= self.immediate_min_side_distance_ratio
+            and (sample.frame_index - previous.frame_index) <= 2
+        ):
+            state.counted_directions.add(direction)
+            state.pending = None
+            self.verified_anchor_span_rescues += 1
+            self._last_crossing_frame[tid] = crossing_frame
+            return direction, crossing
+
+        state.pending = _AnchorSpanPending(
+            start=previous, end=sample, direction=direction, crossing=crossing,
+            crossing_frame=crossing_frame, destination_side=side, confirmations=1,
+        )
+        return None
+
+    def crossing_frame_for(self, track_id: int) -> float | None:
+        return self._last_crossing_frame.get(int(track_id))
+
+    def mark_counted(self, track_id: int, direction: str) -> None:
+        state = self._tracks.setdefault(int(track_id), _AnchorSpanState())
+        state.counted_directions.add(str(direction))
+        state.pending = None
+
+    def merge_track(self, source_track_id: int, target_track_id: int) -> None:
+        source, target = int(source_track_id), int(target_track_id)
+        if source == target:
+            return
+        src = self._tracks.pop(source, None)
+        if src is None:
+            return
+        dst = self._tracks.get(target)
+        if dst is None:
+            self._tracks[target] = src
+        else:
+            history = list(dst.history) + list(src.history)
+            history.sort(key=lambda item: item.frame_index)
+            dst.history = deque(history[-64:], maxlen=64)
+            dst.counted_directions.update(src.counted_directions)
+            if dst.pending is None or (src.pending is not None and src.pending.end.frame_index > dst.pending.end.frame_index):
+                dst.pending = src.pending
+        if source in self._last_crossing_frame:
+            self._last_crossing_frame[target] = self._last_crossing_frame.pop(source)
+
+
+@dataclass(slots=True)
 class _HeavyRescueState:
     history: deque[_GateSample] = field(default_factory=lambda: deque(maxlen=128))
     counted_directions: set[str] = field(default_factory=set)

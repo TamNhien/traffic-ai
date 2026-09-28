@@ -392,138 +392,90 @@ def contextual_bicycle_near_margin_decision(
 
 
 
-class ContextTwoWheelEvidenceAccumulator:
-    """Keep a short, source-aware trail of bicycle-vs-motorcycle context.
-
-    V0.5.38 only compared the two context refiners on the exact crossing frame.
-    In dense traffic one source can see the bicycle frame/basket one frame while
-    the other source sees it a few frames later.  This accumulator preserves only
-    a very short pre-crossing window and keeps the source identity, allowing the
-    crossing decision to require *both independent models* without requiring them
-    to peak on the same source frame.
-    """
-
-    def __init__(self, history_frames: int = 18, max_observations: int = 64) -> None:
-        self.history_frames = max(4, int(history_frames))
-        self.max_observations = max(16, int(max_observations))
-        self._samples: dict[int, deque[tuple[int, str, float, float]]] = defaultdict(
-            lambda: deque(maxlen=self.max_observations)
-        )
-
-    def update(
-        self,
-        track_id: int,
-        frame_index: int,
-        source: str,
-        bicycle_confidence: float,
-        motorcycle_confidence: float,
-    ) -> None:
-        self._samples[int(track_id)].append((
-            int(frame_index),
-            str(source),
-            max(0.0, min(1.0, float(bicycle_confidence))),
-            max(0.0, min(1.0, float(motorcycle_confidence))),
-        ))
-
-    def recent(self, track_id: int, frame_index: int) -> list[tuple[int, str, float, float]]:
-        current = int(frame_index)
-        result: list[tuple[int, str, float, float]] = []
-        for observed_frame, source, bicycle, motorcycle in self._samples.get(int(track_id), ()):
-            age = current - int(observed_frame)
-            if age < 0 or age > self.history_frames:
-                continue
-            # Mild decay prevents an old weak guess from dominating the actual
-            # crossing frame while preserving evidence only a few frames apart.
-            decay = 0.985 ** age
-            result.append((
-                int(observed_frame), str(source),
-                float(bicycle) * decay, float(motorcycle) * decay,
-            ))
-        return result
-
-    def merge_track(self, source_track_id: int, target_track_id: int) -> None:
-        source = int(source_track_id)
-        target = int(target_track_id)
-        if source == target:
-            return
-        source_samples = list(self._samples.pop(source, ()))
-        if not source_samples:
-            return
-        merged = list(self._samples.get(target, ())) + source_samples
-        merged.sort(key=lambda item: item[0])
-        bucket = deque(maxlen=self.max_observations)
-        bucket.extend(merged[-self.max_observations :])
-        self._samples[target] = bucket
-
-
 def contextual_bicycle_cross_frame_decision(
     observations: list[tuple[int, str, float, float]],
     *,
     detector_confidence: float,
     max_motorcycle_confidence: float = 0.52,
-    min_bicycle_confidence: float = 0.08,
-    min_distinct_frames: int = 2,
+    min_source_confidence: float = 0.08,
+    min_frames: int = 2,
     min_sources: int = 2,
     min_source_win: float = 0.015,
-    max_motorcycle_veto: float = 0.10,
-    min_strongest_bicycle: float = 0.14,
+    motorcycle_veto: float = 0.10,
+    min_strongest: float = 0.14,
     dual_fused_confidence: float = 0.30,
     fused_margin: float = 0.015,
-) -> tuple[str, float] | None:
-    """Fuse context evidence from adjacent frames without lowering global class rules.
+) -> tuple[tuple[str, float] | None, dict]:
+    """V0.5.41 cross-frame bicycle decision with audit reason codes.
 
-    The fallback opens only for a weak primary motorcycle.  It requires bicycle
-    evidence on at least two distinct frames and from at least two independent
-    sources.  Per source we keep the observation with the best bicycle-vs-motor
-    margin; a material motorcycle win on either source vetoes the rescue.  This
-    targets the GT bicycle around 04:49 where `Bike ctx match` is non-zero but the
-    two refiners do not necessarily peak on the exact same frame.
+    Evidence may come from the two refiners on *different* pre-crossing frames.
+    The function is deliberately pure so benchmark traces can explain why a
+    decision was accepted/rejected without re-running either model.
     """
+    audit = {
+        "reason": "no_evidence", "accepted": False, "observations": len(observations),
+        "frames": 0, "sources": 0, "bike_fused": 0.0, "moto_fused": 0.0,
+    }
     if float(detector_confidence) > float(max_motorcycle_confidence):
-        return None
+        audit["reason"] = "primary_motorcycle_too_strong"
+        return None, audit
 
-    qualifying = [
-        (int(frame), str(source), max(0.0, min(1.0, float(bike))), max(0.0, min(1.0, float(moto))))
-        for frame, source, bike, moto in observations
-        if float(bike) >= float(min_bicycle_confidence)
-    ]
-    if not qualifying:
-        return None
-    if len({frame for frame, _source, _bike, _moto in qualifying}) < max(2, int(min_distinct_frames)):
-        return None
+    usable = []
+    for frame_index, source, bicycle_conf, motorcycle_conf in observations:
+        bike = max(0.0, min(1.0, float(bicycle_conf)))
+        moto = max(0.0, min(1.0, float(motorcycle_conf)))
+        if bike >= float(min_source_confidence):
+            usable.append((int(frame_index), str(source), bike, moto))
+    frame_ids = {item[0] for item in usable}
+    audit["frames"] = len(frame_ids)
+    if len(frame_ids) < max(2, int(min_frames)):
+        audit["reason"] = "insufficient_frames"
+        return None, audit
 
-    best_by_source: dict[str, tuple[float, float, int]] = {}
-    for frame, source, bike, moto in qualifying:
-        previous = best_by_source.get(source)
-        candidate_key = (bike - moto, bike, frame)
-        if previous is None or candidate_key > (previous[0] - previous[1], previous[0], previous[2]):
-            best_by_source[source] = (bike, moto, frame)
-
-    if len(best_by_source) < max(2, int(min_sources)):
-        return None
-
-    deltas = [bike - moto for bike, moto, _frame in best_by_source.values()]
-    if max(deltas) < float(min_source_win):
-        return None
-    if any((-delta) > float(max_motorcycle_veto) for delta in deltas):
-        return None
-
-    strongest = max(bike for bike, _moto, _frame in best_by_source.values())
-    if strongest < float(min_strongest_bicycle):
-        return None
-
+    best: dict[str, tuple[int, float, float]] = {}
+    for frame_index, source, bike, moto in usable:
+        prior = best.get(source)
+        # Prefer a larger bicycle-vs-motorcycle advantage, then stronger bike.
+        if prior is None or (bike - moto, bike) > (prior[1] - prior[2], prior[1]):
+            best[source] = (frame_index, bike, moto)
+    audit["sources"] = len(best)
+    audit["source_evidence"] = {
+        source: {"frame": frame, "bicycle": round(bike, 4), "motorcycle": round(moto, 4)}
+        for source, (frame, bike, moto) in sorted(best.items())
+    }
+    if len(best) < max(2, int(min_sources)):
+        audit["reason"] = "insufficient_sources"
+        return None, audit
+    if any((moto - bike) > float(motorcycle_veto) for _frame, bike, moto in best.values()):
+        audit["reason"] = "motorcycle_source_veto"
+        return None, audit
+    winners = [(frame, bike, moto) for frame, bike, moto in best.values() if bike >= moto + float(min_source_win)]
+    if len(winners) < max(2, int(min_sources)):
+        audit["reason"] = "source_win_missing"
+        return None, audit
+    strongest = max(bike for _frame, bike, _moto in winners)
+    audit["strongest_bicycle"] = round(strongest, 4)
+    if strongest < float(min_strongest):
+        audit["reason"] = "bicycle_evidence_too_weak"
+        return None, audit
     bike_miss = 1.0
     moto_miss = 1.0
-    for bike, moto, _frame in best_by_source.values():
+    for _frame, bike, moto in winners:
         bike_miss *= max(0.0, 1.0 - bike)
         moto_miss *= max(0.0, 1.0 - moto)
     bike_fused = 1.0 - bike_miss
     moto_fused = 1.0 - moto_miss
+    audit["bike_fused"] = round(bike_fused, 4)
+    audit["moto_fused"] = round(moto_fused, 4)
     if bike_fused < float(dual_fused_confidence):
-        return None
+        audit["reason"] = "fused_bicycle_too_weak"
+        return None, audit
     if bike_fused < moto_fused + float(fused_margin):
-        return None
-    return "bicycle", bike_fused
+        audit["reason"] = "fused_margin_reject"
+        return None, audit
+    audit["reason"] = "accepted"
+    audit["accepted"] = True
+    return ("bicycle", bike_fused), audit
 
 def contextual_bicycle_temporal_decision(
     observations: list[tuple[str, float]],
