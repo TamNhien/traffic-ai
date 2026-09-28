@@ -503,3 +503,28 @@ def test_v0541_cross_frame_bicycle_rejects_strong_primary_motorcycle():
     )
     assert decision is None
     assert audit["reason"] == "primary_motorcycle_too_strong"
+
+
+def test_v0543_xframe_priority_prefers_nearest_gate_candidate():
+    from app.classification import prioritize_bicycle_xframe_candidates
+
+    far_first_in_tracker_order = [
+        (0.060, 0.28, 91, (1.0, 1.0, 10.0, 10.0)),
+        (0.018, 0.49, 44, (2.0, 2.0, 12.0, 12.0)),
+        (0.031, 0.20, 55, (3.0, 3.0, 13.0, 13.0)),
+    ]
+    selected = prioritize_bicycle_xframe_candidates(far_first_in_tracker_order, 1)
+    assert [item[2] for item in selected] == [44]
+
+
+def test_v0543_xframe_priority_keeps_budget_and_deterministic_ties():
+    from app.classification import prioritize_bicycle_xframe_candidates
+
+    candidates = [
+        (0.020, 0.45, 9, (0.0, 0.0, 1.0, 1.0)),
+        (0.020, 0.30, 8, (0.0, 0.0, 1.0, 1.0)),
+        (0.020, 0.30, 7, (0.0, 0.0, 1.0, 1.0)),
+    ]
+    selected = prioritize_bicycle_xframe_candidates(candidates, 2)
+    assert [item[2] for item in selected] == [7, 8]
+    assert prioritize_bicycle_xframe_candidates(candidates, 0) == []

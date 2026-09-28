@@ -49,8 +49,11 @@ class PipelineState:
     bicycle_context_xframe_rescues: int = 0
     bicycle_context_xframe_audit_accepts: int = 0
     bicycle_context_xframe_audit_rejects: int = 0
+    bicycle_context_xframe_priority_scans: int = 0
     verified_anchor_span_rescues: int = 0
     post_confirm_closures: int = 0
+    post_confirm_jitter_holds: int = 0
+    road_edge_span_rescues: int = 0
     truck_class_rescues: int = 0
     bicycle_tracks_seen: int = 0
     truck_tracks_seen: int = 0
@@ -77,6 +80,7 @@ class PipelineState:
     bracket_confirm_rescues: int = 0
     rescue_validation_rejections: int = 0
     adaptive_cooldown_releases: int = 0
+    passage_cycle_rearms: int = 0
     crossing_signature_duplicates: int = 0
     two_wheel_signature_duplicates: int = 0
     two_wheel_spatial_signature_duplicates: int = 0

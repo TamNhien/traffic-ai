@@ -20,7 +20,7 @@ def test_root_metadata() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["name"] == "Traffic AI"
-    assert payload["version"] == "0.5.42"
+    assert payload["version"] == "0.5.43"
     assert payload["docs"] == "/docs"
     assert payload["health"] == "/api/health"
 
@@ -158,7 +158,7 @@ def test_benchmark_clone_compatibility_rejects_different_line() -> None:
 
 
 def test_backend_version_metadata() -> None:
-    assert app.version == "0.5.42"
+    assert app.version == "0.5.43"
 
 
 def test_v0531_startup_crossing_signature_guard_is_narrow() -> None:
@@ -179,7 +179,7 @@ def test_v0533_ground_truth_mark_update_schema() -> None:
 
 
 def test_v0533_version() -> None:
-    assert app.version == "0.5.42"
+    assert app.version == "0.5.43"
 
 
 def test_v0533_ground_truth_mark_update_keeps_timecode() -> None:
@@ -232,7 +232,7 @@ def test_v0538_two_wheel_ultra_spatial_signature_extends_only_ultra_close_second
         _two_wheel_ultra_spatial_signature_duplicate,
     )
 
-    # This pair is intentionally beyond V0.5.37 but inside the V0.5.42 ultra tail.
+    # This pair is intentionally beyond V0.5.37 but inside the V0.5.43 ultra tail.
     assert _two_wheel_spatial_signature_duplicate(0.90, 0.006, "rescued", "direct") is False
     assert _two_wheel_ultra_spatial_signature_duplicate(0.90, 0.006, "rescued", "direct") is True
     # Time may be wider only when space is extremely tight.

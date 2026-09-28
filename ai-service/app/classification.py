@@ -19,6 +19,24 @@ def vehicle_family(label: str) -> str:
     return value
 
 
+def prioritize_bicycle_xframe_candidates(
+    candidates: list[tuple[float, float, int, Rect]],
+    max_per_frame: int,
+) -> list[tuple[float, float, int, Rect]]:
+    """Return the bounded X-frame scan queue in precision-first order.
+
+    V0.5.43 keeps the existing GPU scan budget but removes ByteTrack iteration
+    order from the decision: the weak motorcycle nearest the finite counting
+    gate gets first chance to accumulate cross-frame bicycle evidence. Lower
+    detector confidence is the deterministic tie-break because it is the more
+    ambiguous motorcycle candidate; track id is the final stable tie-break.
+    """
+    budget = max(0, int(max_per_frame))
+    if budget <= 0 or not candidates:
+        return []
+    return sorted(candidates, key=lambda item: (float(item[0]), float(item[1]), int(item[2])))[:budget]
+
+
 def _area(rect: Rect) -> float:
     x1, y1, x2, y2 = rect
     return max(0.0, x2 - x1) * max(0.0, y2 - y1)

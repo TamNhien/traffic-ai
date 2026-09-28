@@ -296,6 +296,8 @@ class _AnchorSpanPending:
     crossing_frame: float
     destination_side: int
     confirmations: int = 1
+    opposite_observations: int = 0
+    road_edge_rescue: bool = False
 
 
 @dataclass(slots=True)
@@ -331,8 +333,10 @@ class VerifiedAnchorSpanRescuer:
         min_side_distance_ratio: float = 0.006,
         immediate_min_side_distance_ratio: float = 0.012,
         road_margin_ratio: float = 0.010,
+        road_corridor_margin_ratio: float = 0.006,
         post_confirm_samples: int = 2,
         post_confirm_max_gap_frames: int = 6,
+        post_confirm_opposite_samples: int = 2,
     ) -> None:
         self.line = line
         self.road_zone = road_zone
@@ -346,18 +350,22 @@ class VerifiedAnchorSpanRescuer:
         self.min_side_distance_ratio = max(0.0, float(min_side_distance_ratio))
         self.immediate_min_side_distance_ratio = max(self.min_side_distance_ratio, float(immediate_min_side_distance_ratio))
         self.road_margin_ratio = max(0.0, float(road_margin_ratio))
+        self.road_corridor_margin_ratio = max(0.0, float(road_corridor_margin_ratio))
         self.post_confirm_samples = max(1, int(post_confirm_samples))
         self.post_confirm_max_gap_frames = max(1, int(post_confirm_max_gap_frames))
+        self.post_confirm_opposite_samples = max(1, int(post_confirm_opposite_samples))
         self._tracks: dict[int, _AnchorSpanState] = {}
         self.verified_candidates = 0
         self.verified_anchor_span_rescues = 0
         self.post_confirm_closures = 0
+        self.post_confirm_jitter_holds = 0
+        self.road_edge_span_rescues = 0
         self.rejected_validation = 0
         self._last_crossing_frame: dict[int, float] = {}
 
-    def _road_ok(self, start: _GateSample, end: _GateSample, crossing: Point, width: int, height: int) -> bool:
+    def _road_ok(self, start: _GateSample, end: _GateSample, crossing: Point, width: int, height: int) -> tuple[bool, bool]:
         if self.road_zone is None:
-            return True
+            return True, False
         dx = end.point[0] - start.point[0]
         dy = end.point[1] - start.point[1]
         length = max(hypot(dx, dy), 1e-6)
@@ -365,13 +373,26 @@ class VerifiedAnchorSpanRescuer:
         probe = max(3.0, min(width, height) * 0.018)
         before = (crossing[0] - ux * probe, crossing[1] - uy * probe)
         after = (crossing[0] + ux * probe, crossing[1] + uy * probe)
-        return (
+        anchors_ok = (
             self.road_zone.contains_with_margin(start.point, width, height, self.road_margin_ratio)
             and self.road_zone.contains_with_margin(end.point, width, height, self.road_margin_ratio)
-            and self.road_zone.contains(crossing, width, height)
+        )
+        strict_corridor = (
+            self.road_zone.contains(crossing, width, height)
             and self.road_zone.contains(before, width, height)
             and self.road_zone.contains(after, width, height)
         )
+        if anchors_ok and strict_corridor:
+            return True, False
+        # V0.5.43: a verified finite-line span may survive a *tiny* Road Zone
+        # calibration edge error.  This does not loosen the primary counter: all
+        # three corridor probes still have to be inside the same small margin.
+        margin = self.road_corridor_margin_ratio
+        margin_corridor = margin > 0.0 and all(
+            self.road_zone.contains_with_margin(point, width, height, margin)
+            for point in (crossing, before, after)
+        )
+        return bool(anchors_ok and margin_corridor), bool(anchors_ok and margin_corridor and not strict_corridor)
 
     def update(self, track_id: int, anchor: Point, width: int, height: int, frame_index: int) -> tuple[str, Point] | None:
         if not self.enabled:
@@ -389,9 +410,22 @@ class VerifiedAnchorSpanRescuer:
         pending = state.pending
         if pending is not None:
             age = sample.frame_index - pending.end.frame_index
-            if age > self.post_confirm_max_gap_frames or side == -pending.destination_side:
+            if age > self.post_confirm_max_gap_frames:
                 state.pending = None
+            elif side == -pending.destination_side:
+                # V0.5.43 Post-Confirm Closure 8.6: one opposite-side sample can
+                # be box jitter immediately after a proven span.  Require a
+                # second distinct opposite observation before cancelling.  While
+                # this pending lifecycle is active, do not let the same jitter
+                # sample open a reverse crossing candidate in the code below.
+                pending.opposite_observations += 1
+                if pending.opposite_observations >= self.post_confirm_opposite_samples:
+                    state.pending = None
+                else:
+                    self.post_confirm_jitter_holds += 1
+                return None
             elif side == pending.destination_side:
+                pending.opposite_observations = 0
                 # Count only distinct later observations. A near-line sample is
                 # enough here because the original span already proved geometry.
                 pending.confirmations += 1
@@ -401,9 +435,17 @@ class VerifiedAnchorSpanRescuer:
                         state.pending = None
                         self.verified_anchor_span_rescues += 1
                         self.post_confirm_closures += 1
+                        if pending.road_edge_rescue:
+                            self.road_edge_span_rescues += 1
                         self._last_crossing_frame[tid] = pending.crossing_frame
                         return pending.direction, pending.crossing
                     state.pending = None
+                return None
+            else:
+                # Neutral/dead-band observations neither confirm nor invalidate
+                # a geometry-proven pending span. Keep waiting without opening a
+                # second candidate from the same sample.
+                return None
 
         if side == 0:
             return None
@@ -431,11 +473,12 @@ class VerifiedAnchorSpanRescuer:
         normal_ratio = abs(sample.distance - previous.distance) / move_len
         jump_ratio = move_len / max(hypot(width, height), 1.0)
         side_depth_ratio = min(abs(sample.distance), abs(previous.distance)) / scale
+        road_ok, road_edge_rescue = self._road_ok(previous, sample, crossing, width, height)
         if (
             normal_ratio < self.min_normal_ratio
             or jump_ratio > self.max_jump_ratio
             or side_depth_ratio < self.min_side_distance_ratio
-            or not self._road_ok(previous, sample, crossing, width, height)
+            or not road_ok
         ):
             self.rejected_validation += 1
             return None
@@ -453,12 +496,15 @@ class VerifiedAnchorSpanRescuer:
             state.counted_directions.add(direction)
             state.pending = None
             self.verified_anchor_span_rescues += 1
+            if road_edge_rescue:
+                self.road_edge_span_rescues += 1
             self._last_crossing_frame[tid] = crossing_frame
             return direction, crossing
 
         state.pending = _AnchorSpanPending(
             start=previous, end=sample, direction=direction, crossing=crossing,
             crossing_frame=crossing_frame, destination_side=side, confirmations=1,
+            road_edge_rescue=road_edge_rescue,
         )
         return None
 
@@ -906,6 +952,7 @@ class LineCrossingCounter:
         self.origin_rescues = 0
         self.rejected_rescue_validation = 0
         self.adaptive_cooldown_releases = 0
+        self.passage_cycle_rearms = 0
         self._last_crossing_point: dict[int, Point] = {}
         self._last_crossing_frame: dict[int, float] = {}
 
@@ -954,6 +1001,23 @@ class LineCrossingCounter:
                 state.armed = True
                 state.history = deque(list(state.history)[-5:], maxlen=48)
             return None
+
+        # V0.5.43 passage semantics: counted_directions belongs to one passage
+        # cycle, not the lifetime of a ByteTrack ID.  After the vehicle has
+        # moved materially away from the gate and the cooldown (or adaptive
+        # far-away release) is satisfied, a later loop may legitimately cross
+        # the same direction again and must be counted as another passage.
+        if state.counted_directions and state.last_count_frame > -10_000 and abs(distance) >= rearm_distance:
+            elapsed = sample.frame_index - state.last_count_frame
+            release_distance = scale * self.cooldown_release_ratio
+            far_release = (
+                self.adaptive_cooldown
+                and release_distance > 0.0
+                and state.max_abs_distance_since_count >= release_distance
+            )
+            if elapsed >= self.crossing_cooldown_frames or far_release:
+                state.counted_directions.clear()
+                self.passage_cycle_rearms += 1
 
         state.history.append(sample)
         if sample.frame_index <= self.startup_grace_frames:

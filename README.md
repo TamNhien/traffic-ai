@@ -1,3 +1,29 @@
+# Traffic AI V0.5.43 — Crossing Closure 8.6 + Passage Re-arm + X-Frame Priority
+
+V0.5.43 tiếp tục trực tiếp từ benchmark V0.5.42 (GT 149 / AI 153 / khớp 135 / lọt 14 / dư 18 / F1 89.4%). Bản này giữ threshold detector/class toàn cục, tập trung vào các failure mode đã nhìn thấy trong benchmark và ảnh `camera_1(20260928-081907).rar`.
+
+- **Post-Confirm Closure 8.6:** pending Verified Anchor Span không bị hủy bởi đúng một sample bật ngược phía do box jitter; phải có 2 observation ngược liên tiếp mới đóng pending.
+- **Anchor Road-edge Closure:** chỉ nhánh Verified Anchor Span được phép dùng corridor margin rất nhỏ 0.006 quanh Road Zone; primary gate vẫn strict.
+- **Passage Cycle Re-arm:** `counted_directions` không còn khóa cả vòng đời track. Sau khi xe đã đi xa và cooldown/adaptive release hợp lệ, cùng canonical ID có thể quay vòng và cắt cùng hướng lần nữa — đúng semantics “lượt cắt vạch”.
+- **Cross-Frame Bicycle Priority:** giữ nguyên budget scan nhưng ưu tiên weak-motorcycle gần vạch nhất thay vì phụ thuộc thứ tự ByteTrack, giúp case bicycle 04:49 có cơ hội tích lũy trail đúng track.
+- **Dashboard auto-height:** panel Camera không còn bị kéo cao bằng cột telemetry; bỏ hard-code `V0.5.41` trong hướng dẫn sửa GT.
+- **Version/database:** `VERSION = 0.5.43`, Alembic `0057_cross_closure_v0543`, `schema_version = 0.5.43`; migration chỉ cập nhật version marker, không xóa dữ liệu.
+
+> Hai sai class benchmark (04:49 Xe đạp→Xe máy và 10:41 Ô tô→Xe tải) vẫn được giữ trong audit. V0.5.43 không hạ threshold class toàn cục và không ép van thành ô tô bằng rule ảnh đơn, để tránh làm giảm class accuracy 98.5%.
+
+## Kiểm thử V0.5.43
+
+- Python compile: PASS.
+- AI Service: **159/159** unit tests PASS, gồm Post-Confirm jitter hold/cancel, tiny Road-edge closure, passage-cycle re-arm và X-frame priority ordering/budget.
+- Backend: **30/30** unit tests PASS bằng SQLite test override.
+- Tổng Python unit tests: **189/189** PASS.
+- Static PowerShell contract audit: **663/663** marker map trực tiếp PASS + các marker loop/dynamic được kiểm tra riêng.
+- Alembic: single head `0057_cross_closure_v0543`, không có missing parent, revision ID đều <= 32 ký tự.
+- JSON/YAML source config parse: PASS.
+- Sandbox không có PowerShell Windows, Docker Desktop và Node 26 dependency cache; vì vậy `scripts/test.ps1`, Docker full-suite và Vite production build vẫn cần máy Windows đích xác nhận.
+
+---
+
 # Traffic AI V0.5.42 — Full-Source Contract Closure + Compact Telemetry Compatibility
 
 V0.5.42 là bản hotfix tăng version từ V0.5.41 theo policy phát hành mới: **mỗi lần fix phải tăng version**. Bản này không nới threshold AI; mục tiêu là đóng các false-fail contract lịch sử sau khi Dashboard được rút gọn và rà toàn bộ full source trước khi đóng gói.

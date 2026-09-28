@@ -613,3 +613,71 @@ def test_v0541_verified_anchor_span_mark_counted_prevents_secondary_duplicate():
     rescue.mark_counted(10, "in")
     assert rescue.update(10, (500, 460), 1000, 1000, 1) is None
     assert rescue.update(10, (500, 540), 1000, 1000, 2) is None
+
+
+def test_v0543_post_confirm_tolerates_one_opposite_jitter_sample():
+    from app.counting import CountingLine, VerifiedAnchorSpanRescuer
+    rescue = VerifiedAnchorSpanRescuer(
+        CountingLine(0.1, 0.5, 0.9, 0.5),
+        min_normal_ratio=0.35, immediate_min_normal_ratio=0.95,
+        post_confirm_samples=2, post_confirm_opposite_samples=2,
+    )
+    assert rescue.update(4301, (480, 485), 1000, 1000, 10) is None
+    assert rescue.update(4301, (500, 515), 1000, 1000, 11) is None
+    # One tracker-box bounce must not cancel a geometry-proven pending span.
+    assert rescue.update(4301, (500, 484), 1000, 1000, 12) is None
+    result = rescue.update(4301, (500, 535), 1000, 1000, 13)
+    assert result is not None and result[0] == "in"
+    assert rescue.post_confirm_jitter_holds == 1
+    assert rescue.post_confirm_closures == 1
+
+
+def test_v0543_post_confirm_still_rejects_sustained_opposite_return():
+    from app.counting import CountingLine, VerifiedAnchorSpanRescuer
+    rescue = VerifiedAnchorSpanRescuer(
+        CountingLine(0.1, 0.5, 0.9, 0.5),
+        min_normal_ratio=0.35, immediate_min_normal_ratio=0.95,
+        post_confirm_samples=2, post_confirm_opposite_samples=2,
+    )
+    assert rescue.update(4302, (480, 485), 1000, 1000, 10) is None
+    assert rescue.update(4302, (500, 515), 1000, 1000, 11) is None
+    assert rescue.update(4302, (500, 484), 1000, 1000, 12) is None
+    assert rescue.update(4302, (500, 480), 1000, 1000, 13) is None
+    assert rescue.post_confirm_jitter_holds == 1
+    assert rescue.post_confirm_closures == 0
+
+
+def test_v0543_anchor_span_allows_tiny_road_corridor_calibration_edge_only():
+    from app.counting import CountingLine, RoadZone, VerifiedAnchorSpanRescuer
+    # Road polygon ends at x=0.50. Crossing at x=0.504 is outside strict ROI but
+    # inside the dedicated 0.006 secondary-rescue margin.
+    zone = RoadZone(0.10, 0.0, 0.50, 0.0, 0.50, 1.0, 0.10, 1.0)
+    rescue = VerifiedAnchorSpanRescuer(
+        CountingLine(0.1, 0.5, 0.9, 0.5), road_zone=zone,
+        road_margin_ratio=0.010, road_corridor_margin_ratio=0.006,
+        min_normal_ratio=0.40, immediate_min_normal_ratio=0.68,
+    )
+    assert rescue.update(4303, (504, 480), 1000, 1000, 1) is None
+    result = rescue.update(4303, (504, 540), 1000, 1000, 2)
+    assert result is not None and result[0] == "in"
+    assert rescue.road_edge_span_rescues == 1
+
+
+def test_v0543_same_track_can_count_same_direction_on_a_later_passage_cycle():
+    counter = LineCrossingCounter(
+        CountingLine(0.1, 0.5, 0.9, 0.5),
+        dead_band_ratio=0.01, rearm_distance_ratio=0.10,
+        crossing_cooldown_frames=5, startup_grace_frames=0,
+    )
+    assert counter.update(4304, (50, 20), 100, 100, 10) is None
+    assert counter.update(4304, (50, 80), 100, 100, 11) == "in"
+    assert counter.update(4304, (50, 90), 100, 100, 12) is None
+    # Keep the same canonical ID alive beyond cooldown while well away.
+    assert counter.update(4304, (50, 90), 100, 100, 16) is None
+    # A genuine loop crosses OUT, then later IN again under the same track ID.
+    assert counter.update(4304, (50, 20), 100, 100, 17) == "out"
+    assert counter.update(4304, (50, 10), 100, 100, 23) is None
+    assert counter.update(4304, (50, 80), 100, 100, 24) == "in"
+    assert counter.in_count == 2
+    assert counter.out_count == 1
+    assert counter.passage_cycle_rearms >= 2

@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
   [switch]$SkipDockerBuild
 )
@@ -323,18 +323,18 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.42") { throw "VERSION phải là 0.5.42, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0056_contract_closure_v0542.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0056_contract_closure_v0542.py." }
+  if ($version -ne "0.5.43") { throw "VERSION phải là 0.5.43, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0057_cross_closure_v0543.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0057_cross_closure_v0543.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0056_contract_closure_v0542"' -or $migrationText -notmatch 'down_revision = "0055_span_recovery_v0541"' -or $migrationText -notmatch "value='0.5.42'") {
-    throw "Migration 0056_contract_closure_v0542 không đúng contract V0.5.42."
+  if ($migrationText -notmatch 'revision = "0057_cross_closure_v0543"' -or $migrationText -notmatch 'down_revision = "0056_contract_closure_v0542"' -or $migrationText -notmatch "value='0.5.43'") {
+    throw "Migration 0057_cross_closure_v0543 không đúng contract V0.5.43."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
 
 function Assert-AlembicRevisionSafetyContract {
-  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.42" -ForegroundColor Cyan
+  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.43" -ForegroundColor Cyan
   $versionsDir = Join-Path $root "backend\alembic\versions"
   $bad = @()
   Get-ChildItem $versionsDir -Filter "*.py" | ForEach-Object {
@@ -358,7 +358,7 @@ function Assert-AlembicRevisionSafetyContract {
   if ($v17 -notmatch 'revision = "0017_ai_test_dep_v053"') {
     throw "Migration V0.5.3 chưa dùng revision ID rút gọn an toàn."
   }
-  Write-Host "[OK] Alembic revision-length safety V0.5.42" -ForegroundColor Green
+  Write-Host "[OK] Alembic revision-length safety V0.5.43" -ForegroundColor Green
 }
 
 
@@ -1401,7 +1401,7 @@ function Assert-FullSourceContractClosureV0542Contract {
   $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
   $styles = Get-Content (Join-Path $root "frontend\src\styles.css") -Raw -Encoding UTF8
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.42") { throw "V0.5.42 closure contract: VERSION không đúng." }
+  if ([version]$version -lt [version]"0.5.42") { throw "V0.5.42 closure contract yêu cầu source >= 0.5.42." }
   if ($worker -notmatch 'detections_current_frame' -or $worker -notmatch 'road_tracks_current_frame' -or $worker -notmatch 'ROI \{self\.detection_roi_mode\.upper\(\)\}') {
     throw "V0.5.42 làm mất detector/road telemetry V0.5.14."
   }
@@ -1418,6 +1418,27 @@ function Assert-FullSourceContractClosureV0542Contract {
     throw "V0.5.42 làm mất bố cục full-width desktop."
   }
   Write-Host "[OK] Full-source Contract Closure + Compact Telemetry Compatibility V0.5.42" -ForegroundColor Green
+}
+
+
+function Assert-CrossingClosureV0543Contract {
+  Write-Host "`n[Traffic AI] Crossing Closure 8.6 + Passage Re-arm + X-Frame Priority V0.5.43" -ForegroundColor Cyan
+  $counting = Get-Content (Join-Path $root "ai-service\app\counting.py") -Raw -Encoding UTF8
+  $classification = Get-Content (Join-Path $root "ai-service\app\classification.py") -Raw -Encoding UTF8
+  $worker = Get-Content (Join-Path $root "ai-service\app\worker.py") -Raw -Encoding UTF8
+  $runtime = Get-Content (Join-Path $root "ai-service\app\runtime.py") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  $styles = Get-Content (Join-Path $root "frontend\src\styles.css") -Raw -Encoding UTF8
+  $tests = Get-Content (Join-Path $root "ai-service\tests\test_counting.py") -Raw -Encoding UTF8
+  $classificationTests = Get-Content (Join-Path $root "ai-service\tests\test_classification.py") -Raw -Encoding UTF8
+  $envExample = Get-Content (Join-Path $root ".env.example") -Raw -Encoding UTF8
+  if ($counting -notmatch 'post_confirm_jitter_holds' -or $counting -notmatch 'post_confirm_opposite_samples' -or $counting -notmatch 'road_corridor_margin_ratio') { throw "V0.5.43 thiếu Post-Confirm Closure 8.6/road-edge closure." }
+  if ($counting -notmatch 'passage_cycle_rearms' -or $tests -notmatch 'test_v0543_same_track_can_count_same_direction_on_a_later_passage_cycle') { throw "V0.5.43 thiếu passage re-arm theo semantics lượt cắt vạch." }
+  if ($classification -notmatch 'def prioritize_bicycle_xframe_candidates' -or $worker -notmatch 'prioritize_bicycle_xframe_candidates' -or $runtime -notmatch 'bicycle_context_xframe_priority_scans' -or $classificationTests -notmatch 'test_v0543_xframe_priority_prefers_nearest_gate_candidate') { throw "V0.5.43 thiếu X-Frame priority scheduler." }
+  if ($frontend -notmatch 'Bike X-prio' -or $frontend -notmatch 'Passage re-arm' -or $frontend -match '<strong>V0\.5\.41:</strong>') { throw "Frontend V0.5.43 thiếu telemetry mới hoặc còn hard-code changelog GT cũ." }
+  if ($styles -notmatch 'content-grid\{[^}]*align-items:start' -or $styles -notmatch 'content-grid>.panel\{align-self:start') { throw "Frontend V0.5.43 chưa đóng khoảng trống Camera Preview do grid stretch." }
+  if ($envExample -notmatch 'AI_GATE_POST_CONFIRM_OPPOSITE_SAMPLES=2' -or $envExample -notmatch 'AI_GATE_ANCHOR_SPAN_CORRIDOR_MARGIN=0.006') { throw "V0.5.43 thiếu runtime defaults." }
+  Write-Host "[OK] Crossing Closure 8.6 + Passage Re-arm + X-Frame Priority V0.5.43" -ForegroundColor Green
 }
 
 function Invoke-Step([string]$Title, [scriptblock]$Action) {
@@ -1479,6 +1500,7 @@ Assert-CompetitiveBikeSpatialSignatureV0537Contract
 Assert-NearMarginUltraSpatialV0538Contract
 Assert-VerifiedAnchorSpanBikeAuditV0541Contract
 Assert-FullSourceContractClosureV0542Contract
+Assert-CrossingClosureV0543Contract
 Assert-LegacySemanticCompatibilityV0523R1
 
 Write-Host "`n[Traffic AI] Road Zone + Frame Browser V0.5.11" -ForegroundColor Cyan

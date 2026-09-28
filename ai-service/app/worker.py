@@ -25,6 +25,7 @@ from app.classification import (
     contextual_bicycle_competitive_decision,
     contextual_bicycle_near_margin_decision,
     contextual_bicycle_cross_frame_decision,
+    prioritize_bicycle_xframe_candidates,
     select_contextual_bicycle_refinement,
     select_contextual_two_wheel_refinement,
     select_target_refinement,
@@ -1083,7 +1084,7 @@ class PipelineWorker(threading.Thread):
                 pending_crossing_events: list[tuple[int, str, str, float, int, float | None, str | None, float | None, float | None]] = []
                 refines_used_this_frame = 0
                 bicycle_context_used_this_frame = 0
-                bicycle_xframe_used_this_frame = 0
+                bicycle_xframe_scan_candidates = []
                 gate_trace_tracks = []
                 self._bicycle_xframe_audit_this_frame = []
                 boxes = result.boxes
@@ -1272,15 +1273,16 @@ class PipelineWorker(threading.Thread):
                             and display_label == "motorcycle"
                             and confidence_f <= self.bicycle_context_xframe_max_motor_conf
                             and gate_distance_ratio <= self.bicycle_context_xframe_gate_distance_ratio
-                            and bicycle_xframe_used_this_frame < self.bicycle_context_xframe_max_per_frame
                         ):
                             last_scan = self._bicycle_context_xframe_last_scan.get(int(track_id), -100000)
                             if frame_index - last_scan >= self.bicycle_context_xframe_interval:
-                                self._scan_bicycle_xframe_context(
-                                    track_id, frame_index, frame, rect, device, use_half
-                                )
-                                self._bicycle_context_xframe_last_scan[int(track_id)] = int(frame_index)
-                                bicycle_xframe_used_this_frame += 1
+                                # V0.5.43: do not let ByteTrack iteration order spend
+                                # the single pre-scan slot on a farther motorcycle.
+                                # Scan the closest-to-gate weak candidate after all
+                                # tracks have been ranked for this source frame.
+                                bicycle_xframe_scan_candidates.append((
+                                    float(gate_distance_ratio), float(confidence_f), int(track_id), rect
+                                ))
 
                         heavy_center_candidate = None
                         if heavy_rescuer is not None and vehicle_family(display_label) == "four-wheel":
@@ -1349,8 +1351,11 @@ class PipelineWorker(threading.Thread):
                         self.state.bracket_confirm_rescues = counter.bracket_confirm_rescues
                         self.state.rescue_validation_rejections = counter.rejected_rescue_validation
                         self.state.adaptive_cooldown_releases = counter.adaptive_cooldown_releases
+                        self.state.passage_cycle_rearms = counter.passage_cycle_rearms
                         self.state.verified_anchor_span_rescues = anchor_span_rescuer.verified_anchor_span_rescues
                         self.state.post_confirm_closures = anchor_span_rescuer.post_confirm_closures
+                        self.state.post_confirm_jitter_holds = anchor_span_rescuer.post_confirm_jitter_holds
+                        self.state.road_edge_span_rescues = anchor_span_rescuer.road_edge_span_rescues
                         guard_status = self._human_guard_policy.status(track_id)
                         overlay_label = "PERSON-GUARD" if guard_status == "rejected" else ("HUMAN?" if guard_status == "pending" else display_label)
                         self._draw_detection(
@@ -1525,6 +1530,21 @@ class PipelineWorker(threading.Thread):
                         label = str(result.names[int(cls_id)])
                         self._draw_raw_detection(cv2, frame, rect, label, float(confidence))
 
+                # V0.5.43 Cross-Frame Bicycle Finalization: rank weak motorcycle
+                # candidates by finite-gate proximity first, then confidence.  The
+                # scan budget is unchanged, so GPU cost stays bounded while the
+                # vehicle that is actually about to cross gets the context trail.
+                if self.bicycle_context_xframe_enabled and bicycle_xframe_scan_candidates:
+                    prioritized_xframe_scans = prioritize_bicycle_xframe_candidates(
+                        bicycle_xframe_scan_candidates, self.bicycle_context_xframe_max_per_frame
+                    )
+                    for _distance, _confidence, scan_track_id, scan_rect in prioritized_xframe_scans:
+                        self._scan_bicycle_xframe_context(
+                            scan_track_id, frame_index, frame, scan_rect, device, use_half
+                        )
+                        self._bicycle_context_xframe_last_scan[int(scan_track_id)] = int(frame_index)
+                        self.state.bicycle_context_xframe_priority_scans += 1
+
                 # Fail closed only for guard transactions that never receive a
                 # second semantic observation (for example a track disappears
                 # immediately after the line). Normal pending crossings resolve
@@ -1572,6 +1592,7 @@ class PipelineWorker(threading.Thread):
                         "bracket_confirm_rescues": counter.bracket_confirm_rescues,
                         "rescue_validation_rejections": counter.rejected_rescue_validation,
                         "adaptive_cooldown_releases": counter.adaptive_cooldown_releases,
+                        "passage_cycle_rearms": counter.passage_cycle_rearms,
                         "class_refine_checks": self.state.class_refine_checks,
                         "class_refine_target_matches": self.state.class_refine_target_matches,
                         "class_refine_target_rejects": self.state.class_refine_target_rejects,
@@ -1588,9 +1609,12 @@ class PipelineWorker(threading.Thread):
                         "bicycle_context_near_margin_rescues": self.state.bicycle_context_near_margin_rescues,
                         "bicycle_context_xframe_scans": self.state.bicycle_context_xframe_scans,
                         "bicycle_context_xframe_rescues": self.state.bicycle_context_xframe_rescues,
+                        "bicycle_context_xframe_priority_scans": self.state.bicycle_context_xframe_priority_scans,
                         "bicycle_xframe_decision_audit": self._bicycle_xframe_audit_this_frame,
                         "verified_anchor_span_rescues": self.state.verified_anchor_span_rescues,
                         "post_confirm_closures": self.state.post_confirm_closures,
+                        "post_confirm_jitter_holds": self.state.post_confirm_jitter_holds,
+                        "road_edge_span_rescues": self.state.road_edge_span_rescues,
                         "gate_tracks": gate_trace_tracks,
                         "truck_class_rescues": self.state.truck_class_rescues,
                         "bicycle_tracks_seen": self.state.bicycle_tracks_seen,
