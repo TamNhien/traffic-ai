@@ -298,6 +298,9 @@ class _AnchorSpanPending:
     confirmations: int = 1
     opposite_observations: int = 0
     road_edge_rescue: bool = False
+    normal_ratio: float = 0.0
+    side_depth_ratio: float = 0.0
+    same_direction_candidate: bool = False
 
 
 @dataclass(slots=True)
@@ -305,6 +308,7 @@ class _AnchorSpanState:
     history: deque[_GateSample] = field(default_factory=lambda: deque(maxlen=64))
     pending: _AnchorSpanPending | None = None
     counted_directions: set[str] = field(default_factory=set)
+    last_count_frame: int = -10_000
 
 
 class VerifiedAnchorSpanRescuer:
@@ -337,6 +341,9 @@ class VerifiedAnchorSpanRescuer:
         post_confirm_samples: int = 2,
         post_confirm_max_gap_frames: int = 6,
         post_confirm_opposite_samples: int = 2,
+        same_direction_min_frames: int = 16,
+        lost_finalize_min_normal_ratio: float = 0.55,
+        lost_finalize_min_side_distance_ratio: float = 0.014,
     ) -> None:
         self.line = line
         self.road_zone = road_zone
@@ -354,6 +361,9 @@ class VerifiedAnchorSpanRescuer:
         self.post_confirm_samples = max(1, int(post_confirm_samples))
         self.post_confirm_max_gap_frames = max(1, int(post_confirm_max_gap_frames))
         self.post_confirm_opposite_samples = max(1, int(post_confirm_opposite_samples))
+        self.same_direction_min_frames = max(1, int(same_direction_min_frames))
+        self.lost_finalize_min_normal_ratio = max(self.min_normal_ratio, min(1.0, float(lost_finalize_min_normal_ratio)))
+        self.lost_finalize_min_side_distance_ratio = max(self.min_side_distance_ratio, float(lost_finalize_min_side_distance_ratio))
         self._tracks: dict[int, _AnchorSpanState] = {}
         self.verified_candidates = 0
         self.verified_anchor_span_rescues = 0
@@ -361,7 +371,11 @@ class VerifiedAnchorSpanRescuer:
         self.post_confirm_jitter_holds = 0
         self.road_edge_span_rescues = 0
         self.rejected_validation = 0
+        self.same_direction_overrides = 0
+        self.cooldown_overrides = 0
+        self.lost_track_finalizations = 0
         self._last_crossing_frame: dict[int, float] = {}
+        self._override_qualified: set[int] = set()
 
     def _road_ok(self, start: _GateSample, end: _GateSample, crossing: Point, width: int, height: int) -> tuple[bool, bool]:
         if self.road_zone is None:
@@ -430,14 +444,18 @@ class VerifiedAnchorSpanRescuer:
                 # enough here because the original span already proved geometry.
                 pending.confirmations += 1
                 if pending.confirmations >= self.post_confirm_samples:
-                    if pending.direction not in state.counted_directions:
-                        state.counted_directions.add(pending.direction)
+                    if pending.direction not in state.counted_directions or pending.same_direction_candidate:
+                        state.counted_directions = {pending.direction}
                         state.pending = None
                         self.verified_anchor_span_rescues += 1
                         self.post_confirm_closures += 1
                         if pending.road_edge_rescue:
                             self.road_edge_span_rescues += 1
+                        state.last_count_frame = sample.frame_index
                         self._last_crossing_frame[tid] = pending.crossing_frame
+                        self._override_qualified.add(tid)
+                        if pending.same_direction_candidate:
+                            self.same_direction_overrides += 1
                         return pending.direction, pending.crossing
                     state.pending = None
                 return None
@@ -462,7 +480,8 @@ class VerifiedAnchorSpanRescuer:
         if previous is None:
             return None
         direction = "in" if previous.side < 0 < side else "out"
-        if direction in state.counted_directions:
+        same_direction_candidate = direction in state.counted_directions
+        if same_direction_candidate and sample.frame_index - state.last_count_frame < self.same_direction_min_frames:
             return None
         crossing = segment_crossing_point(previous.point, sample.point, a, b, segment_margin=self.segment_margin)
         if crossing is None:
@@ -489,12 +508,15 @@ class VerifiedAnchorSpanRescuer:
         # a global threshold reduction: it is a separate finite-segment audit
         # gate with stricter normal-motion/side-depth/jump/road constraints.
         if (
-            normal_ratio >= self.immediate_min_normal_ratio
+            not same_direction_candidate
+            and normal_ratio >= self.immediate_min_normal_ratio
             and side_depth_ratio >= self.immediate_min_side_distance_ratio
             and (sample.frame_index - previous.frame_index) <= 2
         ):
-            state.counted_directions.add(direction)
+            state.counted_directions = {direction}
+            state.last_count_frame = sample.frame_index
             state.pending = None
+            self._override_qualified.discard(tid)
             self.verified_anchor_span_rescues += 1
             if road_edge_rescue:
                 self.road_edge_span_rescues += 1
@@ -505,16 +527,65 @@ class VerifiedAnchorSpanRescuer:
             start=previous, end=sample, direction=direction, crossing=crossing,
             crossing_frame=crossing_frame, destination_side=side, confirmations=1,
             road_edge_rescue=road_edge_rescue,
+            normal_ratio=normal_ratio,
+            side_depth_ratio=side_depth_ratio,
+            same_direction_candidate=same_direction_candidate,
         )
         return None
+
+    def finalize_lost(self, track_id: int, frame_index: int) -> tuple[str, Point] | None:
+        """Close only a geometry-proven span when the tracker disappears.
+
+        V0.5.47 never invents a crossing from disappearance alone.  A pending
+        transaction exists only after a finite counting-line intersection passed
+        road, jump, normal-motion and side-depth validation.  Track-loss closure
+        additionally requires strong destination depth/normal motion so it can
+        safely stand in for the missing post-side sample.
+        """
+        tid = int(track_id)
+        state = self._tracks.get(tid)
+        pending = state.pending if state is not None else None
+        if pending is None:
+            return None
+        age = int(frame_index) - pending.end.frame_index
+        if age < 1 or age > self.post_confirm_max_gap_frames:
+            return None
+        if pending.normal_ratio < self.lost_finalize_min_normal_ratio:
+            return None
+        if pending.side_depth_ratio < self.lost_finalize_min_side_distance_ratio:
+            return None
+        state.pending = None
+        state.counted_directions = {pending.direction}
+        state.last_count_frame = pending.end.frame_index
+        self.verified_anchor_span_rescues += 1
+        self.lost_track_finalizations += 1
+        if pending.same_direction_candidate:
+            self.same_direction_overrides += 1
+        if pending.road_edge_rescue:
+            self.road_edge_span_rescues += 1
+        self._last_crossing_frame[tid] = pending.crossing_frame
+        self._override_qualified.add(tid)
+        return pending.direction, pending.crossing
+
+    def override_qualified_for(self, track_id: int) -> bool:
+        return int(track_id) in self._override_qualified
+
+    def consume_override_qualification(self, track_id: int) -> None:
+        self._override_qualified.discard(int(track_id))
+
+    def note_cooldown_override(self) -> None:
+        self.cooldown_overrides += 1
 
     def crossing_frame_for(self, track_id: int) -> float | None:
         return self._last_crossing_frame.get(int(track_id))
 
-    def mark_counted(self, track_id: int, direction: str) -> None:
+    def mark_counted(self, track_id: int, direction: str, frame_index: int | None = None) -> None:
         state = self._tracks.setdefault(int(track_id), _AnchorSpanState())
-        state.counted_directions.add(str(direction))
+        state.counted_directions = {str(direction)}
         state.pending = None
+        if frame_index is not None:
+            state.last_count_frame = max(state.last_count_frame, int(frame_index))
+        self._override_qualified.discard(int(track_id))
 
     def merge_track(self, source_track_id: int, target_track_id: int) -> None:
         source, target = int(source_track_id), int(target_track_id)
@@ -965,6 +1036,8 @@ class LineCrossingCounter:
         self.adaptive_cooldown_releases = 0
         self.passage_cycle_rearms = 0
         self.rejected_same_direction_cycle = 0
+        self.verified_same_direction_overrides = 0
+        self.verified_cooldown_overrides = 0
         self._last_crossing_point: dict[int, Point] = {}
         self._last_crossing_frame: dict[int, float] = {}
 
@@ -1342,6 +1415,7 @@ class LineCrossingCounter:
         *,
         mode: str = "rescued",
         crossing_frame: float | None = None,
+        verified_anchor_span: bool = False,
     ) -> bool:
         """Register a crossing proven by a stricter secondary gate.
 
@@ -1355,11 +1429,17 @@ class LineCrossingCounter:
         if direction not in {"in", "out"}:
             return False
         state = self._tracks.setdefault(tid, _TrackGateState())
-        if direction in state.counted_directions:
+        same_direction_blocked = direction in state.counted_directions
+        cooldown_blocked = int(frame_index) - state.last_count_frame < self.crossing_cooldown_frames
+        if same_direction_blocked and not verified_anchor_span:
             self.rejected_same_direction_cycle += 1
             return False
-        if int(frame_index) - state.last_count_frame < self.crossing_cooldown_frames:
+        if cooldown_blocked and not verified_anchor_span:
             return False
+        if verified_anchor_span and same_direction_blocked:
+            self.verified_same_direction_overrides += 1
+        if verified_anchor_span and cooldown_blocked:
+            self.verified_cooldown_overrides += 1
         state.counted_directions = {direction}
         state.armed = False
         state.last_count_frame = int(frame_index)

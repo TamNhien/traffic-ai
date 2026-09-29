@@ -54,6 +54,9 @@ class PipelineState:
     post_confirm_closures: int = 0
     post_confirm_jitter_holds: int = 0
     road_edge_span_rescues: int = 0
+    anchor_span_same_direction_overrides: int = 0
+    anchor_span_cooldown_overrides: int = 0
+    anchor_span_lost_finalizations: int = 0
     truck_class_rescues: int = 0
     bicycle_tracks_seen: int = 0
     truck_tracks_seen: int = 0

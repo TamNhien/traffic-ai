@@ -83,8 +83,12 @@ Set-EnvDefaultUpgrade "AI_STITCH_MAX_GAP" "18" "30"
 Set-EnvDefaultUpgrade "AI_STITCH_DISTANCE_RATIO" "0.085" "0.14"
 Set-EnvDefaultUpgrade "AI_REFINE_MODEL_NAME" "yolo26s.pt" "yolo26m.pt"
 Set-EnvDefaultUpgrade "AI_GATE_HISTORY_GAP" "30" "45"
-# V0.5.46: migrate the V0.5.44 default only; custom values remain untouched.
+# V0.5.47 keeps the V0.5.46 passage re-arm default; custom values remain untouched.
 Set-EnvDefaultUpgrade "AI_GATE_PASSAGE_REARM_MIN_FRAMES" "10" "16"
+# V0.5.47: evidence-gated Balanced Recall Recovery; only add missing keys.
+Ensure-EnvSetting "AI_GATE_ANCHOR_SPAN_SAME_DIRECTION_MIN_FRAMES" "16"
+Ensure-EnvSetting "AI_GATE_ANCHOR_SPAN_LOST_MIN_NORMAL_RATIO" "0.55"
+Ensure-EnvSetting "AI_GATE_ANCHOR_SPAN_LOST_MIN_SIDE_RATIO" "0.014"
 Set-EnvDefaultUpgrade "AI_GATE_MIN_NORMAL_RATIO" "0.12" "0.10"
 Set-EnvDefaultUpgrade "AI_GATE_ROI_MARGIN" "0.22" "0.16"
 Set-EnvDefaultUpgrade "AI_BICYCLE_CERTAINTY" "0.76" "0.80"
@@ -355,7 +359,7 @@ if (-not $dashboardOk -or -not $apiOk) {
 }
 
 Write-Host ""
-Write-Host "[OK] Traffic AI V0.5.46 đã khởi động." -ForegroundColor Green
+Write-Host "[OK] Traffic AI V0.5.47 đã khởi động." -ForegroundColor Green
 Write-Host "Dashboard : https://traffic-ai.test:8443"
 Write-Host "API Docs  : https://traffic-ai.test:8444/docs"
 $envNow = Get-Content $envPath -Raw -Encoding UTF8

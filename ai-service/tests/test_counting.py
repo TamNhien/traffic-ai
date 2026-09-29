@@ -783,3 +783,76 @@ def test_v0546_external_crossing_keeps_only_latest_passage_direction():
     assert counter.register_external_crossing(4602, "out", 30, (50.0, 50.0)) is True
     assert counter._tracks[4602].counted_directions == {"out"}
     assert counter.register_external_crossing(4602, "in", 40, (50.0, 50.0)) is True
+
+
+def test_v0547_verified_anchor_span_can_override_same_direction_only_after_post_confirm():
+    from app.counting import CountingLine, LineCrossingCounter, VerifiedAnchorSpanRescuer
+
+    line = CountingLine(0.1, 0.5, 0.9, 0.5)
+    counter = LineCrossingCounter(line, crossing_cooldown_frames=60)
+    rescue = VerifiedAnchorSpanRescuer(
+        line,
+        min_normal_ratio=0.40,
+        immediate_min_normal_ratio=0.95,
+        same_direction_min_frames=16,
+        post_confirm_samples=2,
+    )
+    assert counter.register_external_crossing(4701, "in", 10, (500.0, 500.0)) is True
+    rescue.mark_counted(4701, "in", 10)
+
+    assert rescue.update(4701, (450, 460), 1000, 1000, 30) is None
+    assert rescue.update(4701, (500, 540), 1000, 1000, 31) is None
+    candidate = rescue.update(4701, (510, 565), 1000, 1000, 32)
+    assert candidate is not None and candidate[0] == "in"
+    assert rescue.same_direction_overrides == 1
+    assert rescue.override_qualified_for(4701) is True
+
+    direction, crossing = candidate
+    assert counter.register_external_crossing(
+        4701, direction, 32, crossing, verified_anchor_span=True,
+        crossing_frame=rescue.crossing_frame_for(4701),
+    ) is True
+    assert counter.verified_same_direction_overrides == 1
+    assert counter.verified_cooldown_overrides == 1
+
+
+def test_v0547_unverified_external_crossing_cannot_bypass_precision_closure():
+    counter = LineCrossingCounter(
+        CountingLine(0.1, 0.5, 0.9, 0.5), crossing_cooldown_frames=60
+    )
+    assert counter.register_external_crossing(4702, "in", 10, (50.0, 50.0)) is True
+    assert counter.register_external_crossing(4702, "in", 32, (50.0, 50.0)) is False
+    assert counter.rejected_same_direction_cycle == 1
+    assert counter.verified_same_direction_overrides == 0
+    assert counter.verified_cooldown_overrides == 0
+
+
+def test_v0547_track_loss_finalizes_only_strong_geometry_proven_pending_span():
+    from app.counting import CountingLine, VerifiedAnchorSpanRescuer
+
+    rescue = VerifiedAnchorSpanRescuer(
+        CountingLine(0.1, 0.5, 0.9, 0.5),
+        min_normal_ratio=0.40,
+        immediate_min_normal_ratio=0.95,
+        lost_finalize_min_normal_ratio=0.55,
+        lost_finalize_min_side_distance_ratio=0.014,
+        post_confirm_max_gap_frames=6,
+    )
+    assert rescue.update(4703, (450, 460), 1000, 1000, 20) is None
+    assert rescue.update(4703, (500, 540), 1000, 1000, 21) is None
+    finalized = rescue.finalize_lost(4703, 22)
+    assert finalized is not None and finalized[0] == "in"
+    assert rescue.lost_track_finalizations == 1
+    assert rescue.override_qualified_for(4703) is True
+
+    weak = VerifiedAnchorSpanRescuer(
+        CountingLine(0.1, 0.5, 0.9, 0.5),
+        min_normal_ratio=0.40,
+        immediate_min_normal_ratio=0.95,
+        lost_finalize_min_normal_ratio=0.80,
+        lost_finalize_min_side_distance_ratio=0.014,
+    )
+    assert weak.update(4704, (400, 480), 1000, 1000, 20) is None
+    assert weak.update(4704, (500, 520), 1000, 1000, 21) is None
+    assert weak.finalize_lost(4704, 22) is None
+    assert weak.lost_track_finalizations == 0

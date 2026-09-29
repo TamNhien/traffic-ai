@@ -963,6 +963,9 @@ class PipelineWorker(threading.Thread):
                 road_margin_ratio=float(os.getenv("AI_GATE_ANCHOR_SPAN_ROAD_MARGIN_RATIO", "0.010")),
                 post_confirm_samples=int(os.getenv("AI_GATE_POST_CONFIRM_SAMPLES", "2")),
                 post_confirm_max_gap_frames=int(os.getenv("AI_GATE_POST_CONFIRM_MAX_GAP", "6")),
+                same_direction_min_frames=int(os.getenv("AI_GATE_ANCHOR_SPAN_SAME_DIRECTION_MIN_FRAMES", "16")),
+                lost_finalize_min_normal_ratio=float(os.getenv("AI_GATE_ANCHOR_SPAN_LOST_MIN_NORMAL_RATIO", "0.55")),
+                lost_finalize_min_side_distance_ratio=float(os.getenv("AI_GATE_ANCHOR_SPAN_LOST_MIN_SIDE_RATIO", "0.014")),
             )
 
             heavy_rescuer = HeavyVehicleCrossingRescuer(
@@ -1032,6 +1035,8 @@ class PipelineWorker(threading.Thread):
             self.state.gate_roi_enabled = self.gate_roi_enabled
             self.state.detection_roi_mode = self.detection_roi_mode
             loop_started = time.perf_counter()
+            previous_active_track_ids: set[int] = set()
+            last_track_event_meta: dict[int, tuple[str, float, int]] = {}
 
             while not self._stop_event.is_set():
                 ok, source_frame = cap.read()
@@ -1092,6 +1097,7 @@ class PipelineWorker(threading.Thread):
                 bicycle_xframe_scan_candidates = []
                 gate_trace_tracks = []
                 self._bicycle_xframe_audit_this_frame = []
+                active_track_ids_this_frame: set[int] = set()
                 boxes = result.boxes
                 self.state.detections_current_frame = int(len(boxes)) if boxes is not None else 0
                 self.state.active_tracks = 0
@@ -1162,6 +1168,7 @@ class PipelineWorker(threading.Thread):
                         if counter.road_zone is not None and counter.road_zone.contains(anchor, width, height):
                             self.state.road_tracks_current_frame += 1
                         self._seen_track_ids.add(track_id)
+                        active_track_ids_this_frame.add(int(track_id))
                         self._flow_calibrator.add(track_id, anchor, width, height, frame_index)
                         self._labels.update(track_id, current_label, confidence_f)
                         stable_label, class_certainty, class_hits = self._labels.stable_label(track_id, current_label)
@@ -1175,6 +1182,7 @@ class PipelineWorker(threading.Thread):
                         cached_class = self._class_override_for(track_id, frame_index, base_display_label)
                         if cached_class is not None:
                             display_label = cached_class[0]
+                        last_track_event_meta[int(track_id)] = (str(display_label), float(confidence_f), int(frame_index))
 
                         # V0.5.26 Target-aware Class Refiner 3.0. Heavy vehicles
                         # are rare enough to verify periodically even before they
@@ -1322,10 +1330,12 @@ class PipelineWorker(threading.Thread):
                                 if counter.register_external_crossing(
                                     track_id, span_direction, frame_index, span_point, mode="rescued",
                                     crossing_frame=anchor_span_rescuer.crossing_frame_for(track_id),
+                                    verified_anchor_span=anchor_span_rescuer.override_qualified_for(track_id),
                                 ):
+                                    anchor_span_rescuer.consume_override_qualification(track_id)
                                     direction = span_direction
                         else:
-                            anchor_span_rescuer.mark_counted(track_id, direction)
+                            anchor_span_rescuer.mark_counted(track_id, direction, frame_index)
                         if direction is None and heavy_center_candidate is not None:
                             heavy_direction, heavy_crossing_point = heavy_center_candidate
                             heavy_crossing_frame = heavy_rescuer.crossing_frame_for(track_id) if heavy_rescuer is not None else None
@@ -1349,7 +1359,7 @@ class PipelineWorker(threading.Thread):
                         if direction is not None:
                             # Keep the secondary gate aligned with every accepted
                             # crossing path, not only primary/anchor-span events.
-                            anchor_span_rescuer.mark_counted(track_id, direction)
+                            anchor_span_rescuer.mark_counted(track_id, direction, frame_index)
                         self.state.video_start_rescues = counter.origin_rescues
                         self.state.rejected_outside_road = counter.rejected_outside_road
                         self.state.fast_confirm_rescues = counter.fast_confirm_rescues
@@ -1363,6 +1373,9 @@ class PipelineWorker(threading.Thread):
                         self.state.post_confirm_closures = anchor_span_rescuer.post_confirm_closures
                         self.state.post_confirm_jitter_holds = anchor_span_rescuer.post_confirm_jitter_holds
                         self.state.road_edge_span_rescues = anchor_span_rescuer.road_edge_span_rescues
+                        self.state.anchor_span_same_direction_overrides = counter.verified_same_direction_overrides
+                        self.state.anchor_span_cooldown_overrides = counter.verified_cooldown_overrides
+                        self.state.anchor_span_lost_finalizations = anchor_span_rescuer.lost_track_finalizations
                         guard_status = self._human_guard_policy.status(track_id)
                         overlay_label = "PERSON-GUARD" if guard_status == "rejected" else ("HUMAN?" if guard_status == "pending" else display_label)
                         self._draw_detection(
@@ -1537,6 +1550,50 @@ class PipelineWorker(threading.Thread):
                         label = str(result.names[int(cls_id)])
                         self._draw_raw_detection(cv2, frame, rect, label, float(confidence))
 
+                # V0.5.47 Balanced Recall Recovery 9.3: if a canonical track
+                # disappears immediately after a fully verified finite anchor span,
+                # close that pending crossing instead of losing it. Disappearance
+                # alone is never evidence; finalize_lost() applies stronger normal
+                # motion + destination-depth requirements and the backend FP closure
+                # remains unchanged.
+                lost_track_ids = previous_active_track_ids - active_track_ids_this_frame
+                for lost_track_id in lost_track_ids:
+                    meta = last_track_event_meta.get(int(lost_track_id))
+                    if meta is None:
+                        continue
+                    lost_label, lost_confidence, last_seen_frame = meta
+                    if lost_label in TWO_WHEEL_LABELS and self._human_guard_policy.status(lost_track_id) in {"pending", "rejected"}:
+                        continue
+                    lost_candidate = anchor_span_rescuer.finalize_lost(lost_track_id, frame_index)
+                    if lost_candidate is None:
+                        continue
+                    lost_direction, lost_point = lost_candidate
+                    if not counter.register_external_crossing(
+                        lost_track_id, lost_direction, last_seen_frame, lost_point, mode="rescued",
+                        crossing_frame=anchor_span_rescuer.crossing_frame_for(lost_track_id),
+                        verified_anchor_span=True,
+                    ):
+                        continue
+                    anchor_span_rescuer.consume_override_qualification(lost_track_id)
+                    self._record_committed_crossing(lost_label, lost_direction, "rescued")
+                    selected_frame, corrected, clamped = select_event_crossing_frame(
+                        last_seen_frame, counter.crossing_frame_for(lost_track_id), "rescued",
+                        max_interpolated_shift_frames=max(1.0, self.cross_time_max_interp_seconds * (self.state.source_fps if self.state.source_fps > 0 else 25.0)),
+                        max_rescued_shift_frames=max(1.0, self.cross_time_max_rescue_seconds * (self.state.source_fps if self.state.source_fps > 0 else 25.0)),
+                    )
+                    if corrected:
+                        self.state.crossing_time_corrections += 1
+                    if clamped:
+                        self.state.crossing_time_clamps += 1
+                    event_frame = max(1, int(round(selected_frame)))
+                    source_time = ((selected_frame - 1.0) / self.state.source_fps) if self.state.source_fps > 0 else None
+                    pending_crossing_events.append((
+                        int(lost_track_id), str(lost_label), str(lost_direction), float(lost_confidence), event_frame,
+                        source_time, "rescued", lost_point[0] / width if width else None, lost_point[1] / height if height else None,
+                    ))
+                    crossing_this_frame = True
+                previous_active_track_ids = set(active_track_ids_this_frame)
+
                 # V0.5.43 Cross-Frame Bicycle Finalization: rank weak motorcycle
                 # candidates by finite-gate proximity first, then confidence.  The
                 # scan budget is unchanged, so GPU cost stays bounded while the
@@ -1624,6 +1681,9 @@ class PipelineWorker(threading.Thread):
                         "post_confirm_closures": self.state.post_confirm_closures,
                         "post_confirm_jitter_holds": self.state.post_confirm_jitter_holds,
                         "road_edge_span_rescues": self.state.road_edge_span_rescues,
+                        "anchor_span_same_direction_overrides": self.state.anchor_span_same_direction_overrides,
+                        "anchor_span_cooldown_overrides": self.state.anchor_span_cooldown_overrides,
+                        "anchor_span_lost_finalizations": self.state.anchor_span_lost_finalizations,
                         "gate_tracks": gate_trace_tracks,
                         "truck_class_rescues": self.state.truck_class_rescues,
                         "bicycle_tracks_seen": self.state.bicycle_tracks_seen,

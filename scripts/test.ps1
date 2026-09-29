@@ -323,18 +323,18 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.46") { throw "VERSION phải là 0.5.46, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0060_precision_closure_v0546.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0060_precision_closure_v0546.py." }
+  if ($version -ne "0.5.47") { throw "VERSION phải là 0.5.47, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0061_balanced_recall_v0547.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0061_balanced_recall_v0547.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0060_precision_closure_v0546"' -or $migrationText -notmatch 'down_revision = "0059_fp_closure_v0545"' -or $migrationText -notmatch "value='0.5.46'") {
-    throw "Migration 0060_precision_closure_v0546 không đúng contract V0.5.46."
+  if ($migrationText -notmatch 'revision = "0061_balanced_recall_v0547"' -or $migrationText -notmatch 'down_revision = "0060_precision_closure_v0546"' -or $migrationText -notmatch "value='0.5.47'") {
+    throw "Migration 0061_balanced_recall_v0547 không đúng contract V0.5.47."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
 
 function Assert-AlembicRevisionSafetyContract {
-  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.46" -ForegroundColor Cyan
+  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.47" -ForegroundColor Cyan
   $versionsDir = Join-Path $root "backend\alembic\versions"
   $bad = @()
   Get-ChildItem $versionsDir -Filter "*.py" | ForEach-Object {
@@ -358,7 +358,7 @@ function Assert-AlembicRevisionSafetyContract {
   if ($v17 -notmatch 'revision = "0017_ai_test_dep_v053"') {
     throw "Migration V0.5.3 chưa dùng revision ID rút gọn an toàn."
   }
-  Write-Host "[OK] Alembic revision-length safety V0.5.46" -ForegroundColor Green
+  Write-Host "[OK] Alembic revision-length safety V0.5.47" -ForegroundColor Green
 }
 
 
@@ -1506,6 +1506,26 @@ function Assert-PrecisionClosureV0546Contract {
 }
 
 
+
+function Assert-BalancedRecallRecoveryV0547Contract {
+  Write-Host "`n[Traffic AI] Balanced Recall Recovery 9.3 V0.5.47" -ForegroundColor Cyan
+  $counting = Get-Content (Join-Path $root "ai-service\app\counting.py") -Raw -Encoding UTF8
+  $worker = Get-Content (Join-Path $root "ai-service\app\worker.py") -Raw -Encoding UTF8
+  $runtime = Get-Content (Join-Path $root "ai-service\app\runtime.py") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  $css = Get-Content (Join-Path $root "frontend\src\styles.css") -Raw -Encoding UTF8
+  $envExample = Get-Content (Join-Path $root ".env.example") -Raw -Encoding UTF8
+  $aiTests = Get-Content (Join-Path $root "ai-service\tests\test_counting.py") -Raw -Encoding UTF8
+  if ($counting -notmatch 'finalize_lost' -or $counting -notmatch 'verified_anchor_span' -or $counting -notmatch 'verified_same_direction_overrides' -or $counting -notmatch 'verified_cooldown_overrides') { throw "AI V0.5.47 thiếu conditional Verified Anchor Span override/finalize." }
+  if ($worker -notmatch 'AI_GATE_ANCHOR_SPAN_SAME_DIRECTION_MIN_FRAMES' -or $worker -notmatch 'lost_track_ids' -or $worker -notmatch 'finalize_lost') { throw "Worker V0.5.47 thiếu track-loss pending finalization." }
+  if ($envExample -notmatch 'AI_GATE_ANCHOR_SPAN_SAME_DIRECTION_MIN_FRAMES=16' -or $envExample -notmatch 'AI_GATE_ANCHOR_SPAN_LOST_MIN_NORMAL_RATIO=0.55' -or $envExample -notmatch 'AI_GATE_ANCHOR_SPAN_LOST_MIN_SIDE_RATIO=0.014') { throw "Runtime defaults V0.5.47 chưa khóa evidence threshold." }
+  if ($runtime -notmatch 'anchor_span_same_direction_overrides' -or $runtime -notmatch 'anchor_span_cooldown_overrides' -or $runtime -notmatch 'anchor_span_lost_finalizations') { throw "Runtime V0.5.47 thiếu recovery telemetry." }
+  if ($frontend -notmatch 'Span cùng hướng \+' -or $frontend -notmatch 'Cooldown span \+' -or $frontend -notmatch 'Track mất finalize') { throw "Frontend V0.5.47 thiếu recovery telemetry." }
+  if ($css -notmatch 'grid-template-columns:repeat\(2,minmax\(0,1fr\)\)' -or $css -notmatch 'benchmark-report-panel.*scrollbar-gutter:stable') { throw "Frontend V0.5.47 chưa cân 50/50 hoặc chưa giữ scrollbar gutter." }
+  if ($aiTests -notmatch 'test_v0547_verified_anchor_span_can_override_same_direction_only_after_post_confirm' -or $aiTests -notmatch 'test_v0547_track_loss_finalizes_only_strong_geometry_proven_pending_span') { throw "AI V0.5.47 thiếu regression tests Balanced Recall Recovery 9.3." }
+  Write-Host "[OK] Balanced Recall Recovery 9.3 V0.5.47" -ForegroundColor Green
+}
+
 function Invoke-Step([string]$Title, [scriptblock]$Action) {
   Write-Host "`n[Traffic AI] $Title" -ForegroundColor Cyan
   & $Action
@@ -1569,6 +1589,7 @@ Assert-CrossingClosureV0543Contract
 Assert-BenchmarkReviewPassageSemanticsV0544Contract
 Assert-FalsePositiveClosureV0545Contract
 Assert-PrecisionClosureV0546Contract
+Assert-BalancedRecallRecoveryV0547Contract
 Assert-LegacySemanticCompatibilityV0523R1
 
 Write-Host "`n[Traffic AI] Road Zone + Frame Browser V0.5.11" -ForegroundColor Cyan
