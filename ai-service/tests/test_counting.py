@@ -856,3 +856,55 @@ def test_v0547_track_loss_finalizes_only_strong_geometry_proven_pending_span():
     assert weak.update(4704, (500, 520), 1000, 1000, 21) is None
     assert weak.finalize_lost(4704, 22) is None
     assert weak.lost_track_finalizations == 0
+
+
+def test_v0548_immediate_verified_span_can_transactionally_override_cooldown():
+    from app.counting import CountingLine, LineCrossingCounter, VerifiedAnchorSpanRescuer
+
+    line = CountingLine(0.1, 0.5, 0.9, 0.5)
+    counter = LineCrossingCounter(line, crossing_cooldown_frames=60)
+    rescue = VerifiedAnchorSpanRescuer(
+        line,
+        min_normal_ratio=0.40,
+        immediate_min_normal_ratio=0.68,
+        immediate_min_side_distance_ratio=0.012,
+    )
+
+    # Prior opposite-direction passage keeps the primary counter in cooldown,
+    # but does not make the new IN a same-direction repeat.
+    assert counter.register_external_crossing(4801, "out", 10, (500.0, 500.0)) is True
+    rescue.mark_counted(4801, "out", 10)
+
+    assert rescue.update(4801, (500.0, 430.0), 1000, 1000, 30) is None
+    candidate = rescue.update(4801, (500.0, 570.0), 1000, 1000, 31)
+    assert candidate is not None and candidate[0] == "in"
+    assert rescue.override_qualified_for(4801) is True
+    assert rescue.immediate_override_qualifications == 1
+
+    direction, crossing = candidate
+    assert counter.register_external_crossing(
+        4801,
+        direction,
+        31,
+        crossing,
+        mode="rescued",
+        crossing_frame=rescue.crossing_frame_for(4801),
+        verified_anchor_span=rescue.override_qualified_for(4801),
+    ) is True
+    assert counter.verified_cooldown_overrides == 1
+
+
+def test_v0548_immediate_override_stays_fail_closed_for_weak_span():
+    from app.counting import CountingLine, VerifiedAnchorSpanRescuer
+
+    rescue = VerifiedAnchorSpanRescuer(
+        CountingLine(0.1, 0.5, 0.9, 0.5),
+        min_normal_ratio=0.40,
+        immediate_min_normal_ratio=0.90,
+        immediate_min_side_distance_ratio=0.020,
+    )
+    assert rescue.update(4802, (420.0, 480.0), 1000, 1000, 10) is None
+    # Valid finite span, but too shallow/oblique for immediate self-confirmation.
+    assert rescue.update(4802, (580.0, 520.0), 1000, 1000, 11) is None
+    assert rescue.override_qualified_for(4802) is False
+    assert rescue.immediate_override_qualifications == 0

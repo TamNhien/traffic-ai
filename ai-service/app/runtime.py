@@ -57,6 +57,7 @@ class PipelineState:
     anchor_span_same_direction_overrides: int = 0
     anchor_span_cooldown_overrides: int = 0
     anchor_span_lost_finalizations: int = 0
+    anchor_span_immediate_overrides: int = 0
     truck_class_rescues: int = 0
     bicycle_tracks_seen: int = 0
     truck_tracks_seen: int = 0
@@ -92,6 +93,7 @@ class PipelineState:
     same_track_repeat_duplicates: int = 0
     direction_flip_duplicates: int = 0
     secondary_shadow_duplicates: int = 0
+    direct_shadow_duplicates: int = 0
     reverse_shadow_duplicates: int = 0
     same_direction_cycle_rejections: int = 0
     calibration_samples: int = 0

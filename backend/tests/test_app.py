@@ -20,7 +20,7 @@ def test_root_metadata() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["name"] == "Traffic AI"
-    assert payload["version"] == "0.5.47"
+    assert payload["version"] == "0.5.48"
     assert payload["docs"] == "/docs"
     assert payload["health"] == "/api/health"
 
@@ -158,7 +158,7 @@ def test_benchmark_clone_compatibility_rejects_different_line() -> None:
 
 
 def test_backend_version_metadata() -> None:
-    assert app.version == "0.5.47"
+    assert app.version == "0.5.48"
 
 
 def test_v0531_startup_crossing_signature_guard_is_narrow() -> None:
@@ -179,7 +179,7 @@ def test_v0533_ground_truth_mark_update_schema() -> None:
 
 
 def test_v0533_version() -> None:
-    assert app.version == "0.5.47"
+    assert app.version == "0.5.48"
 
 
 def test_v0533_ground_truth_mark_update_keeps_timecode() -> None:
@@ -381,3 +381,12 @@ def test_v0546_same_track_short_cycle_is_physical_not_spatial() -> None:
     })
     assert _same_track_cycle_duplicate_reason(impossible_repeat, existing) == "same-track-repeat-jitter"
     assert _same_track_cycle_duplicate_reason(later_passage, existing) is None
+
+
+def test_v0548_direct_ultra_shadow_closes_only_tiny_direct_direct_tail() -> None:
+    from app.api.routes import _direct_ultra_spatial_shadow_duplicate
+
+    assert _direct_ultra_spatial_shadow_duplicate(0.40, 0.005, "direct", "direct") is True
+    assert _direct_ultra_spatial_shadow_duplicate(0.43, 0.005, "direct", "direct") is False
+    assert _direct_ultra_spatial_shadow_duplicate(0.35, 0.007, "direct", "direct") is False
+    assert _direct_ultra_spatial_shadow_duplicate(0.30, 0.004, "rescued", "direct") is False

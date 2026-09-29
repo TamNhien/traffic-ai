@@ -374,6 +374,7 @@ class VerifiedAnchorSpanRescuer:
         self.same_direction_overrides = 0
         self.cooldown_overrides = 0
         self.lost_track_finalizations = 0
+        self.immediate_override_qualifications = 0
         self._last_crossing_frame: dict[int, float] = {}
         self._override_qualified: set[int] = set()
 
@@ -516,7 +517,15 @@ class VerifiedAnchorSpanRescuer:
             state.counted_directions = {direction}
             state.last_count_frame = sample.frame_index
             state.pending = None
-            self._override_qualified.discard(tid)
+            # V0.5.48 Benchmark Closure 9.4: an immediate span already proves
+            # the destination side with an exceptionally strong finite-segment
+            # bracket. Qualify only this strict path for the same conditional
+            # external registration used by post-confirm/lost-finalize. Without
+            # this transaction hand-off the rescuer could commit internally while
+            # the primary counter rejected the event on cooldown, permanently
+            # losing a benchmark-proven crossing.
+            self._override_qualified.add(tid)
+            self.immediate_override_qualifications += 1
             self.verified_anchor_span_rescues += 1
             if road_edge_rescue:
                 self.road_edge_span_rescues += 1

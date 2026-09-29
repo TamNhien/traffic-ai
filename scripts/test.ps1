@@ -323,18 +323,18 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.47") { throw "VERSION phải là 0.5.47, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0061_balanced_recall_v0547.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0061_balanced_recall_v0547.py." }
+  if ($version -ne "0.5.48") { throw "VERSION phải là 0.5.48, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0062_benchmark_closure_v0548.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0062_benchmark_closure_v0548.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0061_balanced_recall_v0547"' -or $migrationText -notmatch 'down_revision = "0060_precision_closure_v0546"' -or $migrationText -notmatch "value='0.5.47'") {
-    throw "Migration 0061_balanced_recall_v0547 không đúng contract V0.5.47."
+  if ($migrationText -notmatch 'revision = "0062_benchmark_closure_v0548"' -or $migrationText -notmatch 'down_revision = "0061_balanced_recall_v0547"' -or $migrationText -notmatch "value='0.5.48'") {
+    throw "Migration 0062_benchmark_closure_v0548 không đúng contract V0.5.48."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
 
 function Assert-AlembicRevisionSafetyContract {
-  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.47" -ForegroundColor Cyan
+  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.48" -ForegroundColor Cyan
   $versionsDir = Join-Path $root "backend\alembic\versions"
   $bad = @()
   Get-ChildItem $versionsDir -Filter "*.py" | ForEach-Object {
@@ -358,7 +358,7 @@ function Assert-AlembicRevisionSafetyContract {
   if ($v17 -notmatch 'revision = "0017_ai_test_dep_v053"') {
     throw "Migration V0.5.3 chưa dùng revision ID rút gọn an toàn."
   }
-  Write-Host "[OK] Alembic revision-length safety V0.5.47" -ForegroundColor Green
+  Write-Host "[OK] Alembic revision-length safety V0.5.48" -ForegroundColor Green
 }
 
 
@@ -1526,6 +1526,25 @@ function Assert-BalancedRecallRecoveryV0547Contract {
   Write-Host "[OK] Balanced Recall Recovery 9.3 V0.5.47" -ForegroundColor Green
 }
 
+
+
+function Assert-BenchmarkClosureV0548Contract {
+  Write-Host "`n[Traffic AI] Benchmark Closure 9.4 V0.5.48" -ForegroundColor Cyan
+  $counting = Get-Content (Join-Path $root "ai-service\app\counting.py") -Raw -Encoding UTF8
+  $routes = Get-Content (Join-Path $root "backend\app\api\routes.py") -Raw -Encoding UTF8
+  $runtime = Get-Content (Join-Path $root "ai-service\app\runtime.py") -Raw -Encoding UTF8
+  $async = Get-Content (Join-Path $root "ai-service\app\async_tasks.py") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  $aiTests = Get-Content (Join-Path $root "ai-service\tests\test_counting.py") -Raw -Encoding UTF8
+  $backendTests = Get-Content (Join-Path $root "backend\tests\test_app.py") -Raw -Encoding UTF8
+  if ($counting -notmatch 'immediate_override_qualifications' -or $counting -notmatch '_override_qualified.add\(tid\)') { throw "AI V0.5.48 thiếu transactional immediate-span hand-off." }
+  if ($routes -notmatch '_direct_ultra_spatial_shadow_duplicate' -or $routes -notmatch 'direct-ultra-shadow') { throw "Backend V0.5.48 thiếu direct ultra-spatial duplicate closure." }
+  if ($runtime -notmatch 'anchor_span_immediate_overrides' -or $runtime -notmatch 'direct_shadow_duplicates' -or $async -notmatch 'direct-ultra-shadow') { throw "Runtime V0.5.48 thiếu benchmark closure telemetry." }
+  if ($frontend -notmatch 'Span tức thời \+' -or $frontend -notmatch 'FP direct-shadow') { throw "Frontend V0.5.48 thiếu benchmark closure telemetry." }
+  if ($aiTests -notmatch 'test_v0548_immediate_verified_span_can_transactionally_override_cooldown' -or $backendTests -notmatch 'test_v0548_direct_ultra_shadow_closes_only_tiny_direct_direct_tail') { throw "V0.5.48 thiếu regression tests benchmark closure." }
+  Write-Host "[OK] Benchmark Closure 9.4 V0.5.48" -ForegroundColor Green
+}
+
 function Invoke-Step([string]$Title, [scriptblock]$Action) {
   Write-Host "`n[Traffic AI] $Title" -ForegroundColor Cyan
   & $Action
@@ -1590,6 +1609,7 @@ Assert-BenchmarkReviewPassageSemanticsV0544Contract
 Assert-FalsePositiveClosureV0545Contract
 Assert-PrecisionClosureV0546Contract
 Assert-BalancedRecallRecoveryV0547Contract
+Assert-BenchmarkClosureV0548Contract
 Assert-LegacySemanticCompatibilityV0523R1
 
 Write-Host "`n[Traffic AI] Road Zone + Frame Browser V0.5.11" -ForegroundColor Cyan

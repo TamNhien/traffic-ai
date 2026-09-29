@@ -669,6 +669,25 @@ def _secondary_shadow_signature_duplicate(
     return False
 
 
+
+def _direct_ultra_spatial_shadow_duplicate(
+    time_delta: float,
+    distance: float,
+    current_method: str | None,
+    other_method: str | None,
+) -> bool:
+    """V0.5.48 close only the tiny direct/direct duplicate tail.
+
+    Benchmark 149/155 still contains events almost on top of a GT-matched event.
+    Previous shadow guards intentionally excluded direct/direct traffic.  Keep
+    that protection everywhere except an ultra-tight extension beyond the generic
+    0.22 s signature: both events must be DIRECT, within 0.42 s and within 0.006
+    normalized crossing-point distance.  This is deliberately narrower than the
+    secondary shadow rules so dense legitimate traffic remains distinct.
+    """
+    methods = {str(current_method or ""), str(other_method or "")}
+    return methods == {"direct"} and float(time_delta) <= 0.42 and float(distance) <= 0.006
+
 def _secondary_reverse_shadow_duplicate(
     time_delta: float,
     distance: float,
@@ -892,6 +911,22 @@ def internal_event(payload: VehicleEventCreate, response: Response, x_ai_token: 
             if time_delta <= 0.22 and distance <= 0.025:
                 response.headers["X-TrafficAI-Deduplicated"] = "1"
                 response.headers["X-TrafficAI-Dedup-Reason"] = "crossing-signature"
+                return other
+
+            # V0.5.48 Benchmark Closure 9.4: the generic 0.22 s signature
+            # intentionally left direct/direct traffic untouched. Benchmark #30
+            # still exposes a tiny same-class/same-direction tail at essentially
+            # the same physical crossing point. Collapse only this ultra-spatial
+            # direct shadow; all wider direct/direct pairs remain distinct.
+            if (
+                str(getattr(other.vehicle_type, "value", other.vehicle_type))
+                == str(getattr(payload.vehicle_type, "value", payload.vehicle_type))
+                and _direct_ultra_spatial_shadow_duplicate(
+                    time_delta, distance, payload.crossing_method, other.crossing_method
+                )
+            ):
+                response.headers["X-TrafficAI-Deduplicated"] = "1"
+                response.headers["X-TrafficAI-Dedup-Reason"] = "direct-ultra-shadow"
                 return other
 
             # V0.5.45: close the narrow secondary-shadow gap exposed by

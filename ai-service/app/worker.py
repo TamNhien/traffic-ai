@@ -1376,6 +1376,7 @@ class PipelineWorker(threading.Thread):
                         self.state.anchor_span_same_direction_overrides = counter.verified_same_direction_overrides
                         self.state.anchor_span_cooldown_overrides = counter.verified_cooldown_overrides
                         self.state.anchor_span_lost_finalizations = anchor_span_rescuer.lost_track_finalizations
+                        self.state.anchor_span_immediate_overrides = anchor_span_rescuer.immediate_override_qualifications
                         guard_status = self._human_guard_policy.status(track_id)
                         overlay_label = "PERSON-GUARD" if guard_status == "rejected" else ("HUMAN?" if guard_status == "pending" else display_label)
                         self._draw_detection(
@@ -1550,7 +1551,7 @@ class PipelineWorker(threading.Thread):
                         label = str(result.names[int(cls_id)])
                         self._draw_raw_detection(cv2, frame, rect, label, float(confidence))
 
-                # V0.5.47 Balanced Recall Recovery 9.3: if a canonical track
+                # V0.5.48 Benchmark Closure 9.4: if a canonical track
                 # disappears immediately after a fully verified finite anchor span,
                 # close that pending crossing instead of losing it. Disappearance
                 # alone is never evidence; finalize_lost() applies stronger normal
@@ -1684,6 +1685,7 @@ class PipelineWorker(threading.Thread):
                         "anchor_span_same_direction_overrides": self.state.anchor_span_same_direction_overrides,
                         "anchor_span_cooldown_overrides": self.state.anchor_span_cooldown_overrides,
                         "anchor_span_lost_finalizations": self.state.anchor_span_lost_finalizations,
+                        "anchor_span_immediate_overrides": self.state.anchor_span_immediate_overrides,
                         "gate_tracks": gate_trace_tracks,
                         "truck_class_rescues": self.state.truck_class_rescues,
                         "bicycle_tracks_seen": self.state.bicycle_tracks_seen,
