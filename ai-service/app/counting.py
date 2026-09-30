@@ -375,8 +375,10 @@ class VerifiedAnchorSpanRescuer:
         self.cooldown_overrides = 0
         self.lost_track_finalizations = 0
         self.immediate_override_qualifications = 0
+        self.immediate_handoff_rejections = 0
         self._last_crossing_frame: dict[int, float] = {}
         self._override_qualified: set[int] = set()
+        self._immediate_candidates: set[int] = set()
 
     def _road_ok(self, start: _GateSample, end: _GateSample, crossing: Point, width: int, height: int) -> tuple[bool, bool]:
         if self.road_zone is None:
@@ -514,18 +516,25 @@ class VerifiedAnchorSpanRescuer:
             and side_depth_ratio >= self.immediate_min_side_distance_ratio
             and (sample.frame_index - previous.frame_index) <= 2
         ):
-            state.counted_directions = {direction}
-            state.last_count_frame = sample.frame_index
-            state.pending = None
-            # V0.5.48 Benchmark Closure 9.4: an immediate span already proves
-            # the destination side with an exceptionally strong finite-segment
-            # bracket. Qualify only this strict path for the same conditional
-            # external registration used by post-confirm/lost-finalize. Without
-            # this transaction hand-off the rescuer could commit internally while
-            # the primary counter rejected the event on cooldown, permanently
-            # losing a benchmark-proven crossing.
-            self._override_qualified.add(tid)
-            self.immediate_override_qualifications += 1
+            # V0.5.49 Precision Recovery Closure 9.5: immediate finite-span
+            # evidence may ask the primary counter to register the event, but it
+            # no longer commits this secondary state before that hand-off.  Keep
+            # the proven span pending with one destination confirmation.  If the
+            # primary gate accepts it, worker.mark_counted() commits and clears
+            # the pending state.  If cooldown/same-direction rejects it, a later
+            # destination-side observation can still earn the existing stronger
+            # Post-Confirm override instead of turning the rollback into a miss.
+            state.pending = _AnchorSpanPending(
+                start=previous, end=sample, direction=direction, crossing=crossing,
+                crossing_frame=crossing_frame, destination_side=side, confirmations=1,
+                road_edge_rescue=road_edge_rescue, normal_ratio=normal_ratio,
+                side_depth_ratio=side_depth_ratio, same_direction_candidate=False,
+            )
+            self._immediate_candidates.add(tid)
+            # Keep legacy rescuer-level telemetry semantics: a returned immediate
+            # candidate counts as a rescue at this layer. If the primary hand-off
+            # rejects it, note_immediate_handoff_result() rolls these counters back
+            # before the pending span waits for stronger confirmation.
             self.verified_anchor_span_rescues += 1
             if road_edge_rescue:
                 self.road_edge_span_rescues += 1
@@ -578,6 +587,32 @@ class VerifiedAnchorSpanRescuer:
 
     def override_qualified_for(self, track_id: int) -> bool:
         return int(track_id) in self._override_qualified
+
+    def immediate_candidate_for(self, track_id: int) -> bool:
+        return int(track_id) in self._immediate_candidates
+
+    def note_immediate_handoff_result(self, track_id: int, accepted: bool) -> None:
+        tid = int(track_id)
+        if tid not in self._immediate_candidates:
+            return
+        self._immediate_candidates.discard(tid)
+        if accepted:
+            # This is an ordinary primary-gate acceptance now, not an override.
+            self.immediate_override_qualifications += 1
+        else:
+            self.immediate_handoff_rejections += 1
+            # update() tentatively accounted the returned rescue to preserve the
+            # long-standing rescuer telemetry contract. Roll it back when the
+            # primary counter rejects the transaction; a later Post-Confirm can
+            # add it back only after stronger destination-side evidence.
+            if self.verified_anchor_span_rescues > 0:
+                self.verified_anchor_span_rescues -= 1
+            state = self._tracks.get(tid)
+            if (
+                state is not None and state.pending is not None
+                and state.pending.road_edge_rescue and self.road_edge_span_rescues > 0
+            ):
+                self.road_edge_span_rescues -= 1
 
     def consume_override_qualification(self, track_id: int) -> None:
         self._override_qualified.discard(int(track_id))
@@ -985,6 +1020,11 @@ class LineCrossingCounter:
         rescue_strict_min_normal_ratio: float = 0.0,
         rescue_strict_max_jump_ratio: float = 0.0,
         rescue_strict_min_side_distance_ratio: float = 0.0,
+        lineage_rescue_guard: bool = False,
+        lineage_rescue_min_normal_ratio: float = 0.46,
+        lineage_rescue_max_jump_ratio: float = 0.18,
+        lineage_rescue_min_side_distance_ratio: float = 0.014,
+        lineage_rescue_confirm_samples: int = 2,
         bracket_confirm: bool = False,
         bracket_confirm_min_normal_ratio: float = 0.55,
         bracket_confirm_max_gap_frames: int = 2,
@@ -1018,6 +1058,11 @@ class LineCrossingCounter:
         self.rescue_strict_min_normal_ratio = max(0.0, min(1.0, float(rescue_strict_min_normal_ratio)))
         self.rescue_strict_max_jump_ratio = max(0.0, float(rescue_strict_max_jump_ratio))
         self.rescue_strict_min_side_distance_ratio = max(0.0, float(rescue_strict_min_side_distance_ratio))
+        self.lineage_rescue_guard = bool(lineage_rescue_guard)
+        self.lineage_rescue_min_normal_ratio = max(0.0, min(1.0, float(lineage_rescue_min_normal_ratio)))
+        self.lineage_rescue_max_jump_ratio = max(0.0, float(lineage_rescue_max_jump_ratio))
+        self.lineage_rescue_min_side_distance_ratio = max(0.0, float(lineage_rescue_min_side_distance_ratio))
+        self.lineage_rescue_confirm_samples = max(1, int(lineage_rescue_confirm_samples))
         self.bracket_confirm = bool(bracket_confirm)
         self.bracket_confirm_min_normal_ratio = max(0.0, min(1.0, float(bracket_confirm_min_normal_ratio)))
         self.bracket_confirm_max_gap_frames = max(1, int(bracket_confirm_max_gap_frames))
@@ -1042,6 +1087,7 @@ class LineCrossingCounter:
         self.origin_rescues = 0
         self.rejected_rescue_validation = 0
         self.rejected_long_gap_rescue = 0
+        self.rejected_lineage_rescue = 0
         self.adaptive_cooldown_releases = 0
         self.passage_cycle_rearms = 0
         self.rejected_same_direction_cycle = 0
@@ -1049,6 +1095,7 @@ class LineCrossingCounter:
         self.verified_cooldown_overrides = 0
         self._last_crossing_point: dict[int, Point] = {}
         self._last_crossing_frame: dict[int, float] = {}
+        self._last_external_reject_reason: dict[int, str] = {}
 
     def update(
         self,
@@ -1058,6 +1105,7 @@ class LineCrossingCounter:
         frame_height: int,
         frame_index: int | None = None,
         origin_probe: Point | None = None,
+        lineage_size: int = 1,
     ) -> str | None:
         if frame_index is None:
             state_existing = self._tracks.get(track_id)
@@ -1320,6 +1368,24 @@ class LineCrossingCounter:
                     self.rejected_rescue_validation += 1
                     return None
 
+            # V0.5.49: when a long-gap secondary crossing also spans multiple
+            # raw ByteTrack IDs, require either a second destination-side sample
+            # or unusually strong two-sided geometry.  This targets rescue-tail
+            # shadows caused by an ID switch without weakening DIRECT traffic or
+            # ordinary single-ID gap rescue.  A first weak sample is held rather
+            # than deleting history, so the next destination-side frame can still
+            # confirm the real crossing.
+            if self.lineage_rescue_guard and int(lineage_size) > 1:
+                lineage_strong = (
+                    normal_ratio >= self.lineage_rescue_min_normal_ratio
+                    and (self.lineage_rescue_max_jump_ratio <= 0.0 or jump_ratio <= self.lineage_rescue_max_jump_ratio)
+                    and side_depth_ratio >= self.lineage_rescue_min_side_distance_ratio
+                )
+                if state.side_streak < self.lineage_rescue_confirm_samples and not lineage_strong:
+                    self.rejected_lineage_rescue += 1
+                    self.rejected_rescue_validation += 1
+                    return None
+
         if self.road_zone is not None:
             move_x_zone = anchor[0] - previous.point[0]
             move_y_zone = anchor[1] - previous.point[1]
@@ -1440,10 +1506,13 @@ class LineCrossingCounter:
         state = self._tracks.setdefault(tid, _TrackGateState())
         same_direction_blocked = direction in state.counted_directions
         cooldown_blocked = int(frame_index) - state.last_count_frame < self.crossing_cooldown_frames
+        self._last_external_reject_reason.pop(tid, None)
         if same_direction_blocked and not verified_anchor_span:
             self.rejected_same_direction_cycle += 1
+            self._last_external_reject_reason[tid] = "same-direction"
             return False
         if cooldown_blocked and not verified_anchor_span:
+            self._last_external_reject_reason[tid] = "cooldown"
             return False
         if verified_anchor_span and same_direction_blocked:
             self.verified_same_direction_overrides += 1
@@ -1470,6 +1539,9 @@ class LineCrossingCounter:
             self.out_count += 1
         return True
 
+
+    def external_rejection_reason_for(self, track_id: int) -> str | None:
+        return self._last_external_reject_reason.get(int(track_id))
 
     def crossing_point_for(self, track_id: int) -> Point | None:
         return self._last_crossing_point.get(int(track_id))

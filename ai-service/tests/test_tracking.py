@@ -130,3 +130,14 @@ def test_v0530_alias_reports_displaced_canonical_for_state_merge() -> None:
     resolver.resolve(20, (500.0, 500.0), "truck", 1, 1000, 800)
     displaced = resolver.alias_raw_id(20, 10)
     assert displaced == 20
+
+
+def test_v0549_canonical_lineage_tracks_stitched_raw_ids() -> None:
+    resolver = TrackContinuityResolver(max_gap_frames=20, max_distance_ratio=0.14)
+    canonical, _ = resolver.resolve(10, (400, 220), "motorcycle", 10, 1000, 600)
+    assert resolver.lineage_size(canonical) == 1
+    stitched_id, stitched = resolver.resolve(44, (410, 300), "motorcycle", 17, 1000, 600)
+    assert stitched is True
+    assert stitched_id == canonical
+    assert resolver.lineage_size(canonical) == 2
+    assert resolver.has_lineage_switch(canonical) is True

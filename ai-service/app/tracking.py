@@ -71,6 +71,11 @@ class TrackContinuityResolver:
         )
         self._raw_to_canonical: dict[int, int] = {}
         self._states: dict[int, _IdentityState] = {}
+        # V0.5.49 Precision Recovery Closure 9.5: remember every raw ByteTrack
+        # ID that has contributed to one canonical identity.  The crossing gate
+        # uses only the *size* of this lineage as a risk signal for long-gap
+        # secondary rescues; direct crossings are unchanged.
+        self._canonical_raw_ids: dict[int, set[int]] = {}
         self.stitch_count = 0
         self.heavy_stitch_count = 0
 
@@ -88,6 +93,7 @@ class TrackContinuityResolver:
         claimed = claimed_canonical_ids or set()
         canonical = self._raw_to_canonical.get(raw_id)
         if canonical is not None and canonical not in claimed:
+            self._canonical_raw_ids.setdefault(canonical, set()).add(raw_id)
             self._update_state(canonical, raw_id, point, label, frame_index)
             self._cleanup(frame_index)
             return canonical, False
@@ -134,6 +140,7 @@ class TrackContinuityResolver:
         stitched = best is not None
         canonical = best[1] if best is not None else raw_id
         self._raw_to_canonical[raw_id] = canonical
+        self._canonical_raw_ids.setdefault(canonical, set()).add(raw_id)
         self._update_state(canonical, raw_id, point, label, frame_index)
         if stitched:
             self.stitch_count += 1
@@ -152,13 +159,24 @@ class TrackContinuityResolver:
         canonical_id = int(canonical_id)
         previous = self._raw_to_canonical.get(raw_id)
         self._raw_to_canonical[raw_id] = canonical_id
+        self._canonical_raw_ids.setdefault(canonical_id, set()).add(raw_id)
         displaced = previous if previous is not None and previous != canonical_id else None
         if displaced is not None:
+            displaced_raws = self._canonical_raw_ids.pop(displaced, set())
+            self._canonical_raw_ids.setdefault(canonical_id, set()).update(displaced_raws)
             for candidate_raw, mapped in list(self._raw_to_canonical.items()):
                 if mapped == displaced:
                     self._raw_to_canonical[candidate_raw] = canonical_id
+                    self._canonical_raw_ids[canonical_id].add(candidate_raw)
             self._states.pop(displaced, None)
         return displaced
+
+    def lineage_size(self, canonical_id: int) -> int:
+        """Return how many raw tracker IDs feed one canonical identity."""
+        return max(1, len(self._canonical_raw_ids.get(int(canonical_id), set())))
+
+    def has_lineage_switch(self, canonical_id: int) -> bool:
+        return self.lineage_size(canonical_id) > 1
 
     def velocity_for(self, canonical_id: int) -> Point:
         state = self._states.get(int(canonical_id))
@@ -183,6 +201,7 @@ class TrackContinuityResolver:
             return
         for cid in stale:
             self._states.pop(cid, None)
+            self._canonical_raw_ids.pop(cid, None)
         for raw_id, cid in list(self._raw_to_canonical.items()):
             if cid in stale:
                 self._raw_to_canonical.pop(raw_id, None)

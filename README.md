@@ -1,22 +1,22 @@
-# Traffic AI V0.5.48 — Benchmark Closure 9.4
+# Traffic AI V0.5.49 — Precision Recovery Closure 9.5
 
-V0.5.48 tiếp tục từ V0.5.47 theo benchmark hiện tại **GT 149 / AI 155 / khớp 136 / lọt 13 / dư 19**. Mục tiêu của bản này là xử lý hai điểm còn nổi bật trong audit mà không mở Gate toàn cục: một số **Verified Anchor Span tức thời** đã đủ hình học nhưng bị primary cooldown từ chối ở bước hand-off; đồng thời benchmark vẫn còn một đuôi nhỏ event **direct/direct gần như cùng điểm cắt**.
+V0.5.49 tiếp tục trực tiếp từ V0.5.48 theo replay mới: **GT 149 / AI 156 / khớp 136 / lọt 13 / dư 20 / Recall 91.3% / Precision 87.2% / F1 89.2% / class đúng 98.5%**. So với mốc V0.5.47 (AI 155 / dư 19), V0.5.48 tăng đúng một event dư sau khi mở transactional hand-off cho Immediate Verified Anchor Span. Bản này đóng lại nhánh rủi ro đó nhưng giữ các recovery đã có bằng chứng hậu-vạch.
 
-## Điểm chính V0.5.48
+## Điểm chính V0.5.49
 
-- **Transactional Immediate Span Handoff:** Verified Anchor Span thuộc nhánh immediate vốn đã bắt buộc finite segment + normal motion mạnh + side depth mạnh + gap rất ngắn. V0.5.48 giữ nguyên các điều kiện đó nhưng chuyển trạng thái `override_qualified` sang primary counter khi hand-off, tránh trường hợp rescuer tự commit nhưng `register_external_crossing()` từ chối vì cooldown và làm mất event thật.
-- **Không mở same-direction/cooldown toàn cục:** chỉ immediate span đủ chuẩn, post-confirm span và lost-finalize span được quyền bypass có điều kiện. Crossing thường, rescue thường và track chỉ “tới sát vạch” vẫn fail-closed.
-- **Direct Ultra-Spatial Shadow Guard:** bổ sung closure cho cross-ID `direct/direct` cùng class, cùng hướng, chỉ khi chênh thời gian `<= 0.42 s` và điểm cắt chuẩn hóa cách nhau `<= 0.006`. Đây là vùng cực hẹp nằm ngoài generic `0.22 s`, nhằm xử lý các event dư “sát GT đã khớp + cùng điểm cắt” mà không gom hai xe thật chạy gần nhau theo điều kiện rộng.
-- **Giữ Precision Closure 9.2/9.3:** same-track repeat, direction flip, secondary shadow, reverse shadow, long-gap rescue guard, passage-cycle state và Human Guard không bị nới.
-- Telemetry mới: `Span tức thời +` và `FP direct-shadow`.
-- Dashboard/Benchmark tiếp tục giữ bố cục 50/50 và scrollbar gutter của V0.5.47.
+- **Immediate Span cooldown rollback:** Immediate Verified Anchor Span vẫn được phát hiện và vẫn có thể đăng ký khi primary gate hợp lệ, nhưng không còn quyền bypass `same-direction`/`cooldown`. `Post-Confirm` và `track-lost finalize` vẫn được `verified_anchor_span` override vì có thêm bằng chứng phía sau vạch.
+- **Canonical-Lineage Rescue Guard:** long-gap `rescued` trên canonical track đã đổi raw ByteTrack ID phải có thêm destination-side confirmation hoặc geometry mạnh hơn (normal motion, side depth, jump bound). Direct crossing và single-ID rescue không bị siết.
+- **Direct → Secondary Shadow Closure:** bổ sung dedup cực hẹp cho cặp cùng class/cùng hướng có đúng một `direct` và một `rescued/interpolated`; `direct/direct` không bị mở rộng thêm.
+- **Giữ Precision Closure cũ:** same-track repeat, direction flip, secondary/reverse shadow, long-gap guard, Human Guard, passage-cycle state và Direct Ultra-Spatial Shadow của V0.5.48 vẫn giữ nguyên.
+- **Telemetry mới:** `Span tức thời loại`, `Lineage rescue loại`, `FP cross-method`; `Span tức thời giữ` là immediate candidate được primary gate chấp nhận bình thường, không còn là cooldown override.
+- Dashboard Camera Preview / Vehicle Count và Ground Truth / Benchmark Report tiếp tục cân 50/50, các list audit giữ `scrollbar-gutter` để không che nội dung.
 
 ## Version / database
 
-- `VERSION = 0.5.48`
-- Frontend / Backend / AI Service = `0.5.48`
-- Alembic head: `0062_benchmark_closure_v0548`
-- `schema_version = 0.5.48`
+- `VERSION = 0.5.49`
+- Frontend / Backend / AI Service = `0.5.49`
+- Alembic head: `0063_precision_recovery_v0549`
+- `schema_version = 0.5.49`
 
 ## Kiểm thử
 
@@ -46,8 +46,10 @@ Sau khi replay benchmark ổn, phát hành chỉ với một lệnh:
 .\scripts\publish.ps1
 ```
 
-`publish.ps1` tiếp tục chạy test → commit/push → tag theo `VERSION` → GitHub Actions → GitHub Release → upload ZIP/README.
+`publish.ps1` chạy test → commit/push → tag theo `VERSION` → GitHub Actions → GitHub Release → upload ZIP/README.
 
-## Baseline benchmark dùng để nâng cấp
+## Mốc benchmark
 
-V0.5.47: **GT 149 / AI 155 / khớp 136 / lọt 13 / dư 19 / Recall 91.3% / Precision 87.7% / F1 89.5% / class đúng 98.5%**. V0.5.48 tập trung vào miss do cooldown/handoff của span đã được chứng minh và FP direct-shadow cực sát; số liệu cuối cần được xác nhận lại bằng replay chính clip/camera của bạn sau khi chạy source mới.
+- V0.5.47: **GT 149 / AI 155 / khớp 136 / lọt 13 / dư 19 / Precision 87.7%**.
+- V0.5.48 replay hiện tại: **GT 149 / AI 156 / khớp 136 / lọt 13 / dư 20 / Precision 87.2%**.
+- V0.5.49 được thiết kế để trả Immediate Span về fail-closed khi cooldown/same-direction, đồng thời chặn rescue shadow sau ID-switch mà không nới Gate. Kết quả benchmark cuối phải được xác nhận bằng chính clip `clip1(9).mp4` và camera snapshot của phiên mới.

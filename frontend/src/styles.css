@@ -107,7 +107,7 @@
 .panel .audit-diff-row.missed>.diff-reason{color:#fca5a5}.panel .audit-diff-row.false-positive>.diff-reason{color:#fcd34d}
 @media(max-width:560px){.panel .audit-diff-row{grid-template-columns:1fr;grid-template-areas:"time" "meta" "reason" "detail" "tech"}.benchmark-audit-list{max-height:420px}}
 
-/* V0.5.48 Benchmark Closure 9.4 layout remains balanced 50/50 */
+/* V0.5.49 Precision Recovery Closure 9.5 layout remains balanced 50/50 */
 .content-grid>article,.benchmark-layout>article{min-width:0;width:100%}
 .benchmark-report-panel .benchmark-diff-list,.benchmark-report-panel .benchmark-audit-list{width:100%;padding:2px 8px 2px 2px;scrollbar-gutter:stable}
 .benchmark-report-panel .diff-row,.benchmark-report-panel .audit-diff-row{width:100%;min-width:0;padding:9px 10px;margin:0}

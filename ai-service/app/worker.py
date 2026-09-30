@@ -942,6 +942,11 @@ class PipelineWorker(threading.Thread):
                 rescue_strict_min_normal_ratio=float(os.getenv("AI_GATE_RESCUE_STRICT_MIN_NORMAL_RATIO", "0.40")),
                 rescue_strict_max_jump_ratio=float(os.getenv("AI_GATE_RESCUE_STRICT_MAX_JUMP_RATIO", "0.20")),
                 rescue_strict_min_side_distance_ratio=float(os.getenv("AI_GATE_RESCUE_STRICT_MIN_SIDE_RATIO", "0.014")),
+                lineage_rescue_guard=os.getenv("AI_GATE_LINEAGE_RESCUE_GUARD", "1").strip().lower() not in {"0", "false", "no"},
+                lineage_rescue_min_normal_ratio=float(os.getenv("AI_GATE_LINEAGE_RESCUE_MIN_NORMAL_RATIO", "0.46")),
+                lineage_rescue_max_jump_ratio=float(os.getenv("AI_GATE_LINEAGE_RESCUE_MAX_JUMP_RATIO", "0.18")),
+                lineage_rescue_min_side_distance_ratio=float(os.getenv("AI_GATE_LINEAGE_RESCUE_MIN_SIDE_RATIO", "0.014")),
+                lineage_rescue_confirm_samples=int(os.getenv("AI_GATE_LINEAGE_RESCUE_CONFIRM_SAMPLES", "2")),
                 bracket_confirm=os.getenv("AI_GATE_BRACKET_CONFIRM", "1").strip().lower() not in {"0", "false", "no"},
                 bracket_confirm_min_normal_ratio=float(os.getenv("AI_GATE_BRACKET_CONFIRM_MIN_NORMAL_RATIO", "0.55")),
                 bracket_confirm_max_gap_frames=int(os.getenv("AI_GATE_BRACKET_CONFIRM_MAX_GAP", "2")),
@@ -1320,6 +1325,7 @@ class PipelineWorker(threading.Thread):
                                 if self.payload.source_type == "video" and frame_index <= self.video_origin_rescue_frames
                                 else None
                             ),
+                            lineage_size=self._continuity.lineage_size(track_id),
                         )
                         if direction is None:
                             span_candidate = anchor_span_rescuer.update(
@@ -1327,11 +1333,15 @@ class PipelineWorker(threading.Thread):
                             )
                             if span_candidate is not None:
                                 span_direction, span_point = span_candidate
-                                if counter.register_external_crossing(
+                                immediate_candidate = anchor_span_rescuer.immediate_candidate_for(track_id)
+                                accepted_span = counter.register_external_crossing(
                                     track_id, span_direction, frame_index, span_point, mode="rescued",
                                     crossing_frame=anchor_span_rescuer.crossing_frame_for(track_id),
                                     verified_anchor_span=anchor_span_rescuer.override_qualified_for(track_id),
-                                ):
+                                )
+                                if immediate_candidate:
+                                    anchor_span_rescuer.note_immediate_handoff_result(track_id, accepted_span)
+                                if accepted_span:
                                     anchor_span_rescuer.consume_override_qualification(track_id)
                                     direction = span_direction
                         else:
@@ -1366,6 +1376,7 @@ class PipelineWorker(threading.Thread):
                         self.state.bracket_confirm_rescues = counter.bracket_confirm_rescues
                         self.state.rescue_validation_rejections = counter.rejected_rescue_validation
                         self.state.long_gap_rescue_rejections = counter.rejected_long_gap_rescue
+                        self.state.lineage_rescue_rejections = counter.rejected_lineage_rescue
                         self.state.adaptive_cooldown_releases = counter.adaptive_cooldown_releases
                         self.state.passage_cycle_rearms = counter.passage_cycle_rearms
                         self.state.same_direction_cycle_rejections = counter.rejected_same_direction_cycle
@@ -1377,6 +1388,7 @@ class PipelineWorker(threading.Thread):
                         self.state.anchor_span_cooldown_overrides = counter.verified_cooldown_overrides
                         self.state.anchor_span_lost_finalizations = anchor_span_rescuer.lost_track_finalizations
                         self.state.anchor_span_immediate_overrides = anchor_span_rescuer.immediate_override_qualifications
+                        self.state.anchor_span_immediate_rejections = anchor_span_rescuer.immediate_handoff_rejections
                         guard_status = self._human_guard_policy.status(track_id)
                         overlay_label = "PERSON-GUARD" if guard_status == "rejected" else ("HUMAN?" if guard_status == "pending" else display_label)
                         self._draw_detection(

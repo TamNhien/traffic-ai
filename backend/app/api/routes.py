@@ -670,6 +670,33 @@ def _secondary_shadow_signature_duplicate(
 
 
 
+
+
+DIRECT_SECONDARY_SHADOW_LOOKBACK_SECONDS = 1.15
+
+
+def _direct_secondary_shadow_duplicate(
+    time_delta: float,
+    distance: float,
+    current_method: str | None,
+    other_method: str | None,
+) -> bool:
+    """V0.5.49 close only direct -> secondary cross-ID shadows.
+
+    The pair must contain exactly one DIRECT event and one secondary event.
+    The time window is slightly wider than the generic secondary-shadow guard,
+    but the crossing-point radius is much tighter. DIRECT/DIRECT is explicitly
+    excluded, preserving dense legitimate traffic.
+    """
+    methods = {str(current_method or ""), str(other_method or "")}
+    if "direct" not in methods or len(methods) != 2:
+        return False
+    if "rescued" in methods:
+        return float(time_delta) <= DIRECT_SECONDARY_SHADOW_LOOKBACK_SECONDS and float(distance) <= 0.006
+    if "interpolated" in methods:
+        return float(time_delta) <= 0.95 and float(distance) <= 0.005
+    return False
+
 def _direct_ultra_spatial_shadow_duplicate(
     time_delta: float,
     distance: float,
@@ -852,10 +879,10 @@ def internal_event(payload: VehicleEventCreate, response: Response, x_ai_token: 
         and payload.crossing_y is not None
     ):
         # Query the widest specialised window once. The generic guard below
-        # remains capped at 0.22 s. V0.5.38 allows an ultra-tight two-wheel
-        # secondary signature out to 1.02 s; four-wheel semantic flips still
-        # keep their own narrower 0.85 s acceptance rule.
-        lower = max(0.0, float(payload.source_time_seconds) - 1.05)
+        # remains capped at 0.22 s. V0.5.49's exact-class direct/rescued shadow
+        # closure reaches 1.15 s with an ultra-tight point radius; narrower
+        # two-wheel/four-wheel guards therefore remain fully covered too.
+        lower = max(0.0, float(payload.source_time_seconds) - DIRECT_SECONDARY_SHADOW_LOOKBACK_SECONDS)
         recent = list(db.scalars(select(VehicleEvent).where(
             VehicleEvent.session_id == payload.session_id,
             VehicleEvent.source_time_seconds.is_not(None),
@@ -927,6 +954,21 @@ def internal_event(payload: VehicleEventCreate, response: Response, x_ai_token: 
             ):
                 response.headers["X-TrafficAI-Deduplicated"] = "1"
                 response.headers["X-TrafficAI-Dedup-Reason"] = "direct-ultra-shadow"
+                return other
+
+            # V0.5.49: a direct event can be rediscovered shortly afterwards by
+            # an interpolated/rescued branch under a new canonical/raw lineage.
+            # Exact class + same direction are already required by this branch;
+            # use an ultra-tight point radius and never collapse direct/direct.
+            if (
+                str(getattr(other.vehicle_type, "value", other.vehicle_type))
+                == str(getattr(payload.vehicle_type, "value", payload.vehicle_type))
+                and _direct_secondary_shadow_duplicate(
+                    time_delta, distance, payload.crossing_method, other.crossing_method
+                )
+            ):
+                response.headers["X-TrafficAI-Deduplicated"] = "1"
+                response.headers["X-TrafficAI-Dedup-Reason"] = "direct-secondary-shadow"
                 return other
 
             # V0.5.45: close the narrow secondary-shadow gap exposed by

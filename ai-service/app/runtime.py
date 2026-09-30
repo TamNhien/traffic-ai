@@ -58,6 +58,7 @@ class PipelineState:
     anchor_span_cooldown_overrides: int = 0
     anchor_span_lost_finalizations: int = 0
     anchor_span_immediate_overrides: int = 0
+    anchor_span_immediate_rejections: int = 0
     truck_class_rescues: int = 0
     bicycle_tracks_seen: int = 0
     truck_tracks_seen: int = 0
@@ -84,6 +85,7 @@ class PipelineState:
     bracket_confirm_rescues: int = 0
     rescue_validation_rejections: int = 0
     long_gap_rescue_rejections: int = 0
+    lineage_rescue_rejections: int = 0
     adaptive_cooldown_releases: int = 0
     passage_cycle_rearms: int = 0
     crossing_signature_duplicates: int = 0
@@ -94,6 +96,7 @@ class PipelineState:
     direction_flip_duplicates: int = 0
     secondary_shadow_duplicates: int = 0
     direct_shadow_duplicates: int = 0
+    cross_method_shadow_duplicates: int = 0
     reverse_shadow_duplicates: int = 0
     same_direction_cycle_rejections: int = 0
     calibration_samples: int = 0

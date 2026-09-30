@@ -858,7 +858,8 @@ def test_v0547_track_loss_finalizes_only_strong_geometry_proven_pending_span():
     assert weak.lost_track_finalizations == 0
 
 
-def test_v0548_immediate_verified_span_can_transactionally_override_cooldown():
+
+def test_v0549_immediate_verified_span_does_not_bypass_primary_cooldown():
     from app.counting import CountingLine, LineCrossingCounter, VerifiedAnchorSpanRescuer
 
     line = CountingLine(0.1, 0.5, 0.9, 0.5)
@@ -870,28 +871,70 @@ def test_v0548_immediate_verified_span_can_transactionally_override_cooldown():
         immediate_min_side_distance_ratio=0.012,
     )
 
-    # Prior opposite-direction passage keeps the primary counter in cooldown,
-    # but does not make the new IN a same-direction repeat.
-    assert counter.register_external_crossing(4801, "out", 10, (500.0, 500.0)) is True
-    rescue.mark_counted(4801, "out", 10)
-
-    assert rescue.update(4801, (500.0, 430.0), 1000, 1000, 30) is None
-    candidate = rescue.update(4801, (500.0, 570.0), 1000, 1000, 31)
+    assert counter.register_external_crossing(4901, "out", 10, (500.0, 500.0)) is True
+    rescue.mark_counted(4901, "out", 10)
+    assert rescue.update(4901, (500.0, 430.0), 1000, 1000, 30) is None
+    candidate = rescue.update(4901, (500.0, 570.0), 1000, 1000, 31)
     assert candidate is not None and candidate[0] == "in"
-    assert rescue.override_qualified_for(4801) is True
-    assert rescue.immediate_override_qualifications == 1
+    assert rescue.immediate_candidate_for(4901) is True
+    assert rescue.override_qualified_for(4901) is False
 
     direction, crossing = candidate
+    accepted = counter.register_external_crossing(
+        4901, direction, 31, crossing, mode="rescued",
+        crossing_frame=rescue.crossing_frame_for(4901),
+        verified_anchor_span=rescue.override_qualified_for(4901),
+    )
+    rescue.note_immediate_handoff_result(4901, accepted)
+    assert accepted is False
+    assert counter.external_rejection_reason_for(4901) == "cooldown"
+    assert rescue.immediate_handoff_rejections == 1
+    assert rescue.verified_anchor_span_rescues == 0
+    assert counter.verified_cooldown_overrides == 0
+
+    # The rejected immediate hand-off must stay fail-closed for that frame but
+    # preserve its geometry-proven pending span. A distinct destination-side
+    # observation can still earn the stronger Post-Confirm override.
+    confirmed = rescue.update(4901, (500.0, 585.0), 1000, 1000, 32)
+    assert confirmed is not None and confirmed[0] == "in"
+    assert rescue.override_qualified_for(4901) is True
+    assert rescue.post_confirm_closures == 1
+    direction2, crossing2 = confirmed
     assert counter.register_external_crossing(
-        4801,
-        direction,
-        31,
-        crossing,
-        mode="rescued",
-        crossing_frame=rescue.crossing_frame_for(4801),
-        verified_anchor_span=rescue.override_qualified_for(4801),
+        4901, direction2, 32, crossing2, mode="rescued",
+        crossing_frame=rescue.crossing_frame_for(4901), verified_anchor_span=True,
     ) is True
     assert counter.verified_cooldown_overrides == 1
+
+
+def test_v0549_lineage_long_gap_waits_for_destination_confirmation_or_strong_geometry():
+    from app.counting import CountingLine, LineCrossingCounter
+
+    counter = LineCrossingCounter(
+        CountingLine(0.1, 0.5, 0.9, 0.5),
+        history_gap_frames=20, interpolation_gap_frames=3,
+        rescue_min_normal_ratio=0.20, rescue_max_jump_ratio=0.40, rescue_min_side_distance_ratio=0.002,
+        lineage_rescue_guard=True, lineage_rescue_min_normal_ratio=0.80,
+        lineage_rescue_max_jump_ratio=0.12, lineage_rescue_min_side_distance_ratio=0.018,
+        lineage_rescue_confirm_samples=2,
+    )
+    # Oblique stitched rescue: first destination sample is held, second confirms.
+    assert counter.update(4902, (420.0, 470.0), 1000, 1000, 10, lineage_size=2) is None
+    assert counter.update(4902, (620.0, 530.0), 1000, 1000, 16, lineage_size=2) is None
+    assert counter.rejected_lineage_rescue == 1
+    assert counter.update(4902, (630.0, 545.0), 1000, 1000, 17, lineage_size=2) == "in"
+
+    strong = LineCrossingCounter(
+        CountingLine(0.1, 0.5, 0.9, 0.5),
+        history_gap_frames=20, interpolation_gap_frames=3,
+        rescue_min_normal_ratio=0.20, rescue_max_jump_ratio=0.40, rescue_min_side_distance_ratio=0.002,
+        lineage_rescue_guard=True, lineage_rescue_min_normal_ratio=0.70,
+        lineage_rescue_max_jump_ratio=0.18, lineage_rescue_min_side_distance_ratio=0.014,
+        lineage_rescue_confirm_samples=2,
+    )
+    assert strong.update(4903, (500.0, 420.0), 1000, 1000, 10, lineage_size=2) is None
+    assert strong.update(4903, (500.0, 580.0), 1000, 1000, 16, lineage_size=2) == "in"
+    assert strong.rejected_lineage_rescue == 0
 
 
 def test_v0548_immediate_override_stays_fail_closed_for_weak_span():
