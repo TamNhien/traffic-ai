@@ -92,3 +92,53 @@ def test_transactional_guard_timeout_drops_without_counting() -> None:
     assert worker.state.human_guard_pending_drops == 1
     assert worker.state.human_guard_pending_crossings == 0
     assert worker._event_dispatcher.payloads == []
+
+
+def test_v0551_guard_rollback_restores_both_gate_passage_states() -> None:
+    from app.counting import CountingLine, LineCrossingCounter, VerifiedAnchorSpanRescuer
+
+    line = CountingLine(0.1, 0.5, 0.9, 0.5)
+    counter = LineCrossingCounter(line, crossing_cooldown_frames=60)
+    span = VerifiedAnchorSpanRescuer(line)
+    worker = _worker()
+    worker._anchor_span_rescuer = span
+    assert counter.register_external_crossing(77, "in", 5, (50, 50)) is True
+    span.mark_counted(77, "in", 5)
+    before = span.capture_passage_state(77)
+    assert counter.register_external_crossing(77, "out", 20, (50, 50), verified_anchor_span=True) is True
+    span.mark_counted(77, "out", 20)
+    pending = _pending()
+    pending.direction = "out"
+    pending.span_passage_state = before
+    worker._pending_guard_crossings[77] = pending
+
+    worker._drop_guard_crossing(counter, pending, expired=True)
+
+    assert counter.in_count == 1
+    assert counter.out_count == 0
+    assert counter._tracks[77].counted_directions == {"in"}
+    assert counter._tracks[77].last_count_frame == 5
+    assert span.capture_passage_state(77) == before
+    assert span.finalize_lost(77, 21) is None
+    assert worker.state.total_count == 0
+    assert worker._event_dispatcher.payloads == []
+
+
+def test_v0551_immediate_guard_reject_restores_secondary_clock() -> None:
+    from app.counting import CountingLine, LineCrossingCounter, VerifiedAnchorSpanRescuer
+
+    line = CountingLine(0.1, 0.5, 0.9, 0.5)
+    counter = LineCrossingCounter(line, crossing_cooldown_frames=60)
+    span = VerifiedAnchorSpanRescuer(line)
+    worker = _worker()
+    worker._anchor_span_rescuer = span
+    before = span.capture_passage_state(77)
+    assert counter.register_external_crossing(77, "in", 10, (50, 50)) is True
+    span.mark_counted(77, "in", 10)
+
+    worker._rollback_guard_crossing(counter, 77, "in", before)
+
+    assert counter.total_crossings == 0
+    assert span.capture_passage_state(77) == before
+    assert counter.register_external_crossing(77, "in", 12, (50, 50)) is True
+    assert counter.total_crossings == 1

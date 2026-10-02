@@ -323,12 +323,12 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.50") { throw "VERSION phải là 0.5.50, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0064_geometry_semantic_v0550.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0064_geometry_semantic_v0550.py." }
+  if ($version -ne "0.5.51") { throw "VERSION phải là 0.5.51, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0065_span_shadow_v0551.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0065_span_shadow_v0551.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0064_geometry_semantic_v0550"' -or $migrationText -notmatch 'down_revision = "0063_precision_recovery_v0549"' -or $migrationText -notmatch "value='0.5.50'") {
-    throw "Migration 0064_geometry_semantic_v0550 không đúng contract V0.5.50."
+  if ($migrationText -notmatch 'revision = "0065_span_shadow_v0551"' -or $migrationText -notmatch 'down_revision = "0064_geometry_semantic_v0550"' -or $migrationText -notmatch "value='0.5.51'") {
+    throw "Migration 0065_span_shadow_v0551 không đúng contract V0.5.51."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
@@ -1574,6 +1574,29 @@ function Assert-GeometrySemanticV0550Contract {
   Write-Host "[OK] Geometry + Semantic Shadow Closure 9.6 V0.5.50" -ForegroundColor Green
 }
 
+function Assert-SpanShadowV0551Contract {
+  Write-Host "`n[Traffic AI] Verified Span + Event Ordering Closure 9.7 V0.5.51" -ForegroundColor Cyan
+  $counting = Get-Content (Join-Path $root "ai-service\app\counting.py") -Raw -Encoding UTF8
+  $worker = Get-Content (Join-Path $root "ai-service\app\worker.py") -Raw -Encoding UTF8
+  $routes = Get-Content (Join-Path $root "backend\app\api\routes.py") -Raw -Encoding UTF8
+  $aiTests = Get-Content (Join-Path $root "ai-service\tests\test_counting.py") -Raw -Encoding UTF8
+  $guardTests = Get-Content (Join-Path $root "ai-service\tests\test_guard_transaction.py") -Raw -Encoding UTF8
+  $backendTests = Get-Content (Join-Path $root "backend\tests\test_app.py") -Raw -Encoding UTF8
+  if ($counting -notmatch '_verified_approach_span' -or $counting -notmatch 'approach_span_rescues' -or $counting -notmatch '_capture_passage_rollback') {
+    throw "V0.5.51 thiếu continuous-approach audit hoặc passage rollback."
+  }
+  if ($worker -notmatch 'capture_passage_state' -or $worker -notmatch '_rollback_guard_crossing' -or $worker -notmatch 'restore_passage_state' -or $worker -notmatch 'span_passage_state=span_passage_state') {
+    throw "V0.5.51 chưa rollback đồng bộ Primary Gate / Anchor Span khi Human Guard loại event."
+  }
+  if ($routes -notmatch '_cross_class_heavy_signature_duplicate' -or $routes -notmatch 'upper = float\(payload.source_time_seconds\) \+ lookback' -or $routes -notmatch 'VehicleEvent.vehicle_type.in_\(family_labels\)') {
+    throw "V0.5.51 thiếu Enum normalization hoặc candidate search hai phía source time."
+  }
+  if ($aiTests -notmatch 'test_v0551_' -or $guardTests -notmatch 'test_v0551_guard_rollback_restores_both_gate_passage_states' -or $backendTests -notmatch 'test_v0551_candidate_search_has_no_twelve_event_truncation') {
+    throw "V0.5.51 thiếu regression tests span / guard transaction / event ordering."
+  }
+  Write-Host "[OK] Verified Span + Event Ordering Closure 9.7 V0.5.51" -ForegroundColor Green
+}
+
 function Invoke-Step([string]$Title, [scriptblock]$Action) {
   Write-Host "`n[Traffic AI] $Title" -ForegroundColor Cyan
   & $Action
@@ -1640,6 +1663,7 @@ Assert-PrecisionClosureV0546Contract
 Assert-BalancedRecallRecoveryV0547Contract
 Assert-PrecisionRecoveryV0549Contract
 Assert-GeometrySemanticV0550Contract
+Assert-SpanShadowV0551Contract
 Assert-LegacySemanticCompatibilityV0523R1
 
 Write-Host "`n[Traffic AI] Road Zone + Frame Browser V0.5.11" -ForegroundColor Cyan

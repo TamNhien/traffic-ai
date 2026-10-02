@@ -74,6 +74,7 @@ class _PendingGuardCrossing:
     crossing_y: float | None
     snapshot_frame: object
     observed_frame_index: int | None = None
+    span_passage_state: object | None = None
 
 
 class PipelineWorker(threading.Thread):
@@ -523,8 +524,17 @@ class PipelineWorker(threading.Thread):
         self._pending_guard_crossings.pop(int(pending.track_id), None)
         self.state.human_guard_pending_crossings = len(self._pending_guard_crossings)
 
+    def _rollback_guard_crossing(
+        self, counter: LineCrossingCounter, track_id: int, direction: str,
+        span_passage_state: object | None,
+    ) -> None:
+        revoked = counter.revoke_last_crossing(track_id, direction)
+        span_rescuer = getattr(self, "_anchor_span_rescuer", None)
+        if revoked is not False and span_rescuer is not None and span_passage_state is not None:
+            span_rescuer.restore_passage_state(track_id, span_passage_state)
+
     def _drop_guard_crossing(self, counter: LineCrossingCounter, pending: _PendingGuardCrossing, *, expired: bool = False) -> None:
-        counter.revoke_last_crossing(pending.track_id, pending.direction)
+        self._rollback_guard_crossing(counter, pending.track_id, pending.direction, pending.span_passage_state)
         self._pending_guard_crossings.pop(int(pending.track_id), None)
         self.state.human_guard_pending_crossings = len(self._pending_guard_crossings)
         if expired:
@@ -977,6 +987,7 @@ class PipelineWorker(threading.Thread):
                 lost_finalize_min_normal_ratio=float(os.getenv("AI_GATE_ANCHOR_SPAN_LOST_MIN_NORMAL_RATIO", "0.55")),
                 lost_finalize_min_side_distance_ratio=float(os.getenv("AI_GATE_ANCHOR_SPAN_LOST_MIN_SIDE_RATIO", "0.014")),
             )
+            self._anchor_span_rescuer = anchor_span_rescuer
 
             heavy_rescuer = HeavyVehicleCrossingRescuer(
                 counter.line,
@@ -1192,7 +1203,6 @@ class PipelineWorker(threading.Thread):
                         cached_class = self._class_override_for(track_id, frame_index, base_display_label)
                         if cached_class is not None:
                             display_label = cached_class[0]
-                        last_track_event_meta[int(track_id)] = (str(display_label), float(confidence_f), int(frame_index))
 
                         # V0.5.26 Target-aware Class Refiner 3.0. Heavy vehicles
                         # are rare enough to verify periodically even before they
@@ -1246,6 +1256,7 @@ class PipelineWorker(threading.Thread):
                         if display_label == "bicycle" and int(track_id) not in self._bicycle_tracks_seen:
                             self._bicycle_tracks_seen.add(int(track_id))
                             self.state.bicycle_tracks_seen = len(self._bicycle_tracks_seen)
+                        last_track_event_meta[int(track_id)] = (str(display_label), float(confidence_f), int(frame_index))
 
                         # V0.5.24 Rider-aware Human Guard 2.0 compatibility is preserved.
                         # V0.5.25 Transactional Human Guard 2.1.
@@ -1263,6 +1274,15 @@ class PipelineWorker(threading.Thread):
                                 self._drop_guard_crossing(counter, buffered)
                             elif action in {"rider", "released", "keep"}:
                                 self._commit_guard_crossing(cv2, buffered)
+                            if track_id in self._pending_guard_crossings:
+                                # One unresolved semantic transaction owns this
+                                # track's provisional passage. A second geometry
+                                # event must not replace its rollback or metadata.
+                                self._draw_detection(
+                                    cv2, frame, rect, track_id, "HUMAN?", confidence_f,
+                                    anchor, class_certainty, raw_track_id,
+                                )
+                                continue
 
                         # Rider-aware screening still runs periodically before the
                         # gate. _observe_human_guard caches same-frame results, so
@@ -1323,6 +1343,7 @@ class PipelineWorker(threading.Thread):
                                 track_id, center, width, height, frame_index
                             )
 
+                        span_passage_state = anchor_span_rescuer.capture_passage_state(track_id)
                         direction = counter.update(
                             track_id, anchor, width, height, frame_index=frame_index,
                             origin_probe=(
@@ -1519,7 +1540,7 @@ class PipelineWorker(threading.Thread):
                                     device, use_half, velocity=velocity, force=True,
                                 )
                                 if action == "rejected":
-                                    counter.revoke_last_crossing(track_id, direction)
+                                    self._rollback_guard_crossing(counter, track_id, direction, span_passage_state)
                                     self._draw_detection(
                                         cv2, frame, rect, track_id, "PERSON-GUARD", event_confidence,
                                         anchor, class_certainty, raw_track_id,
@@ -1544,6 +1565,7 @@ class PipelineWorker(threading.Thread):
                                         crossing_x=crossing_x,
                                         crossing_y=crossing_y,
                                         snapshot_frame=guard_snapshot,
+                                        span_passage_state=span_passage_state,
                                     )
                                     self.state.human_guard_pending_crossings = len(self._pending_guard_crossings)
                                     continue
@@ -1698,6 +1720,8 @@ class PipelineWorker(threading.Thread):
                         "bicycle_context_xframe_priority_scans": self.state.bicycle_context_xframe_priority_scans,
                         "bicycle_xframe_decision_audit": self._bicycle_xframe_audit_this_frame,
                         "verified_anchor_span_rescues": self.state.verified_anchor_span_rescues,
+                        "anchor_span_approach_candidates": anchor_span_rescuer.approach_span_candidates,
+                        "anchor_span_approach_rescues": anchor_span_rescuer.approach_span_rescues,
                         "post_confirm_closures": self.state.post_confirm_closures,
                         "post_confirm_jitter_holds": self.state.post_confirm_jitter_holds,
                         "road_edge_span_rescues": self.state.road_edge_span_rescues,

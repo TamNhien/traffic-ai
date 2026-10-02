@@ -285,6 +285,22 @@ class _TrackGateState:
     max_abs_distance_since_count: float = 0.0
 
 
+@dataclass(slots=True)
+class _PassageRollback:
+    accepted_direction: str
+    accepted_frame: int
+    counted_directions: set[str]
+    last_count_frame: int
+    armed: bool
+    max_abs_distance_since_count: float
+    crossing_point: Point | None
+    crossing_frame: float | None
+    crossing_mode: str | None
+    origin_rescue: bool
+    same_direction_override: bool = False
+    cooldown_override: bool = False
+
+
 
 
 @dataclass(slots=True)
@@ -301,6 +317,7 @@ class _AnchorSpanPending:
     normal_ratio: float = 0.0
     side_depth_ratio: float = 0.0
     same_direction_candidate: bool = False
+    approach_span: bool = False
 
 
 @dataclass(slots=True)
@@ -376,6 +393,8 @@ class VerifiedAnchorSpanRescuer:
         self.lost_track_finalizations = 0
         self.immediate_override_qualifications = 0
         self.immediate_handoff_rejections = 0
+        self.approach_span_candidates = 0
+        self.approach_span_rescues = 0
         self._last_crossing_frame: dict[int, float] = {}
         self._override_qualified: set[int] = set()
         self._immediate_candidates: set[int] = set()
@@ -411,6 +430,72 @@ class VerifiedAnchorSpanRescuer:
         )
         return bool(anchors_ok and margin_corridor), bool(anchors_ok and margin_corridor and not strict_corridor)
 
+    def _verified_approach_span(
+        self, history: list[_GateSample], width: int, height: int,
+    ) -> tuple[_GateSample, Point, float, float, float, bool] | None:
+        """Audit a continuous approach when the nearest box sample is oblique.
+
+        A recent lateral box wobble can make the last two observations fail the
+        normal-motion guard even while the measured approach crossed the gate.
+        An older chord alone is insufficient: every observed step must progress
+        toward the destination, the *total path* must pass the existing jump and
+        normal-motion limits, and an adjacent observed segment must intersect
+        the finite gate. This path always waits for post-side confirmation.
+        """
+        end = history[-1]
+        a, b = self.line.denormalize(width, height)
+        scale = max(1.0, min(width, height))
+        diagonal = max(hypot(width, height), 1.0)
+        for index in range(len(history) - 3, -1, -1):
+            start = history[index]
+            gap = end.frame_index - start.frame_index
+            if gap > self.history_gap_frames:
+                break
+            if start.side != -end.side or gap <= 0:
+                continue
+            window = history[index:]
+            # Do not recover a prior crossing, a reversal, or alias samples from
+            # the same source frame by selecting an older, more favorable chord.
+            if any(
+                right.frame_index <= left.frame_index
+                or (right.distance - left.distance) * end.side < -1e-6
+                for left, right in zip(window, window[1:])
+            ):
+                continue
+            path_length = sum(
+                hypot(right.point[0] - left.point[0], right.point[1] - left.point[1])
+                for left, right in zip(window, window[1:])
+            )
+            normal_ratio = abs(end.distance - start.distance) / max(path_length, 1e-6)
+            side_depth = min(abs(start.distance), abs(end.distance)) / scale
+            if (
+                normal_ratio < self.min_normal_ratio
+                or path_length / diagonal > self.max_jump_ratio
+                or side_depth < self.min_side_distance_ratio
+            ):
+                continue
+            if self.road_zone is not None and not all(
+                self.road_zone.contains_with_margin(item.point, width, height, self.road_margin_ratio)
+                for item in window
+            ):
+                continue
+            bracket = None
+            for left, right in zip(window, window[1:]):
+                if left.distance * right.distance <= 0.0 and left.distance != right.distance:
+                    bracket = left, right
+            if bracket is None:
+                continue
+            left, right = bracket
+            crossing = segment_crossing_point(left.point, right.point, a, b, segment_margin=self.segment_margin)
+            if crossing is None:
+                continue
+            road_ok, road_edge = self._road_ok(start, end, crossing, width, height)
+            local_road_ok, local_road_edge = self._road_ok(left, right, crossing, width, height)
+            if not (road_ok and local_road_ok):
+                continue
+            return start, crossing, crossing_frame_between(left, right, crossing), normal_ratio, side_depth, bool(road_edge or local_road_edge)
+        return None
+
     def update(self, track_id: int, anchor: Point, width: int, height: int, frame_index: int) -> tuple[str, Point] | None:
         if not self.enabled:
             return None
@@ -422,11 +507,30 @@ class VerifiedAnchorSpanRescuer:
         side = 0 if abs(distance) <= dead_band else (1 if distance > 0 else -1)
         sample = _GateSample(int(frame_index), anchor, distance, side)
         state = self._tracks.setdefault(tid, _AnchorSpanState())
+        if state.history and sample.frame_index <= state.history[-1].frame_index:
+            # Canonical alias fusion can deliver the same source frame twice.
+            # It supplies no distinct post-side evidence for an override.
+            return None
+        last_sample = state.history[-1] if state.history else None
         state.history.append(sample)
 
         pending = state.pending
         if pending is not None:
             age = sample.frame_index - pending.end.frame_index
+            post_jump = (
+                hypot(anchor[0] - last_sample.point[0], anchor[1] - last_sample.point[1])
+                / max(hypot(width, height), 1.0)
+            ) if last_sample is not None else 0.0
+            post_road_ok = self.road_zone is None or self.road_zone.contains_with_margin(
+                anchor, width, height, self.road_margin_ratio
+            )
+            if age <= self.post_confirm_max_gap_frames and (post_jump > self.max_jump_ratio or not post_road_ok):
+                # Every observation in the pending lifecycle must belong to the
+                # same bounded road trajectory; a neutral box jump cannot hide
+                # an alias switch before the final confirming sample.
+                self.rejected_validation += 1
+                state.pending = None
+                return None
             if age > self.post_confirm_max_gap_frames:
                 state.pending = None
             elif side == -pending.destination_side:
@@ -459,6 +563,8 @@ class VerifiedAnchorSpanRescuer:
                         self._override_qualified.add(tid)
                         if pending.same_direction_candidate:
                             self.same_direction_overrides += 1
+                        if pending.approach_span:
+                            self.approach_span_rescues += 1
                         return pending.direction, pending.crossing
                     state.pending = None
                 return None
@@ -496,15 +602,21 @@ class VerifiedAnchorSpanRescuer:
         jump_ratio = move_len / max(hypot(width, height), 1.0)
         side_depth_ratio = min(abs(sample.distance), abs(previous.distance)) / scale
         road_ok, road_edge_rescue = self._road_ok(previous, sample, crossing, width, height)
+        approach_span = False
+        crossing_frame = crossing_frame_between(previous, sample, crossing)
         if (
             normal_ratio < self.min_normal_ratio
             or jump_ratio > self.max_jump_ratio
             or side_depth_ratio < self.min_side_distance_ratio
             or not road_ok
         ):
-            self.rejected_validation += 1
-            return None
-        crossing_frame = crossing_frame_between(previous, sample, crossing)
+            recovered = self._verified_approach_span(list(state.history), width, height)
+            if recovered is None:
+                self.rejected_validation += 1
+                return None
+            previous, crossing, crossing_frame, normal_ratio, side_depth_ratio, road_edge_rescue = recovered
+            approach_span = True
+            self.approach_span_candidates += 1
         self.verified_candidates += 1
 
         # An exceptionally clear two-sided span is self-confirming. This is not
@@ -512,6 +624,7 @@ class VerifiedAnchorSpanRescuer:
         # gate with stricter normal-motion/side-depth/jump/road constraints.
         if (
             not same_direction_candidate
+            and not approach_span
             and normal_ratio >= self.immediate_min_normal_ratio
             and side_depth_ratio >= self.immediate_min_side_distance_ratio
             and (sample.frame_index - previous.frame_index) <= 2
@@ -548,6 +661,7 @@ class VerifiedAnchorSpanRescuer:
             normal_ratio=normal_ratio,
             side_depth_ratio=side_depth_ratio,
             same_direction_candidate=same_direction_candidate,
+            approach_span=approach_span,
         )
         return None
 
@@ -567,6 +681,17 @@ class VerifiedAnchorSpanRescuer:
             return None
         age = int(frame_index) - pending.end.frame_index
         if age < 1 or age > self.post_confirm_max_gap_frames:
+            return None
+        if pending.approach_span:
+            # A measured approach can repair an oblique last box pair only with
+            # a distinct later destination observation. Disappearance must not
+            # substitute for that confirmation, even when aggregate geometry is
+            # strong enough for the ordinary two-point lost-track closure.
+            return None
+        if pending.opposite_observations:
+            # An opposite-side observation followed by disappearance cannot
+            # replace the missing destination confirmation, even after a strong
+            # original span. Wait for an actual return to the destination.
             return None
         if pending.normal_ratio < self.lost_finalize_min_normal_ratio:
             return None
@@ -623,6 +748,36 @@ class VerifiedAnchorSpanRescuer:
     def crossing_frame_for(self, track_id: int) -> float | None:
         return self._last_crossing_frame.get(int(track_id))
 
+    def capture_passage_state(self, track_id: int) -> tuple[frozenset[str], int, float | None]:
+        """Capture only accepted identity/clock for a downstream guard check."""
+        tid = int(track_id)
+        state = self._tracks.get(tid)
+        if state is None:
+            return frozenset(), -10_000, None
+        return frozenset(state.counted_directions), state.last_count_frame, self._last_crossing_frame.get(tid)
+
+    def restore_passage_state(
+        self, track_id: int, snapshot: tuple[frozenset[str], int, float | None],
+    ) -> None:
+        """Roll back identity and discard geometry rejected by a semantic guard.
+
+        Keeping the rejected pending span would let expiry or track-loss closure
+        re-offer it. New samples must establish a fresh finite crossing instead.
+        """
+        tid = int(track_id)
+        directions, last_count_frame, crossing_frame = snapshot
+        state = self._tracks.setdefault(tid, _AnchorSpanState())
+        state.counted_directions = set(directions)
+        state.last_count_frame = int(last_count_frame)
+        state.pending = None
+        state.history.clear()
+        self._override_qualified.discard(tid)
+        self._immediate_candidates.discard(tid)
+        if crossing_frame is None:
+            self._last_crossing_frame.pop(tid, None)
+        else:
+            self._last_crossing_frame[tid] = crossing_frame
+
     def mark_counted(self, track_id: int, direction: str, frame_index: int | None = None) -> None:
         state = self._tracks.setdefault(int(track_id), _AnchorSpanState())
         state.counted_directions = {str(direction)}
@@ -630,6 +785,7 @@ class VerifiedAnchorSpanRescuer:
         if frame_index is not None:
             state.last_count_frame = max(state.last_count_frame, int(frame_index))
         self._override_qualified.discard(int(track_id))
+        self._immediate_candidates.discard(int(track_id))
 
     def merge_track(self, source_track_id: int, target_track_id: int) -> None:
         source, target = int(source_track_id), int(target_track_id)
@@ -642,14 +798,36 @@ class VerifiedAnchorSpanRescuer:
         if dst is None:
             self._tracks[target] = src
         else:
-            history = list(dst.history) + list(src.history)
-            history.sort(key=lambda item: item.frame_index)
-            dst.history = deque(history[-64:], maxlen=64)
-            dst.counted_directions.update(src.counted_directions)
-            if dst.pending is None or (src.pending is not None and src.pending.end.frame_index > dst.pending.end.frame_index):
-                dst.pending = src.pending
-        if source in self._last_crossing_frame:
-            self._last_crossing_frame[target] = self._last_crossing_frame.pop(source)
+            # One observation per source frame prevents aliases from supplying
+            # synthetic confirmation evidence. Prefer the established target
+            # observation when both aliases saw the same frame.
+            history = {item.frame_index: item for item in src.history}
+            history.update({item.frame_index: item for item in dst.history})
+            dst.history = deque(sorted(history.values(), key=lambda item: item.frame_index)[-64:], maxlen=64)
+            # Follow the primary counter's latest-passage contract. Unioning IN
+            # and OUT forever turns a real alternating traversal into a false
+            # same-direction candidate and loses the source cooldown clock.
+            if src.last_count_frame > dst.last_count_frame:
+                dst.counted_directions = set(src.counted_directions)
+            elif src.last_count_frame == dst.last_count_frame and not dst.counted_directions:
+                dst.counted_directions = set(src.counted_directions)
+            dst.last_count_frame = max(dst.last_count_frame, src.last_count_frame)
+            valid_pending = [
+                item for item in (dst.pending, src.pending)
+                if item is not None and item.end.frame_index > dst.last_count_frame
+            ]
+            dst.pending = max(valid_pending, key=lambda item: item.end.frame_index, default=None)
+        # Qualification describes a particular candidate transaction; aliases
+        # cannot inherit an already-issued override after their state is merged.
+        self._override_qualified.discard(source)
+        self._override_qualified.discard(target)
+        self._immediate_candidates.discard(source)
+        self._immediate_candidates.discard(target)
+        source_crossing = self._last_crossing_frame.pop(source, None)
+        if source_crossing is not None:
+            self._last_crossing_frame[target] = max(
+                source_crossing, self._last_crossing_frame.get(target, source_crossing)
+            )
 
 
 @dataclass(slots=True)
@@ -1107,6 +1285,27 @@ class LineCrossingCounter:
         self._last_crossing_point: dict[int, Point] = {}
         self._last_crossing_frame: dict[int, float] = {}
         self._last_external_reject_reason: dict[int, str] = {}
+        self._passage_rollbacks: dict[int, _PassageRollback] = {}
+
+    def _capture_passage_rollback(
+        self, track_id: int, direction: str, frame_index: int, state: _TrackGateState,
+        *, same_direction_override: bool = False, cooldown_override: bool = False,
+    ) -> None:
+        tid = int(track_id)
+        self._passage_rollbacks[tid] = _PassageRollback(
+            accepted_direction=direction,
+            accepted_frame=int(frame_index),
+            counted_directions=set(state.counted_directions),
+            last_count_frame=state.last_count_frame,
+            armed=state.armed,
+            max_abs_distance_since_count=state.max_abs_distance_since_count,
+            crossing_point=self._last_crossing_point.get(tid),
+            crossing_frame=self._last_crossing_frame.get(tid),
+            crossing_mode=self._last_crossing_mode.get(tid),
+            origin_rescue=tid in self._last_origin_rescue,
+            same_direction_override=same_direction_override,
+            cooldown_override=cooldown_override,
+        )
 
     def update(
         self,
@@ -1468,6 +1667,8 @@ class LineCrossingCounter:
             self.rejected_same_direction_cycle += 1
             return None
 
+        self._capture_passage_rollback(int(track_id), direction, sample.frame_index, state)
+
         # Keep only the most recently accepted direction.  The opposite
         # traversal is the proof that a later same-direction passage is a new
         # cycle, so alternating IN→OUT→IN remains countable without ever using
@@ -1551,6 +1752,11 @@ class LineCrossingCounter:
         if cooldown_blocked and not verified_anchor_span:
             self._last_external_reject_reason[tid] = "cooldown"
             return False
+        self._capture_passage_rollback(
+            tid, direction, int(frame_index), state,
+            same_direction_override=verified_anchor_span and same_direction_blocked,
+            cooldown_override=verified_anchor_span and cooldown_blocked,
+        )
         if verified_anchor_span and same_direction_blocked:
             self.verified_same_direction_overrides += 1
         if verified_anchor_span and cooldown_blocked:
@@ -1586,7 +1792,7 @@ class LineCrossingCounter:
     def crossing_frame_for(self, track_id: int) -> float | None:
         return self._last_crossing_frame.get(int(track_id))
 
-    def revoke_last_crossing(self, track_id: int, direction: str) -> None:
+    def revoke_last_crossing(self, track_id: int, direction: str) -> bool:
         """Undo the most recent crossing when a downstream semantic guard rejects it.
 
         Human Guard runs only after geometry finds a real line crossing. If the
@@ -1595,15 +1801,40 @@ class LineCrossingCounter:
         """
         track_id = int(track_id)
         state = self._tracks.get(track_id)
-        mode = self._last_crossing_mode.pop(track_id, None)
+        rollback = self._passage_rollbacks.get(track_id)
+        if (
+            state is None or rollback is None
+            or str(direction) != rollback.accepted_direction
+            or state.last_count_frame != rollback.accepted_frame
+        ):
+            return False
+        self._passage_rollbacks.pop(track_id)
+        mode = self._last_crossing_mode.get(track_id)
         was_origin_rescue = track_id in self._last_origin_rescue
         self._last_origin_rescue.discard(track_id)
-        self._last_crossing_point.pop(track_id, None)
-        self._last_crossing_frame.pop(track_id, None)
-        if state is not None:
-            state.counted_directions.discard(str(direction))
-            state.armed = False
-            state.max_abs_distance_since_count = 0.0
+        state.counted_directions = set(rollback.counted_directions)
+        state.last_count_frame = rollback.last_count_frame
+        state.armed = rollback.armed
+        state.max_abs_distance_since_count = rollback.max_abs_distance_since_count
+        # The rejected geometry must not be replayed on the next sample or
+        # mistaken for the opposite traversal that reopens the previous cycle.
+        state.history.clear()
+        state.origin_history.clear()
+        for mapping, previous in (
+            (self._last_crossing_point, rollback.crossing_point),
+            (self._last_crossing_frame, rollback.crossing_frame),
+            (self._last_crossing_mode, rollback.crossing_mode),
+        ):
+            if previous is None:
+                mapping.pop(track_id, None)
+            else:
+                mapping[track_id] = previous
+        if rollback.origin_rescue:
+            self._last_origin_rescue.add(track_id)
+        if rollback.same_direction_override:
+            self.verified_same_direction_overrides = max(0, self.verified_same_direction_overrides - 1)
+        if rollback.cooldown_override:
+            self.verified_cooldown_overrides = max(0, self.verified_cooldown_overrides - 1)
         if direction == "in" and self.in_count > 0:
             self.in_count -= 1
         elif direction == "out" and self.out_count > 0:
@@ -1616,6 +1847,7 @@ class LineCrossingCounter:
             self.interpolated_crossings -= 1
         elif mode == "rescued" and self.rescued_crossings > 0:
             self.rescued_crossings -= 1
+        return True
 
     def merge_track(self, source_track_id: int, target_track_id: int) -> None:
         """Coalesce gate history after cross-class canonical ID fusion.
@@ -1633,6 +1865,27 @@ class LineCrossingCounter:
         if src is None:
             return
         dst = self._tracks.get(target)
+        source_is_latest = dst is None or src.last_count_frame > dst.last_count_frame
+        source_rollback = self._passage_rollbacks.pop(source, None)
+        target_rollback = self._passage_rollbacks.pop(target, None)
+        rollback = source_rollback if source_is_latest else target_rollback
+        other_state, other_tid = (dst, target) if source_is_latest else (src, source)
+        if rollback is not None and other_state is not None and (
+            rollback.last_count_frame < other_state.last_count_frame < rollback.accepted_frame
+        ):
+            # A provisional event on one alias may follow a committed passage
+            # on the other. Its rollback must preserve that newer prior passage,
+            # rather than restoring the source alias's initially empty clock.
+            rollback.counted_directions = set(other_state.counted_directions)
+            rollback.last_count_frame = other_state.last_count_frame
+            rollback.armed = other_state.armed
+            rollback.max_abs_distance_since_count = other_state.max_abs_distance_since_count
+            rollback.crossing_point = self._last_crossing_point.get(other_tid)
+            rollback.crossing_frame = self._last_crossing_frame.get(other_tid)
+            rollback.crossing_mode = self._last_crossing_mode.get(other_tid)
+            rollback.origin_rescue = other_tid in self._last_origin_rescue
+        if rollback is not None:
+            self._passage_rollbacks[target] = rollback
         if dst is None:
             self._tracks[target] = src
         else:
@@ -1657,20 +1910,19 @@ class LineCrossingCounter:
             latest = max(dst.history, key=lambda sample: sample.frame_index, default=None)
             if latest is not None:
                 dst.last_nonzero_side = latest.side if latest.side != 0 else dst.last_nonzero_side
-        source_frame = src.last_count_frame
-        target_state = self._tracks.get(target)
-        if source in self._last_crossing_mode and (target not in self._last_crossing_mode or source_frame >= (target_state.last_count_frame if target_state else -10000)):
-            self._last_crossing_mode[target] = self._last_crossing_mode[source]
-        self._last_crossing_mode.pop(source, None)
-        if source in self._last_crossing_point:
-            self._last_crossing_point[target] = self._last_crossing_point[source]
-        self._last_crossing_point.pop(source, None)
-        if source in self._last_crossing_frame:
-            self._last_crossing_frame[target] = self._last_crossing_frame[source]
-        self._last_crossing_frame.pop(source, None)
-        if source in self._last_origin_rescue:
-            self._last_origin_rescue.add(target)
-            self._last_origin_rescue.discard(source)
+        for mapping in (self._last_crossing_mode, self._last_crossing_point, self._last_crossing_frame):
+            value = mapping.pop(source, None)
+            if source_is_latest:
+                if value is None:
+                    mapping.pop(target, None)
+                else:
+                    mapping[target] = value
+        if source_is_latest:
+            if source in self._last_origin_rescue:
+                self._last_origin_rescue.add(target)
+            else:
+                self._last_origin_rescue.discard(target)
+        self._last_origin_rescue.discard(source)
 
     def crossing_mode_for(self, track_id: int) -> str | None:
         return self._last_crossing_mode.get(int(track_id))

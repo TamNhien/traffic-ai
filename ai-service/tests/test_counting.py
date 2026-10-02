@@ -3,6 +3,224 @@ import pytest
 from app.counting import CountingLine, LineCrossingCounter, RoadZone
 
 
+def test_v0551_continuous_approach_recovers_oblique_last_box_only_after_post_confirm() -> None:
+    from app.counting import VerifiedAnchorSpanRescuer
+
+    rescue = VerifiedAnchorSpanRescuer(CountingLine(0.1, 0.5, 0.9, 0.5))
+    assert rescue.update(5511, (500.0, 465.0), 1000, 1000, 30) is None
+    assert rescue.update(5511, (480.0, 493.0), 1000, 1000, 31) is None
+    # Last-pair normal motion is 15 / hypot(50, 15) < 0.40. The measured
+    # monotone approach passes the same limit over its entire bounded path.
+    assert rescue.update(5511, (530.0, 508.0), 1000, 1000, 32) is None
+    assert rescue.approach_span_candidates == 1
+    assert rescue.immediate_candidate_for(5511) is False
+    assert rescue.override_qualified_for(5511) is False
+    confirmed = rescue.update(5511, (530.0, 535.0), 1000, 1000, 33)
+    assert confirmed is not None and confirmed[0] == "in"
+    assert confirmed[1][0] == pytest.approx(480.0 + 50.0 * 7.0 / 15.0)
+    assert rescue.crossing_frame_for(5511) == pytest.approx(31.0 + 7.0 / 15.0)
+    assert rescue.approach_span_rescues == 1
+    assert rescue.post_confirm_closures == 1
+    assert rescue.override_qualified_for(5511) is True
+
+
+def test_v0551_approach_fallback_rejects_reversal_and_total_path_jump() -> None:
+    from app.counting import VerifiedAnchorSpanRescuer
+
+    reversing = VerifiedAnchorSpanRescuer(CountingLine(0.1, 0.5, 0.9, 0.5))
+    for frame, point in enumerate(((500, 465), (480, 493), (480, 497), (480, 493), (530, 508)), 1):
+        assert reversing.update(5512, point, 1000, 1000, frame) is None
+    assert reversing.approach_span_candidates == 0
+
+    jumping = VerifiedAnchorSpanRescuer(CountingLine(0.1, 0.5, 0.9, 0.5))
+    # The endpoint chord is small, but the observed detour exceeds the unchanged
+    # 0.12 diagonal jump bound. Selecting the older chord must not hide it.
+    for frame, point in enumerate(((500, 460), (450, 490), (570, 510)), 1):
+        assert jumping.update(5513, point, 1000, 1000, frame) is None
+    assert jumping.approach_span_candidates == 0
+
+
+def test_v0551_strong_approach_fallback_still_needs_observed_post_confirmation() -> None:
+    from app.counting import VerifiedAnchorSpanRescuer
+
+    rescue = VerifiedAnchorSpanRescuer(CountingLine(0.1, 0.5, 0.9, 0.5))
+    assert rescue.update(5530, (500, 440), 1000, 1000, 1) is None
+    assert rescue.update(5530, (480, 485), 1000, 1000, 2) is None
+    assert rescue.update(5530, (550, 515), 1000, 1000, 3) is None
+    assert rescue.approach_span_candidates == 1
+    # Aggregate normal motion exceeds 0.55 and side depth exceeds 0.014,
+    # but this repaired approach still cannot close merely on disappearance.
+    assert rescue.finalize_lost(5530, 4) is None
+    assert rescue.lost_track_finalizations == 0
+    assert rescue.override_qualified_for(5530) is False
+    confirmed = rescue.update(5530, (550, 535), 1000, 1000, 4)
+    assert confirmed is not None and confirmed[0] == "in"
+    assert rescue.post_confirm_closures == 1
+    assert rescue.approach_span_rescues == 1
+
+
+def test_v0551_approach_fallback_requires_actual_finite_crossing_and_road_path() -> None:
+    from app.counting import VerifiedAnchorSpanRescuer
+
+    outside_gate = VerifiedAnchorSpanRescuer(CountingLine(0.1, 0.5, 0.9, 0.5))
+    for frame, point in enumerate(((780, 470), (905, 493), (950, 508)), 1):
+        assert outside_gate.update(5514, point, 1000, 1000, frame) is None
+    assert outside_gate.verified_anchor_span_rescues == 0
+
+    zone = RoadZone(0.49, 0.0, 0.60, 0.0, 0.60, 1.0, 0.49, 1.0)
+    outside_road = VerifiedAnchorSpanRescuer(
+        CountingLine(0.1, 0.5, 0.9, 0.5), road_zone=zone, road_margin_ratio=0.005,
+    )
+    # An older endpoint-to-endpoint chord lies on the roadway while its actual
+    # intermediate box sample leaves it. Every observed anchor must pass ROI.
+    for frame, point in enumerate(((500, 465), (480, 493), (530, 508)), 1):
+        assert outside_road.update(5515, point, 1000, 1000, frame) is None
+    assert outside_road.approach_span_candidates == 0
+
+
+def test_v0551_post_confirm_requires_distinct_source_frames() -> None:
+    from app.counting import VerifiedAnchorSpanRescuer
+
+    rescue = VerifiedAnchorSpanRescuer(
+        CountingLine(0.1, 0.5, 0.9, 0.5), immediate_min_normal_ratio=0.95,
+    )
+    assert rescue.update(5516, (450, 460), 1000, 1000, 10) is None
+    assert rescue.update(5516, (500, 540), 1000, 1000, 11) is None
+    assert rescue.update(5516, (510, 560), 1000, 1000, 11) is None
+    assert rescue.override_qualified_for(5516) is False
+    assert rescue.update(5516, (510, 560), 1000, 1000, 12)[0] == "in"
+    assert rescue.post_confirm_closures == 1
+
+
+def test_v0551_pending_span_cannot_confirm_from_box_jump_or_outside_road() -> None:
+    from app.counting import VerifiedAnchorSpanRescuer
+
+    jumping = VerifiedAnchorSpanRescuer(
+        CountingLine(0.1, 0.5, 0.9, 0.5), immediate_min_normal_ratio=0.95,
+    )
+    assert jumping.update(5517, (450, 460), 1000, 1000, 10) is None
+    assert jumping.update(5517, (500, 540), 1000, 1000, 11) is None
+    # A neutral sample also has to pass the jump guard; it cannot conceal a
+    # large alias jump before a later destination confirmation.
+    assert jumping.update(5517, (900, 500), 1000, 1000, 12) is None
+    assert jumping.update(5517, (900, 550), 1000, 1000, 13) is None
+    assert jumping.post_confirm_closures == 0
+    assert jumping.finalize_lost(5517, 14) is None
+
+    zone = RoadZone(0.4, 0.0, 0.6, 0.0, 0.6, 1.0, 0.4, 1.0)
+    outside_road = VerifiedAnchorSpanRescuer(
+        CountingLine(0.1, 0.5, 0.9, 0.5), road_zone=zone, immediate_min_normal_ratio=0.95,
+    )
+    assert outside_road.update(5518, (450, 460), 1000, 1000, 10) is None
+    assert outside_road.update(5518, (500, 540), 1000, 1000, 11) is None
+    assert outside_road.update(5518, (620, 560), 1000, 1000, 12) is None
+    assert outside_road.post_confirm_closures == 0
+    assert outside_road.finalize_lost(5518, 13) is None
+
+
+def test_v0551_track_loss_does_not_close_opposite_side_jitter_without_return() -> None:
+    from app.counting import VerifiedAnchorSpanRescuer
+
+    rescue = VerifiedAnchorSpanRescuer(
+        CountingLine(0.1, 0.5, 0.9, 0.5), immediate_min_normal_ratio=0.95,
+    )
+    assert rescue.update(5519, (450, 460), 1000, 1000, 10) is None
+    assert rescue.update(5519, (500, 540), 1000, 1000, 11) is None
+    assert rescue.update(5519, (500, 480), 1000, 1000, 12) is None
+    assert rescue.finalize_lost(5519, 13) is None
+    assert rescue.lost_track_finalizations == 0
+    assert rescue.update(5519, (500, 565), 1000, 1000, 13)[0] == "in"
+
+
+def test_v0551_span_merge_keeps_latest_passage_clock_and_single_frame_evidence() -> None:
+    from app.counting import VerifiedAnchorSpanRescuer
+
+    rescue = VerifiedAnchorSpanRescuer(CountingLine(0.1, 0.5, 0.9, 0.5))
+    rescue.mark_counted(5520, "in", 40)
+    rescue.mark_counted(5521, "out", 10)
+    rescue.merge_track(5520, 5521)
+    assert rescue.capture_passage_state(5521)[:2] == (frozenset({"in"}), 40)
+    assert rescue.update(5521, (500, 460), 1000, 1000, 50) is None
+    assert rescue.update(5521, (500, 540), 1000, 1000, 51) is None
+    assert rescue.update(5521, (500, 560), 1000, 1000, 52) is None
+    assert rescue.same_direction_overrides == 0
+
+
+def test_v0551_secondary_semantic_rollback_restores_prior_clock_and_drops_pending() -> None:
+    from app.counting import VerifiedAnchorSpanRescuer
+
+    rescue = VerifiedAnchorSpanRescuer(CountingLine(0.1, 0.5, 0.9, 0.5))
+    empty = rescue.capture_passage_state(5522)
+    rescue.mark_counted(5522, "in", 10)
+    prior = rescue.capture_passage_state(5522)
+    assert rescue.update(5522, (500, 430), 1000, 1000, 30) is None
+    rescue.mark_counted(5522, "out", 31)
+    rescue.restore_passage_state(5522, prior)
+    assert rescue.capture_passage_state(5522) == prior
+    assert rescue.finalize_lost(5522, 32) is None
+    assert rescue.update(5522, (500, 570), 1000, 1000, 32) is None
+    rescue.restore_passage_state(5522, empty)
+    assert rescue.capture_passage_state(5522) == empty
+
+
+def test_v0551_primary_external_rollback_preserves_prior_passage_and_is_idempotent() -> None:
+    counter = LineCrossingCounter(CountingLine(), crossing_cooldown_frames=60)
+    assert counter.register_external_crossing(
+        5523, "in", 10, (500, 500), mode="direct", crossing_frame=9.5,
+    ) is True
+    assert counter.register_external_crossing(
+        5523, "out", 20, (510, 500), mode="rescued", crossing_frame=19.5,
+        verified_anchor_span=True,
+    ) is True
+    assert counter.revoke_last_crossing(5523, "in") is False
+    assert counter.total_crossings == 2
+    assert counter.revoke_last_crossing(5523, "out") is True
+    assert counter.in_count == 1 and counter.out_count == 0
+    assert counter.crossing_point_for(5523) == (500, 500)
+    assert counter.crossing_frame_for(5523) == 9.5
+    assert counter.crossing_mode_for(5523) == "direct"
+    assert counter.direct_crossings == 1 and counter.rescued_crossings == 0
+    assert counter.verified_cooldown_overrides == 0
+    assert counter._tracks[5523].last_count_frame == 10
+    assert counter.revoke_last_crossing(5523, "out") is False
+    assert counter.total_crossings == 1
+    assert counter.register_external_crossing(5523, "in", 30, (500, 500)) is False
+    assert counter.external_rejection_reason_for(5523) == "same-direction"
+    assert counter.register_external_crossing(5523, "out", 65, (500, 500)) is False
+    assert counter.external_rejection_reason_for(5523) == "cooldown"
+
+
+def test_v0551_primary_geometry_rollback_keeps_previous_accepted_cycle() -> None:
+    counter = LineCrossingCounter(CountingLine())
+    assert counter.update(5524, (50, 20), 100, 100, 1) is None
+    assert counter.update(5524, (50, 80), 100, 100, 2) == "in"
+    prior_frame = counter.crossing_frame_for(5524)
+    assert counter.update(5524, (50, 90), 100, 100, 3) is None
+    assert counter.update(5524, (50, 20), 100, 100, 4) == "out"
+    assert counter.revoke_last_crossing(5524, "out") is True
+    assert counter.in_count == 1 and counter.out_count == 0
+    assert counter.crossing_frame_for(5524) == prior_frame
+    assert counter._tracks[5524].last_count_frame == 2
+    # The rejected OUT does not unlock another IN, and its span is not replayed.
+    assert counter.update(5524, (50, 20), 100, 100, 5) is None
+    assert counter.update(5524, (50, 80), 100, 100, 6) is None
+    assert counter.total_crossings == 1
+
+
+def test_v0551_primary_merge_rollback_preserves_other_alias_prior_passage() -> None:
+    counter = LineCrossingCounter(CountingLine())
+    assert counter.register_external_crossing(5525, "out", 10, (510, 500), mode="direct") is True
+    assert counter.register_external_crossing(5526, "in", 20, (520, 500), mode="rescued") is True
+    counter.merge_track(5526, 5525)
+    assert counter.crossing_point_for(5525) == (520, 500)
+    assert counter.revoke_last_crossing(5525, "in") is True
+    assert counter.in_count == 0 and counter.out_count == 1
+    assert counter.crossing_point_for(5525) == (510, 500)
+    assert counter.crossing_mode_for(5525) == "direct"
+    assert counter._tracks[5525].last_count_frame == 10
+    assert counter.register_external_crossing(5525, "out", 30, (510, 500)) is False
+
+
 def test_line_crossing_in_is_counted_once() -> None:
     counter = LineCrossingCounter(CountingLine(0.0, 0.5, 1.0, 0.5))
     assert counter.update(10, (50, 25), 100, 100) is None

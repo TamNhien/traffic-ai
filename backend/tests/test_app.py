@@ -20,7 +20,7 @@ def test_root_metadata() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["name"] == "Traffic AI"
-    assert payload["version"] == "0.5.50"
+    assert payload["version"] == "0.5.51"
     assert payload["docs"] == "/docs"
     assert payload["health"] == "/api/health"
 
@@ -158,7 +158,7 @@ def test_benchmark_clone_compatibility_rejects_different_line() -> None:
 
 
 def test_backend_version_metadata() -> None:
-    assert app.version == "0.5.50"
+    assert app.version == "0.5.51"
 
 
 def test_v0531_startup_crossing_signature_guard_is_narrow() -> None:
@@ -179,7 +179,7 @@ def test_v0533_ground_truth_mark_update_schema() -> None:
 
 
 def test_v0533_version() -> None:
-    assert app.version == "0.5.50"
+    assert app.version == "0.5.51"
 
 
 def test_v0533_ground_truth_mark_update_keeps_timecode() -> None:
@@ -437,3 +437,177 @@ def test_v0550_semantic_family_shadow_closes_only_ultra_spatial_class_wobble() -
     # direct/secondary closure; wider points remain distinct.
     assert _direct_secondary_shadow_duplicate(1.10, 0.0075, "rescued", "direct") is True
     assert _direct_secondary_shadow_duplicate(1.10, 0.0090, "rescued", "direct") is False
+
+
+def test_v0551_heavy_signature_accepts_real_enum_members_and_string_values() -> None:
+    from app.api.routes import _cross_class_heavy_signature_duplicate
+    from app.models.all_models import VehicleType
+
+    assert _cross_class_heavy_signature_duplicate(0.70, 0.035, VehicleType.truck, VehicleType.car) is True
+    assert _cross_class_heavy_signature_duplicate(0.70, 0.035, "truck", VehicleType.car) is True
+    assert _cross_class_heavy_signature_duplicate(0.70, 0.035, VehicleType.truck, VehicleType.truck) is False
+    assert _cross_class_heavy_signature_duplicate(0.70, 0.035, VehicleType.bicycle, VehicleType.motorcycle) is False
+    assert _cross_class_heavy_signature_duplicate(0.86, 0.035, VehicleType.truck, VehicleType.car) is False
+    assert _cross_class_heavy_signature_duplicate(0.70, 0.051, VehicleType.truck, VehicleType.car) is False
+
+
+def _dedup_event_database():
+    """Use the actual endpoint and SQLAlchemy Enum round trips for regressions."""
+    from contextlib import contextmanager
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+    from app.db.base import Base
+    from app.models.all_models import Camera, CountingSession
+
+    @contextmanager
+    def database():
+        engine = create_engine("sqlite+pysqlite:///:memory:")
+        try:
+            with engine.connect() as connection:
+                connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+            Base.metadata.create_all(engine)
+            with Session(engine) as db:
+                db.add(Camera(id=1, name="Dedup regression", code="DEDUP-1", source_type="video", source_url="clip.mp4"))
+                db.flush()
+                db.add(CountingSession(id=1, camera_id=1))
+                db.commit()
+                yield db
+        finally:
+            engine.dispose()
+
+    return database()
+
+
+def _submit_dedup_event(db, **changes):
+    from fastapi import Response
+    from app.api.routes import internal_event, settings
+    from app.schemas.event import VehicleEventCreate
+
+    values = dict(
+        camera_id=1, session_id=1, tracking_id=10,
+        vehicle_type="motorcycle", direction="in", confidence=0.9,
+        source_time_seconds=10.0, source_frame_index=251,
+        crossing_x=0.5, crossing_y=0.5, crossing_method="direct",
+    )
+    values.update(changes)
+    response = Response()
+    result = internal_event(VehicleEventCreate(**values), response, settings.ai_shared_token, db)
+    return result, response
+
+
+def test_v0551_heavy_enum_signature_deduplicates_without_incrementing_totals() -> None:
+    from sqlalchemy import func, select
+    from app.models.all_models import CountingSession, VehicleCount, VehicleEvent
+
+    with _dedup_event_database() as db:
+        first, _ = _submit_dedup_event(db, vehicle_type="car")
+        result, response = _submit_dedup_event(
+            db, tracking_id=20, vehicle_type="truck", source_time_seconds=10.70,
+            source_frame_index=269, crossing_x=0.535,
+        )
+        assert result.id == first.id
+        assert response.headers["X-TrafficAI-Dedup-Reason"] == "heavy-semantic-signature"
+        assert db.scalar(select(func.count()).select_from(VehicleEvent)) == 1
+        assert db.get(CountingSession, 1).total_vehicles == 1
+        assert db.scalar(select(func.sum(VehicleCount.count))) == 1
+
+
+def test_v0551_semantic_shadow_finds_later_source_event_already_delivered() -> None:
+    from sqlalchemy import func, select
+    from app.models.all_models import CountingSession, VehicleEvent
+
+    with _dedup_event_database() as db:
+        first, _ = _submit_dedup_event(db, source_time_seconds=11.10, source_frame_index=279)
+        result, response = _submit_dedup_event(
+            db, tracking_id=20, vehicle_type="bicycle", crossing_method="rescued",
+            source_time_seconds=10.0, crossing_x=0.509,
+        )
+        assert result.id == first.id
+        assert response.headers["X-TrafficAI-Dedup-Reason"] == "semantic-family-shadow"
+        assert db.scalar(select(func.count()).select_from(VehicleEvent)) == 1
+        assert db.get(CountingSession, 1).total_vehicles == 1
+
+
+def test_v0551_reverse_semantic_shadow_handles_deferred_source_order() -> None:
+    with _dedup_event_database() as db:
+        first, _ = _submit_dedup_event(db, source_time_seconds=11.0, source_frame_index=276)
+        result, response = _submit_dedup_event(
+            db, tracking_id=20, vehicle_type="bicycle", direction="out",
+            crossing_method="rescued", source_time_seconds=10.45,
+            source_frame_index=262, crossing_x=0.5055,
+        )
+        assert result.id == first.id
+        assert response.headers["X-TrafficAI-Dedup-Reason"] == "semantic-family-reverse-shadow"
+
+
+def test_v0551_candidate_search_has_no_twelve_event_truncation() -> None:
+    from app.models.all_models import VehicleEvent
+
+    with _dedup_event_database() as db:
+        first, _ = _submit_dedup_event(db, vehicle_type="car")
+        # Fourteen newer same-family vehicles remain geometrically distinct
+        # from the incoming truck, but used to push its matching car out of
+        # the database query's twelve-row limit.
+        db.add_all([
+            VehicleEvent(
+                camera_id=1, session_id=1, tracking_id=100 + index,
+                vehicle_type="truck", direction="in", confidence=0.9,
+                source_time_seconds=10.30 + index * 0.025,
+                crossing_x=0.53, crossing_y=0.53, crossing_method="direct",
+            )
+            for index in range(14)
+        ])
+        db.commit()
+        result, response = _submit_dedup_event(
+            db, tracking_id=20, vehicle_type="truck", source_time_seconds=10.70,
+            source_frame_index=269, crossing_x=0.535,
+        )
+        assert result.id == first.id
+        assert response.headers["X-TrafficAI-Dedup-Reason"] == "heavy-semantic-signature"
+
+
+def test_v0551_symmetric_search_preserves_nearby_vehicles_and_later_passages() -> None:
+    from sqlalchemy import func, select
+    from app.models.all_models import CountingSession, VehicleEvent
+
+    with _dedup_event_database() as db:
+        first, _ = _submit_dedup_event(db, source_time_seconds=11.10, source_frame_index=279)
+        adjacent, response = _submit_dedup_event(
+            db, tracking_id=20, vehicle_type="bicycle", crossing_method="rescued",
+            source_time_seconds=10.0, crossing_x=0.525,
+        )
+        assert adjacent.id != first.id
+        assert response.headers["X-TrafficAI-Deduplicated"] == "0"
+        later, response = _submit_dedup_event(db, source_time_seconds=20.0, source_frame_index=501)
+        assert later.id not in {first.id, adjacent.id}
+        assert response.headers["X-TrafficAI-Deduplicated"] == "0"
+        opposite, response = _submit_dedup_event(
+            db, tracking_id=30, direction="out", source_time_seconds=20.10,
+            source_frame_index=504,
+        )
+        assert opposite.id != later.id
+        assert response.headers["X-TrafficAI-Deduplicated"] == "0"
+        assert db.scalar(select(func.count()).select_from(VehicleEvent)) == 4
+        assert db.get(CountingSession, 1).total_vehicles == 4
+
+
+def test_v0551_heavy_signature_preserves_same_class_and_separate_four_wheel_vehicles() -> None:
+    from sqlalchemy import func, select
+    from app.models.all_models import CountingSession, VehicleEvent
+
+    with _dedup_event_database() as db:
+        first, _ = _submit_dedup_event(db, vehicle_type="car")
+        adjacent, response = _submit_dedup_event(
+            db, tracking_id=20, vehicle_type="car", source_time_seconds=10.70,
+            source_frame_index=269, crossing_x=0.535,
+        )
+        assert adjacent.id != first.id
+        assert response.headers["X-TrafficAI-Deduplicated"] == "0"
+        truck, response = _submit_dedup_event(
+            db, tracking_id=30, vehicle_type="truck", source_time_seconds=10.80,
+            source_frame_index=271, crossing_x=0.60,
+        )
+        assert truck.id not in {first.id, adjacent.id}
+        assert response.headers["X-TrafficAI-Deduplicated"] == "0"
+        assert db.scalar(select(func.count()).select_from(VehicleEvent)) == 3
+        assert db.get(CountingSession, 1).total_vehicles == 3

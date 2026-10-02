@@ -676,6 +676,26 @@ DIRECT_SECONDARY_SHADOW_LOOKBACK_SECONDS = 1.15
 SEMANTIC_FAMILY_SHADOW_LOOKBACK_SECONDS = 1.20
 
 
+def _cross_class_heavy_signature_duplicate(
+    time_delta: float,
+    distance: float,
+    current_type,
+    other_type,
+) -> bool:
+    """Compare stored Enum members and incoming values using vehicle labels."""
+    labels = {
+        str(getattr(current_type, "value", current_type)),
+        str(getattr(other_type, "value", other_type)),
+    }
+    return (
+        len(labels) == 2
+        and labels <= {"car", "bus", "truck"}
+        and bool(labels & {"truck", "bus"})
+        and float(time_delta) <= 0.85
+        and float(distance) <= 0.050
+    )
+
+
 def _semantic_family_shadow_duplicate(
     time_delta: float,
     distance: float,
@@ -920,19 +940,35 @@ def internal_event(payload: VehicleEventCreate, response: Response, x_ai_token: 
         and payload.crossing_x is not None
         and payload.crossing_y is not None
     ):
-        # Query the widest specialised window once. The generic guard below
-        # remains capped at 0.22 s. V0.5.49's exact-class direct/rescued shadow
-        # closure reaches 1.15 s with an ultra-tight point radius; narrower
-        # two-wheel/four-wheel guards therefore remain fully covered too.
-        lower = max(0.0, float(payload.source_time_seconds) - max(
+        # V0.5.51: source crossing order can differ from delivery order after
+        # interpolation, lost-track finalization or a deferred human guard.
+        # Search both sides of the source timestamp; the physical duplicate
+        # rules below keep their existing time and distance requirements.
+        lookback = max(
             DIRECT_SECONDARY_SHADOW_LOOKBACK_SECONDS, SEMANTIC_FAMILY_SHADOW_LOOKBACK_SECONDS
-        ))
+        )
+        lower = max(0.0, float(payload.source_time_seconds) - lookback)
+        upper = float(payload.source_time_seconds) + lookback
+        family = _vehicle_family_value(payload.vehicle_type)
+        family_labels = (
+            ("bicycle", "motorcycle") if family == "two-wheel"
+            else ("car", "bus", "truck") if family == "four-wheel"
+            else (str(getattr(payload.vehicle_type, "value", payload.vehicle_type)),)
+        )
+        # All current signatures fit inside this 0.050 coordinate envelope.
+        # Filtering before iteration avoids an arbitrary 12-row cutoff hiding
+        # the true shadow behind newer, spatially unrelated traffic.
         recent = list(db.scalars(select(VehicleEvent).where(
             VehicleEvent.session_id == payload.session_id,
+            VehicleEvent.vehicle_type.in_(family_labels),
             VehicleEvent.source_time_seconds.is_not(None),
             VehicleEvent.source_time_seconds >= lower,
-            VehicleEvent.source_time_seconds <= float(payload.source_time_seconds) + 0.02,
-        ).order_by(VehicleEvent.id.desc()).limit(12)).all())
+            VehicleEvent.source_time_seconds <= upper,
+            VehicleEvent.crossing_x >= float(payload.crossing_x) - 0.050,
+            VehicleEvent.crossing_x <= float(payload.crossing_x) + 0.050,
+            VehicleEvent.crossing_y >= float(payload.crossing_y) - 0.050,
+            VehicleEvent.crossing_y <= float(payload.crossing_y) + 0.050,
+        ).order_by(VehicleEvent.id.desc())).all())
         for other in recent:
             if other.crossing_x is None or other.crossing_y is None:
                 continue
@@ -1085,13 +1121,9 @@ def internal_event(payload: VehicleEventCreate, response: Response, x_ai_token: 
             # use a slightly wider window only for a cross-class four-wheel pair.
             # This suppresses a duplicate semantic event without penalising two
             # motorcycles or two normal cars following each other closely.
-            cross_class_four_wheel = (
-                _vehicle_family_value(other.vehicle_type) == "four-wheel"
-                and _vehicle_family_value(payload.vehicle_type) == "four-wheel"
-                and str(other.vehicle_type) != str(payload.vehicle_type)
-                and ({str(other.vehicle_type), str(payload.vehicle_type)} & {"truck", "bus"})
-            )
-            if cross_class_four_wheel and time_delta <= 0.85 and distance <= 0.050:
+            if _cross_class_heavy_signature_duplicate(
+                time_delta, distance, payload.vehicle_type, other.vehicle_type
+            ):
                 response.headers["X-TrafficAI-Deduplicated"] = "1"
                 response.headers["X-TrafficAI-Dedup-Reason"] = "heavy-semantic-signature"
                 return other
