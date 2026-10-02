@@ -673,6 +673,48 @@ def _secondary_shadow_signature_duplicate(
 
 
 DIRECT_SECONDARY_SHADOW_LOOKBACK_SECONDS = 1.15
+SEMANTIC_FAMILY_SHADOW_LOOKBACK_SECONDS = 1.20
+
+
+def _semantic_family_shadow_duplicate(
+    time_delta: float,
+    distance: float,
+    current_method: str | None,
+    other_method: str | None,
+    *,
+    same_direction: bool,
+    same_class: bool,
+) -> bool:
+    """V0.5.50 ultra-spatial guard for class-wobble shadows.
+
+    Benchmark #32 still contains six unmatched events essentially on top of an
+    already matched crossing.  The older precision guards intentionally require
+    exact class, so a single motorcycle that flips MOTORCYCLE <-> BICYCLE (or a
+    heavy vehicle that flips CAR <-> TRUCK) can survive as two events after an
+    ID switch.  This guard is family-only and therefore deliberately tighter in
+    space than the exact-class guards.  Exact-class pairs return False here and
+    continue through the existing rules unchanged.
+    """
+    if same_class:
+        return False
+    methods = {str(current_method or ""), str(other_method or "")}
+    if not methods:
+        return False
+    if not same_direction:
+        if methods == {"direct"}:
+            return False
+        if "rescued" in methods:
+            return float(time_delta) <= 0.60 and float(distance) <= 0.006
+        if "interpolated" in methods:
+            return float(time_delta) <= 0.50 and float(distance) <= 0.005
+        return False
+    if methods == {"direct"}:
+        return float(time_delta) <= 0.32 and float(distance) <= 0.004
+    if "rescued" in methods:
+        return float(time_delta) <= SEMANTIC_FAMILY_SHADOW_LOOKBACK_SECONDS and float(distance) <= 0.010
+    if "interpolated" in methods:
+        return float(time_delta) <= 1.00 and float(distance) <= 0.008
+    return False
 
 
 def _direct_secondary_shadow_duplicate(
@@ -692,9 +734,9 @@ def _direct_secondary_shadow_duplicate(
     if "direct" not in methods or len(methods) != 2:
         return False
     if "rescued" in methods:
-        return float(time_delta) <= DIRECT_SECONDARY_SHADOW_LOOKBACK_SECONDS and float(distance) <= 0.006
+        return float(time_delta) <= DIRECT_SECONDARY_SHADOW_LOOKBACK_SECONDS and float(distance) <= 0.008
     if "interpolated" in methods:
-        return float(time_delta) <= 0.95 and float(distance) <= 0.005
+        return float(time_delta) <= 0.95 and float(distance) <= 0.007
     return False
 
 def _direct_ultra_spatial_shadow_duplicate(
@@ -882,7 +924,9 @@ def internal_event(payload: VehicleEventCreate, response: Response, x_ai_token: 
         # remains capped at 0.22 s. V0.5.49's exact-class direct/rescued shadow
         # closure reaches 1.15 s with an ultra-tight point radius; narrower
         # two-wheel/four-wheel guards therefore remain fully covered too.
-        lower = max(0.0, float(payload.source_time_seconds) - DIRECT_SECONDARY_SHADOW_LOOKBACK_SECONDS)
+        lower = max(0.0, float(payload.source_time_seconds) - max(
+            DIRECT_SECONDARY_SHADOW_LOOKBACK_SECONDS, SEMANTIC_FAMILY_SHADOW_LOOKBACK_SECONDS
+        ))
         recent = list(db.scalars(select(VehicleEvent).where(
             VehicleEvent.session_id == payload.session_id,
             VehicleEvent.source_time_seconds.is_not(None),
@@ -903,14 +947,23 @@ def internal_event(payload: VehicleEventCreate, response: Response, x_ai_token: 
             same_direction_pair = str(getattr(other.direction, "value", other.direction)) == str(
                 getattr(payload.direction, "value", payload.direction)
             )
+            same_class_pair = str(getattr(other.vehicle_type, "value", other.vehicle_type)) == str(
+                getattr(payload.vehicle_type, "value", payload.vehicle_type)
+            )
 
             # V0.5.46: cross-ID reverse shadows are considered only when one
             # event is secondary and the crossing point is ultra-close.  The
             # direct/direct opposite-direction case is intentionally preserved.
             if not same_direction_pair:
+                if _semantic_family_shadow_duplicate(
+                    time_delta, distance, payload.crossing_method, other.crossing_method,
+                    same_direction=False, same_class=same_class_pair,
+                ):
+                    response.headers["X-TrafficAI-Deduplicated"] = "1"
+                    response.headers["X-TrafficAI-Dedup-Reason"] = "semantic-family-reverse-shadow"
+                    return other
                 if (
-                    str(getattr(other.vehicle_type, "value", other.vehicle_type))
-                    == str(getattr(payload.vehicle_type, "value", payload.vehicle_type))
+                    same_class_pair
                     and _secondary_reverse_shadow_duplicate(
                         time_delta, distance, payload.crossing_method, other.crossing_method
                     )
@@ -938,6 +991,18 @@ def internal_event(payload: VehicleEventCreate, response: Response, x_ai_token: 
             if time_delta <= 0.22 and distance <= 0.025:
                 response.headers["X-TrafficAI-Deduplicated"] = "1"
                 response.headers["X-TrafficAI-Dedup-Reason"] = "crossing-signature"
+                return other
+
+            # V0.5.50 Semantic Shadow Closure 9.6: preserve exact-class dense
+            # traffic, but collapse an ultra-spatial same-family class wobble
+            # after an ID switch.  This is especially important for
+            # MOTORCYCLE <-> BICYCLE and CAR <-> TRUCK rediscovery.
+            if _semantic_family_shadow_duplicate(
+                time_delta, distance, payload.crossing_method, other.crossing_method,
+                same_direction=True, same_class=same_class_pair,
+            ):
+                response.headers["X-TrafficAI-Deduplicated"] = "1"
+                response.headers["X-TrafficAI-Dedup-Reason"] = "semantic-family-shadow"
                 return other
 
             # V0.5.48 Benchmark Closure 9.4: the generic 0.22 s signature

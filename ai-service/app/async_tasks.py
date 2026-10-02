@@ -126,6 +126,10 @@ class EventDispatcher(threading.Thread):
                                     self.state.direct_shadow_duplicates += 1
                                 elif dedup_reason == "direct-secondary-shadow":
                                     self.state.cross_method_shadow_duplicates += 1
+                                elif dedup_reason in {"semantic-family-shadow", "semantic-family-reverse-shadow"}:
+                                    self.state.semantic_shadow_duplicates += 1
+                                    if dedup_reason == "semantic-family-reverse-shadow":
+                                        self.state.reverse_shadow_duplicates += 1
                                 elif dedup_reason == "secondary-reverse-shadow":
                                     self.state.reverse_shadow_duplicates += 1
                             else:

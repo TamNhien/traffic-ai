@@ -323,18 +323,18 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.49") { throw "VERSION phải là 0.5.49, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0063_precision_recovery_v0549.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0063_precision_recovery_v0549.py." }
+  if ($version -ne "0.5.50") { throw "VERSION phải là 0.5.50, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0064_geometry_semantic_v0550.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0064_geometry_semantic_v0550.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0063_precision_recovery_v0549"' -or $migrationText -notmatch 'down_revision = "0062_benchmark_closure_v0548"' -or $migrationText -notmatch "value='0.5.49'") {
-    throw "Migration 0063_precision_recovery_v0549 không đúng contract V0.5.49."
+  if ($migrationText -notmatch 'revision = "0064_geometry_semantic_v0550"' -or $migrationText -notmatch 'down_revision = "0063_precision_recovery_v0549"' -or $migrationText -notmatch "value='0.5.50'") {
+    throw "Migration 0064_geometry_semantic_v0550 không đúng contract V0.5.50."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
 
 function Assert-AlembicRevisionSafetyContract {
-  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.49" -ForegroundColor Cyan
+  Write-Host "`n[Traffic AI] Alembic revision-length safety V0.5.50" -ForegroundColor Cyan
   $versionsDir = Join-Path $root "backend\alembic\versions"
   $bad = @()
   Get-ChildItem $versionsDir -Filter "*.py" | ForEach-Object {
@@ -358,7 +358,7 @@ function Assert-AlembicRevisionSafetyContract {
   if ($v17 -notmatch 'revision = "0017_ai_test_dep_v053"') {
     throw "Migration V0.5.3 chưa dùng revision ID rút gọn an toàn."
   }
-  Write-Host "[OK] Alembic revision-length safety V0.5.49" -ForegroundColor Green
+  Write-Host "[OK] Alembic revision-length safety V0.5.50" -ForegroundColor Green
 }
 
 
@@ -1552,6 +1552,28 @@ function Assert-PrecisionRecoveryV0549Contract {
   Write-Host "[OK] Precision Recovery Closure 9.5 V0.5.49" -ForegroundColor Green
 }
 
+
+function Assert-GeometrySemanticV0550Contract {
+  Write-Host "`n[Traffic AI] Geometry + Semantic Shadow Closure 9.6 V0.5.50" -ForegroundColor Cyan
+  $counting = Get-Content (Join-Path $root "ai-service\app\counting.py") -Raw -Encoding UTF8
+  $worker = Get-Content (Join-Path $root "ai-service\app\worker.py") -Raw -Encoding UTF8
+  $runtime = Get-Content (Join-Path $root "ai-service\app\runtime.py") -Raw -Encoding UTF8
+  $async = Get-Content (Join-Path $root "ai-service\app\async_tasks.py") -Raw -Encoding UTF8
+  $routes = Get-Content (Join-Path $root "backend\app\api\routes.py") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  $envExample = Get-Content (Join-Path $root ".env.example") -Raw -Encoding UTF8
+  $startScript = Get-Content (Join-Path $root "scripts\start.ps1") -Raw -Encoding UTF8
+  $aiTests = Get-Content (Join-Path $root "ai-service\tests\test_counting.py") -Raw -Encoding UTF8
+  $backendTests = Get-Content (Join-Path $root "backend\tests\test_app.py") -Raw -Encoding UTF8
+  if ($counting -notmatch 'late_geometry_confirm' -or $counting -notmatch 'late_geometry_confirms' -or $worker -notmatch 'AI_GATE_LATE_GEOMETRY_CONFIRM') { throw "AI V0.5.50 thiếu geometry-backed late confirmation." }
+  if ($routes -notmatch '_semantic_family_shadow_duplicate' -or $routes -notmatch 'semantic-family-shadow' -or $routes -notmatch 'SEMANTIC_FAMILY_SHADOW_LOOKBACK_SECONDS') { throw "Backend V0.5.50 thiếu semantic family shadow closure." }
+  if ($runtime -notmatch 'late_geometry_confirms' -or $runtime -notmatch 'semantic_shadow_duplicates' -or $async -notmatch 'semantic-family-reverse-shadow') { throw "Runtime V0.5.50 thiếu telemetry geometry/semantic shadow." }
+  if ($frontend -notmatch 'Late-confirm' -or $frontend -notmatch 'FP semantic-shadow') { throw "Frontend V0.5.50 thiếu telemetry geometry/semantic shadow." }
+  if ($envExample -notmatch 'AI_GATE_LATE_GEOMETRY_CONFIRM=1' -or $envExample -notmatch 'AI_GATE_LATE_GEOMETRY_CONFIRM_MAX_GAP=3' -or $startScript -notmatch 'AI_GATE_LATE_GEOMETRY_CONFIRM') { throw "Runtime defaults V0.5.50 chưa khóa late-confirm evidence." }
+  if ($aiTests -notmatch 'test_v0550_late_geometry_confirm_recovers_short_gap_after_full_geometry_audit' -or $aiTests -notmatch 'test_v0550_late_geometry_confirm_stays_fail_closed_for_oblique_jitter' -or $backendTests -notmatch 'test_v0550_semantic_family_shadow_closes_only_ultra_spatial_class_wobble') { throw "V0.5.50 thiếu regression tests Geometry + Semantic Shadow Closure 9.6." }
+  Write-Host "[OK] Geometry + Semantic Shadow Closure 9.6 V0.5.50" -ForegroundColor Green
+}
+
 function Invoke-Step([string]$Title, [scriptblock]$Action) {
   Write-Host "`n[Traffic AI] $Title" -ForegroundColor Cyan
   & $Action
@@ -1617,6 +1639,7 @@ Assert-FalsePositiveClosureV0545Contract
 Assert-PrecisionClosureV0546Contract
 Assert-BalancedRecallRecoveryV0547Contract
 Assert-PrecisionRecoveryV0549Contract
+Assert-GeometrySemanticV0550Contract
 Assert-LegacySemanticCompatibilityV0523R1
 
 Write-Host "`n[Traffic AI] Road Zone + Frame Browser V0.5.11" -ForegroundColor Cyan

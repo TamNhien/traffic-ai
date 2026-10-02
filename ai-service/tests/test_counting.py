@@ -951,3 +951,47 @@ def test_v0548_immediate_override_stays_fail_closed_for_weak_span():
     assert rescue.update(4802, (580.0, 520.0), 1000, 1000, 11) is None
     assert rescue.override_qualified_for(4802) is False
     assert rescue.immediate_override_qualifications == 0
+
+
+def test_v0550_late_geometry_confirm_recovers_short_gap_after_full_geometry_audit():
+    from app.counting import CountingLine, LineCrossingCounter
+
+    counter = LineCrossingCounter(
+        CountingLine(0.1, 0.5, 0.9, 0.5),
+        interpolation_gap_frames=3,
+        side_confirm_samples=2,
+        bracket_confirm=True,
+        bracket_confirm_min_normal_ratio=0.55,
+        bracket_confirm_max_gap_frames=2,
+        late_geometry_confirm=True,
+        late_geometry_confirm_min_normal_ratio=0.48,
+        late_geometry_confirm_max_jump_ratio=0.08,
+        late_geometry_confirm_min_side_distance_ratio=0.008,
+        late_geometry_confirm_max_gap_frames=3,
+    )
+    assert counter.update(5501, (500.0, 470.0), 1000, 1000, 10) is None
+    # Gap 3 is outside the older bracket-confirm window, but the finite segment,
+    # side depth, jump and normal motion are all strong enough for the late audit.
+    assert counter.update(5501, (500.0, 530.0), 1000, 1000, 13) == "in"
+    assert counter.late_geometry_confirms == 1
+    assert counter.rejected_unconfirmed_side == 0
+
+
+def test_v0550_late_geometry_confirm_stays_fail_closed_for_oblique_jitter():
+    from app.counting import CountingLine, LineCrossingCounter
+
+    counter = LineCrossingCounter(
+        CountingLine(0.1, 0.5, 0.9, 0.5),
+        interpolation_gap_frames=3,
+        side_confirm_samples=2,
+        bracket_confirm=False,
+        late_geometry_confirm=True,
+        late_geometry_confirm_min_normal_ratio=0.48,
+        late_geometry_confirm_max_jump_ratio=0.20,
+        late_geometry_confirm_min_side_distance_ratio=0.008,
+        late_geometry_confirm_max_gap_frames=3,
+    )
+    assert counter.update(5502, (400.0, 490.0), 1000, 1000, 20) is None
+    assert counter.update(5502, (600.0, 510.0), 1000, 1000, 23) is None
+    assert counter.late_geometry_confirms == 0
+    assert counter.rejected_unconfirmed_side == 1

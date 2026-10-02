@@ -179,6 +179,11 @@ Ensure-EnvSetting "AI_GATE_FAST_CONFIRM_DISTANCE_RATIO" "0.018"
 Ensure-EnvSetting "AI_GATE_BRACKET_CONFIRM" "1"
 Ensure-EnvSetting "AI_GATE_BRACKET_CONFIRM_MIN_NORMAL_RATIO" "0.55"
 Ensure-EnvSetting "AI_GATE_BRACKET_CONFIRM_MAX_GAP" "2"
+Ensure-EnvSetting "AI_GATE_LATE_GEOMETRY_CONFIRM" "1"
+Ensure-EnvSetting "AI_GATE_LATE_GEOMETRY_CONFIRM_MIN_NORMAL_RATIO" "0.48"
+Ensure-EnvSetting "AI_GATE_LATE_GEOMETRY_CONFIRM_MAX_JUMP_RATIO" "0.08"
+Ensure-EnvSetting "AI_GATE_LATE_GEOMETRY_CONFIRM_MIN_SIDE_RATIO" "0.008"
+Ensure-EnvSetting "AI_GATE_LATE_GEOMETRY_CONFIRM_MAX_GAP" "3"
 Ensure-EnvSetting "AI_GATE_ADAPTIVE_COOLDOWN" "1"
 Ensure-EnvSetting "AI_GATE_COOLDOWN_RELEASE_RATIO" "0.055"
 Ensure-EnvSetting "AI_GATE_RESCUE_MIN_NORMAL_RATIO" "0.28"
@@ -359,7 +364,7 @@ if (-not $dashboardOk -or -not $apiOk) {
 }
 
 Write-Host ""
-Write-Host "[OK] Traffic AI V0.5.49 đã khởi động." -ForegroundColor Green
+Write-Host "[OK] Traffic AI V0.5.50 đã khởi động." -ForegroundColor Green
 Write-Host "Dashboard : https://traffic-ai.test:8443"
 Write-Host "API Docs  : https://traffic-ai.test:8444/docs"
 $envNow = Get-Content $envPath -Raw -Encoding UTF8

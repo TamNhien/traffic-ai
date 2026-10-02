@@ -1028,6 +1028,11 @@ class LineCrossingCounter:
         bracket_confirm: bool = False,
         bracket_confirm_min_normal_ratio: float = 0.55,
         bracket_confirm_max_gap_frames: int = 2,
+        late_geometry_confirm: bool = False,
+        late_geometry_confirm_min_normal_ratio: float = 0.48,
+        late_geometry_confirm_max_jump_ratio: float = 0.08,
+        late_geometry_confirm_min_side_distance_ratio: float = 0.008,
+        late_geometry_confirm_max_gap_frames: int = 3,
         origin_rescue_frames: int = 0,
         origin_rescue_distance_ratio: float = 0.06,
         origin_rescue_min_normal_ratio: float = 0.32,
@@ -1066,6 +1071,11 @@ class LineCrossingCounter:
         self.bracket_confirm = bool(bracket_confirm)
         self.bracket_confirm_min_normal_ratio = max(0.0, min(1.0, float(bracket_confirm_min_normal_ratio)))
         self.bracket_confirm_max_gap_frames = max(1, int(bracket_confirm_max_gap_frames))
+        self.late_geometry_confirm = bool(late_geometry_confirm)
+        self.late_geometry_confirm_min_normal_ratio = max(0.0, min(1.0, float(late_geometry_confirm_min_normal_ratio)))
+        self.late_geometry_confirm_max_jump_ratio = max(0.0, float(late_geometry_confirm_max_jump_ratio))
+        self.late_geometry_confirm_min_side_distance_ratio = max(0.0, float(late_geometry_confirm_min_side_distance_ratio))
+        self.late_geometry_confirm_max_gap_frames = max(1, int(late_geometry_confirm_max_gap_frames))
         self.origin_rescue_frames = max(0, int(origin_rescue_frames))
         self.origin_rescue_distance_ratio = max(0.0, float(origin_rescue_distance_ratio))
         self.origin_rescue_min_normal_ratio = max(0.0, min(1.0, float(origin_rescue_min_normal_ratio)))
@@ -1084,6 +1094,7 @@ class LineCrossingCounter:
         self.road_edge_rescues = 0
         self.fast_confirm_rescues = 0
         self.bracket_confirm_rescues = 0
+        self.late_geometry_confirms = 0
         self.origin_rescues = 0
         self.rejected_rescue_validation = 0
         self.rejected_long_gap_rescue = 0
@@ -1256,6 +1267,7 @@ class LineCrossingCounter:
                 quick_crossing is not None
                 and quick_normal_ratio >= self.bracket_confirm_min_normal_ratio
             )
+        pending_confirmation_reject = False
         if (
             not origin_candidate
             and observation_gap <= self.interpolation_gap_frames
@@ -1266,8 +1278,12 @@ class LineCrossingCounter:
             elif bracket_destination:
                 self.bracket_confirm_rescues += 1
             else:
-                self.rejected_unconfirmed_side += 1
-                return None
+                # V0.5.50 Geometry-Backed Late Confirm 9.6: do not reject the
+                # one-sample destination span before the finite segment, road
+                # corridor and motion geometry have been checked.  Most weak
+                # jitter still fails below; only a short, bounded, two-sided
+                # trajectory can earn a late confirmation.
+                pending_confirmation_reject = True
         if sample.frame_index - state.last_count_frame < self.crossing_cooldown_frames:
             elapsed_since_count = sample.frame_index - state.last_count_frame
             release_distance = scale * self.cooldown_release_ratio
@@ -1327,18 +1343,22 @@ class LineCrossingCounter:
             self.rejected_outside_segment += 1
             return None
 
+        confirm_dx = anchor[0] - previous.point[0]
+        confirm_dy = anchor[1] - previous.point[1]
+        confirm_move_len = max(hypot(confirm_dx, confirm_dy), 1e-6)
+        confirm_diagonal = max(hypot(frame_width, frame_height), 1.0)
+        confirm_normal_ratio = abs(distance - previous.distance) / confirm_move_len
+        confirm_jump_ratio = confirm_move_len / confirm_diagonal
+        confirm_side_depth_ratio = min(abs(distance), abs(previous.distance)) / scale
+
         # Crossing Engine 7.1: long-gap rescues are useful for fast vehicles but
         # are also the riskiest source of over-count. Validate the jump before
         # accepting it. Defaults are disabled for backwards-compatible unit
         # tests; runtime enables conservative thresholds through environment.
         if observation_gap > self.interpolation_gap_frames:
-            jump_x = anchor[0] - previous.point[0]
-            jump_y = anchor[1] - previous.point[1]
-            jump_len = max(hypot(jump_x, jump_y), 1e-6)
-            diagonal = max(hypot(frame_width, frame_height), 1.0)
-            normal_ratio = abs(distance - previous.distance) / jump_len
-            jump_ratio = jump_len / diagonal
-            side_depth_ratio = min(abs(distance), abs(previous.distance)) / scale
+            normal_ratio = confirm_normal_ratio
+            jump_ratio = confirm_jump_ratio
+            side_depth_ratio = confirm_side_depth_ratio
             rescue_invalid = (
                 (self.rescue_min_normal_ratio > 0.0 and normal_ratio < self.rescue_min_normal_ratio)
                 or (self.rescue_max_jump_ratio > 0.0 and jump_ratio > self.rescue_max_jump_ratio)
@@ -1415,6 +1435,23 @@ class LineCrossingCounter:
                 return None
             if not (previous_strict and anchor_strict):
                 self.road_edge_rescues += 1
+
+        if pending_confirmation_reject:
+            late_confirm_ok = (
+                self.late_geometry_confirm
+                and observation_gap <= self.late_geometry_confirm_max_gap_frames
+                and confirm_normal_ratio >= self.late_geometry_confirm_min_normal_ratio
+                and (
+                    self.late_geometry_confirm_max_jump_ratio <= 0.0
+                    or confirm_jump_ratio <= self.late_geometry_confirm_max_jump_ratio
+                )
+                and confirm_side_depth_ratio >= self.late_geometry_confirm_min_side_distance_ratio
+            )
+            if late_confirm_ok:
+                self.late_geometry_confirms += 1
+            else:
+                self.rejected_unconfirmed_side += 1
+                return None
 
         move_x = anchor[0] - previous.point[0]
         move_y = anchor[1] - previous.point[1]

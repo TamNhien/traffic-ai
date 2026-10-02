@@ -20,7 +20,7 @@ def test_root_metadata() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["name"] == "Traffic AI"
-    assert payload["version"] == "0.5.49"
+    assert payload["version"] == "0.5.50"
     assert payload["docs"] == "/docs"
     assert payload["health"] == "/api/health"
 
@@ -158,7 +158,7 @@ def test_benchmark_clone_compatibility_rejects_different_line() -> None:
 
 
 def test_backend_version_metadata() -> None:
-    assert app.version == "0.5.49"
+    assert app.version == "0.5.50"
 
 
 def test_v0531_startup_crossing_signature_guard_is_narrow() -> None:
@@ -179,7 +179,7 @@ def test_v0533_ground_truth_mark_update_schema() -> None:
 
 
 def test_v0533_version() -> None:
-    assert app.version == "0.5.49"
+    assert app.version == "0.5.50"
 
 
 def test_v0533_ground_truth_mark_update_keeps_timecode() -> None:
@@ -404,3 +404,36 @@ def test_v0549_direct_secondary_shadow_is_cross_method_only() -> None:
     assert _direct_secondary_shadow_duplicate(0.30, 0.004, "direct", "direct") is False
     assert _direct_secondary_shadow_duplicate(1.16, 0.004, "rescued", "direct") is False
     assert _direct_secondary_shadow_duplicate(0.80, 0.010, "rescued", "direct") is False
+
+
+def test_v0550_semantic_family_shadow_closes_only_ultra_spatial_class_wobble() -> None:
+    from app.api.routes import (
+        SEMANTIC_FAMILY_SHADOW_LOOKBACK_SECONDS,
+        _semantic_family_shadow_duplicate,
+        _direct_secondary_shadow_duplicate,
+    )
+
+    assert SEMANTIC_FAMILY_SHADOW_LOOKBACK_SECONDS == 1.20
+    assert _semantic_family_shadow_duplicate(
+        1.10, 0.009, "rescued", "direct", same_direction=True, same_class=False
+    ) is True
+    assert _semantic_family_shadow_duplicate(
+        0.30, 0.0035, "direct", "direct", same_direction=True, same_class=False
+    ) is True
+    assert _semantic_family_shadow_duplicate(
+        0.30, 0.0035, "direct", "direct", same_direction=True, same_class=True
+    ) is False
+    assert _semantic_family_shadow_duplicate(
+        0.55, 0.0055, "rescued", "direct", same_direction=False, same_class=False
+    ) is True
+    assert _semantic_family_shadow_duplicate(
+        0.55, 0.0055, "direct", "direct", same_direction=False, same_class=False
+    ) is False
+    assert _semantic_family_shadow_duplicate(
+        1.10, 0.012, "rescued", "direct", same_direction=True, same_class=False
+    ) is False
+
+    # V0.5.50 also widens only the ultra-spatial tail of the exact-class
+    # direct/secondary closure; wider points remain distinct.
+    assert _direct_secondary_shadow_duplicate(1.10, 0.0075, "rescued", "direct") is True
+    assert _direct_secondary_shadow_duplicate(1.10, 0.0090, "rescued", "direct") is False

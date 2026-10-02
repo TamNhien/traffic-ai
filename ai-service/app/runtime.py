@@ -83,6 +83,7 @@ class PipelineState:
     human_guard_ready: bool = False
     fast_confirm_rescues: int = 0
     bracket_confirm_rescues: int = 0
+    late_geometry_confirms: int = 0
     rescue_validation_rejections: int = 0
     long_gap_rescue_rejections: int = 0
     lineage_rescue_rejections: int = 0
@@ -97,6 +98,7 @@ class PipelineState:
     secondary_shadow_duplicates: int = 0
     direct_shadow_duplicates: int = 0
     cross_method_shadow_duplicates: int = 0
+    semantic_shadow_duplicates: int = 0
     reverse_shadow_duplicates: int = 0
     same_direction_cycle_rejections: int = 0
     calibration_samples: int = 0
