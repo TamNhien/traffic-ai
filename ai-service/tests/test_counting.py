@@ -3,6 +3,160 @@ import pytest
 from app.counting import CountingLine, LineCrossingCounter, RoadZone
 
 
+def test_v0552_primary_confirmation_ignores_repeated_and_older_source_frames() -> None:
+    counter = LineCrossingCounter(
+        CountingLine(0.1, 0.5, 0.9, 0.5), side_confirm_samples=2,
+        fast_confirm_distance_ratio=0.0, bracket_confirm=False, late_geometry_confirm=False,
+    )
+    assert counter.update(5601, (500, 465), 1000, 1000, 10) is None
+    assert counter.update(5601, (500, 520), 1000, 1000, 11) is None
+    assert counter.update(5601, (500, 530), 1000, 1000, 11) is None
+    assert counter.update(5601, (500, 550), 1000, 1000, 9) is None
+    assert counter.total_crossings == 0
+    assert counter.update(5601, (500, 550), 1000, 1000, 12) == "in"
+    assert counter.total_crossings == 1
+
+
+def test_v0552_primary_alias_merge_preserves_one_observation_per_frame() -> None:
+    counter = LineCrossingCounter(
+        CountingLine(0.1, 0.5, 0.9, 0.5), side_confirm_samples=2,
+        fast_confirm_distance_ratio=0.0, bracket_confirm=False, late_geometry_confirm=False,
+    )
+    assert counter.update(5602, (500, 465), 1000, 1000, 10) is None
+    assert counter.update(5602, (500, 520), 1000, 1000, 11) is None
+    assert counter.update(5603, (510, 530), 1000, 1000, 11) is None
+    counter.merge_track(5603, 5602)
+    assert [item.frame_index for item in counter._tracks[5602].history] == [10, 11]
+    assert counter._tracks[5602].side_streak == 1
+    assert counter.update(5602, (510, 540), 1000, 1000, 11) is None
+    assert counter.total_crossings == 0
+    assert counter.update(5602, (510, 550), 1000, 1000, 12) == "in"
+
+
+def test_v0552_all_gate_paths_reject_an_observed_detour_around_finite_endpoint() -> None:
+    from app.counting import HeavyVehicleCrossingRescuer, TwoWheelCenterCrossingRescuer, VerifiedAnchorSpanRescuer
+
+    for gate_type in (LineCrossingCounter, VerifiedAnchorSpanRescuer, HeavyVehicleCrossingRescuer, TwoWheelCenterCrossingRescuer):
+        gate = gate_type(CountingLine(0.1, 0.5, 0.8, 0.5))
+        # Stable endpoints form an apparently perfect normal chord at x=760,
+        # but every actually observed gate bracket goes outside the x=800 end.
+        points = ((760, 470), (805, 497), (805, 503), (760, 530), (760, 555))
+        for frame, point in enumerate(points, 1):
+            assert gate.update(5604, point, 1000, 1000, frame) is None, gate_type.__name__
+        if isinstance(gate, VerifiedAnchorSpanRescuer):
+            assert gate.finalize_lost(5604, 6) is None
+            assert gate.verified_anchor_span_rescues == 0
+        elif isinstance(gate, LineCrossingCounter):
+            assert gate.total_crossings == 0
+        else:
+            assert gate.rescues == 0
+
+
+def test_v0552_all_gate_paths_recover_the_actual_neutral_sample_intersection() -> None:
+    from app.counting import HeavyVehicleCrossingRescuer, TwoWheelCenterCrossingRescuer, VerifiedAnchorSpanRescuer
+
+    for gate_type in (LineCrossingCounter, VerifiedAnchorSpanRescuer, HeavyVehicleCrossingRescuer, TwoWheelCenterCrossingRescuer):
+        gate = gate_type(CountingLine(0.1, 0.5, 0.8, 0.5))
+        # The stable endpoint chord lies outside x=800, but the actual neutral
+        # observations prove an interior gate crossing at x=760, frame 2.5.
+        for frame, point in enumerate(((805, 470), (760, 497), (760, 503)), 1):
+            assert gate.update(5605, point, 1000, 1000, frame) is None
+        result = gate.update(5605, (805, 530), 1000, 1000, 4)
+        if isinstance(gate, VerifiedAnchorSpanRescuer):
+            assert result is None
+            result = gate.update(5605, (805, 555), 1000, 1000, 5)
+        if isinstance(gate, LineCrossingCounter):
+            assert result == "in"
+            assert gate.crossing_point_for(5605) == (760.0, 500.0)
+        else:
+            assert result == ("in", (760.0, 500.0)), gate_type.__name__
+        assert gate.crossing_frame_for(5605) == pytest.approx(2.5)
+
+
+def test_v0552_center_rescuers_count_alternating_passages_in_out_in() -> None:
+    from app.counting import HeavyVehicleCrossingRescuer, TwoWheelCenterCrossingRescuer
+
+    for gate_type in (HeavyVehicleCrossingRescuer, TwoWheelCenterCrossingRescuer):
+        gate = gate_type(CountingLine(0.1, 0.5, 0.9, 0.5))
+        assert gate.update(5606, (500, 460), 1000, 1000, 1) is None
+        assert gate.update(5606, (500, 540), 1000, 1000, 2)[0] == "in"
+        assert gate.update(5606, (500, 460), 1000, 1000, 3)[0] == "out"
+        assert gate.update(5606, (500, 540), 1000, 1000, 4)[0] == "in"
+        assert gate.rescues == 3
+        assert gate.update(5606, (500, 550), 1000, 1000, 5) is None
+
+
+def test_v0552_center_proposals_remain_retryable_until_primary_accepts() -> None:
+    from app.counting import HeavyVehicleCrossingRescuer, TwoWheelCenterCrossingRescuer
+
+    for gate_type in (HeavyVehicleCrossingRescuer, TwoWheelCenterCrossingRescuer):
+        gate = gate_type(CountingLine(0.1, 0.5, 0.9, 0.5))
+        empty = gate.capture_passage_state(5607)
+        assert gate.update(5607, (500, 460), 1000, 1000, 1, commit=False) is None
+        assert gate.update(5607, (500, 540), 1000, 1000, 2, commit=False)[0] == "in"
+        assert gate.capture_passage_state(5607) == empty
+        assert gate.rescues == 0
+        assert gate.crossing_frame_for(5607) == pytest.approx(1.5)
+        # No accepted primary handoff yet: a later sample must retain the proof.
+        assert gate.update(5607, (500, 550), 1000, 1000, 3, commit=False)[0] == "in"
+        gate.mark_counted(5607, "in", 3)
+        assert gate.rescues == 1
+        assert gate.capture_passage_state(5607)[:2] == (frozenset({"in"}), 3)
+        assert gate.crossing_frame_for(5607) == pytest.approx(1.5)
+        assert gate.update(5607, (500, 560), 1000, 1000, 4, commit=False) is None
+
+
+def test_v0552_center_guard_rollback_restores_prior_cycle_and_clears_rejected_proof() -> None:
+    from app.counting import HeavyVehicleCrossingRescuer, TwoWheelCenterCrossingRescuer
+
+    for gate_type in (HeavyVehicleCrossingRescuer, TwoWheelCenterCrossingRescuer):
+        gate = gate_type(CountingLine(0.1, 0.5, 0.9, 0.5))
+        assert gate.update(5608, (500, 460), 1000, 1000, 10) is None
+        assert gate.update(5608, (500, 540), 1000, 1000, 11)[0] == "in"
+        prior = gate.capture_passage_state(5608)
+        assert gate.update(5608, (500, 460), 1000, 1000, 20, commit=False)[0] == "out"
+        gate.mark_counted(5608, "out", 20)
+        assert gate.rescues == 2
+        gate.restore_passage_state(5608, prior)
+        assert gate.capture_passage_state(5608) == prior
+        assert gate.rescues == 1
+        gate.restore_passage_state(5608, prior)
+        assert gate.rescues == 1
+        assert gate.update(5608, (500, 460), 1000, 1000, 21) is None
+        assert gate.update(5608, (500, 540), 1000, 1000, 22) is None
+
+
+def test_v0552_center_alias_merge_keeps_latest_passage_and_unique_frame_evidence() -> None:
+    from app.counting import HeavyVehicleCrossingRescuer, TwoWheelCenterCrossingRescuer
+
+    for gate_type in (HeavyVehicleCrossingRescuer, TwoWheelCenterCrossingRescuer):
+        gate = gate_type(CountingLine(0.1, 0.5, 0.9, 0.5))
+        gate.mark_counted(5609, "out", 10)
+        gate.mark_counted(5610, "in", 20)
+        assert gate.update(5609, (500, 460), 1000, 1000, 30) is None
+        assert gate.update(5610, (510, 460), 1000, 1000, 30) is None
+        gate.merge_track(5610, 5609)
+        assert gate.capture_passage_state(5609)[:2] == (frozenset({"in"}), 20)
+        assert len(gate._tracks[5609].history) == 1
+        assert gate.update(5609, (500, 540), 1000, 1000, 30) is None
+        assert gate.update(5609, (500, 540), 1000, 1000, 31) is None
+        assert gate.update(5609, (500, 460), 1000, 1000, 32)[0] == "out"
+
+
+def test_v0552_unused_center_candidate_does_not_increment_committed_rescues() -> None:
+    from app.counting import HeavyVehicleCrossingRescuer, TwoWheelCenterCrossingRescuer
+
+    for gate_type in (HeavyVehicleCrossingRescuer, TwoWheelCenterCrossingRescuer):
+        gate = gate_type(CountingLine(0.1, 0.5, 0.9, 0.5))
+        assert gate.update(5611, (500, 460), 1000, 1000, 1, commit=False) is None
+        assert gate.update(5611, (500, 540), 1000, 1000, 2, commit=False)[0] == "in"
+        # The strict primary gate won; center evidence was not the event source.
+        gate.mark_counted(5611, "in", 2, commit_candidate=False)
+        assert gate.rescues == 0
+        assert gate.capture_passage_state(5611)[:2] == (frozenset({"in"}), 2)
+        assert gate.crossing_frame_for(5611) is None
+
+
 def test_v0551_continuous_approach_recovers_oblique_last_box_only_after_post_confirm() -> None:
     from app.counting import VerifiedAnchorSpanRescuer
 

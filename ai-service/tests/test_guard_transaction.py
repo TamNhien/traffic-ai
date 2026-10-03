@@ -37,6 +37,7 @@ def _worker() -> PipelineWorker:
     worker._committed_in_count = 0
     worker._committed_out_count = 0
     worker._pending_guard_crossings = {}
+    worker._heavy_center_rescue_tracks = set()
     worker._event_dispatcher = _Dispatcher()
     worker._save_crossing_snapshot = lambda _cv2, _frame, frame_index: f"frame_{frame_index}.jpg"
     return worker
@@ -142,3 +143,78 @@ def test_v0551_immediate_guard_reject_restores_secondary_clock() -> None:
     assert span.capture_passage_state(77) == before
     assert counter.register_external_crossing(77, "in", 12, (50, 50)) is True
     assert counter.total_crossings == 1
+
+
+def test_v0552_pending_guard_restores_every_secondary_passage_and_rescue() -> None:
+    from app.counting import (
+        CountingLine, HeavyVehicleCrossingRescuer, LineCrossingCounter,
+        TwoWheelCenterCrossingRescuer, VerifiedAnchorSpanRescuer,
+    )
+
+    line = CountingLine(.1, .5, .9, .5)
+    counter = LineCrossingCounter(line)
+    worker = _worker()
+    span = worker._anchor_span_rescuer = VerifiedAnchorSpanRescuer(line)
+    heavy = worker._heavy_rescuer = HeavyVehicleCrossingRescuer(line)
+    two_wheel = worker._two_wheel_rescuer = TwoWheelCenterCrossingRescuer(line)
+    before = [gate.capture_passage_state(77) for gate in (span, heavy, two_wheel)]
+    for center in (heavy, two_wheel):
+        assert center.update(77, (50, 46), 100, 100, 10, commit=False) is None
+        candidate = center.update(77, (50, 54), 100, 100, 11, commit=False)
+        assert candidate is not None and candidate[0] == "in"
+        assert center.rescues == 0
+    assert counter.register_external_crossing(77, "in", 11, (50, 50)) is True
+    for gate in (span, heavy, two_wheel):
+        gate.mark_counted(77, "in", 11)
+    assert heavy.rescues == two_wheel.rescues == 1
+    pending = _pending()
+    pending.span_passage_state, pending.heavy_passage_state, pending.two_wheel_passage_state = before
+    pending.heavy_rescue_was_recorded = False
+    worker._heavy_center_rescue_tracks.add(77)
+    worker.state.heavy_center_rescues = 1
+    worker._pending_guard_crossings[77] = pending
+
+    worker._drop_guard_crossing(counter, pending, expired=True)
+
+    assert [gate.capture_passage_state(77) for gate in (span, heavy, two_wheel)] == before
+    assert heavy.rescues == two_wheel.rescues == 0
+    assert worker.state.two_wheel_center_rescues == 0
+    assert worker._heavy_center_rescue_tracks == set()
+    assert worker.state.heavy_center_rescues == 0
+    assert counter.total_crossings == 0
+    assert worker.state.total_count == 0
+    assert worker._event_dispatcher.payloads == []
+
+
+def test_v0552_immediate_guard_reject_keeps_previous_center_direction_and_clock() -> None:
+    from app.counting import (
+        CountingLine, HeavyVehicleCrossingRescuer, LineCrossingCounter,
+        TwoWheelCenterCrossingRescuer, VerifiedAnchorSpanRescuer,
+    )
+
+    line = CountingLine(.1, .5, .9, .5)
+    counter = LineCrossingCounter(line, crossing_cooldown_frames=60)
+    worker = _worker()
+    gates = (
+        VerifiedAnchorSpanRescuer(line), HeavyVehicleCrossingRescuer(line),
+        TwoWheelCenterCrossingRescuer(line),
+    )
+    worker._anchor_span_rescuer, worker._heavy_rescuer, worker._two_wheel_rescuer = gates
+    assert counter.register_external_crossing(77, "in", 5, (50, 50)) is True
+    for gate in gates:
+        gate.mark_counted(77, "in", 5)
+    before = [gate.capture_passage_state(77) for gate in gates]
+    worker._heavy_center_rescue_tracks.add(77)
+    worker.state.heavy_center_rescues = 1
+    assert counter.register_external_crossing(77, "out", 20, (50, 50), verified_anchor_span=True) is True
+    for gate in gates:
+        gate.mark_counted(77, "out", 20)
+
+    worker._rollback_guard_crossing(counter, 77, "out", *before, heavy_rescue_was_recorded=True)
+
+    assert [gate.capture_passage_state(77) for gate in gates] == before
+    assert counter.in_count == 1
+    assert counter.out_count == 0
+    assert counter._tracks[77].last_count_frame == 5
+    assert worker._heavy_center_rescue_tracks == {77}
+    assert worker.state.heavy_center_rescues == 1

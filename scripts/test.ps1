@@ -206,7 +206,7 @@ function Assert-TechnologyVersionsContract {
     @{ Path = "frontend\package.json"; Needle = '"node": ">=26.10.0"' },
     @{ Path = ".nvmrc"; Needle = "26.10.0" },
     @{ Path = "frontend\Dockerfile"; Needle = "nginx:1.31.6-alpine" },
-    @{ Path = "frontend\Dockerfile"; Needle = "npm@12.1.0" }
+    @{ Path = "frontend\Dockerfile"; Needle = "npm@12.2.0" }
   )
   foreach ($check in $checks) {
     $path = Join-Path $root $check.Path
@@ -323,12 +323,12 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.51") { throw "VERSION phải là 0.5.51, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0065_span_shadow_v0551.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0065_span_shadow_v0551.py." }
+  if ($version -ne "0.5.52") { throw "VERSION phải là 0.5.52, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0066_observed_path_v0552.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0066_observed_path_v0552.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0065_span_shadow_v0551"' -or $migrationText -notmatch 'down_revision = "0064_geometry_semantic_v0550"' -or $migrationText -notmatch "value='0.5.51'") {
-    throw "Migration 0065_span_shadow_v0551 không đúng contract V0.5.51."
+  if ($migrationText -notmatch 'revision = "0066_observed_path_v0552"' -or $migrationText -notmatch 'down_revision = "0065_span_shadow_v0551"' -or $migrationText -notmatch "value='0.5.52'") {
+    throw "Migration 0066_observed_path_v0552 không đúng contract V0.5.52."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
@@ -1597,6 +1597,30 @@ function Assert-SpanShadowV0551Contract {
   Write-Host "[OK] Verified Span + Event Ordering Closure 9.7 V0.5.51" -ForegroundColor Green
 }
 
+function Assert-ObservedPathCleanFrameV0552Contract {
+  Write-Host "`n[Traffic AI] Observed Path + Clean Frame + Release Automation V0.5.52" -ForegroundColor Cyan
+  $counting = Get-Content (Join-Path $root "ai-service\app\counting.py") -Raw -Encoding UTF8
+  $worker = Get-Content (Join-Path $root "ai-service\app\worker.py") -Raw -Encoding UTF8
+  $publish = Get-Content (Join-Path $root "scripts\publish.ps1") -Raw -Encoding UTF8
+  $release = Get-Content (Join-Path $root ".github\workflows\release.yml") -Raw -Encoding UTF8
+  $aiTests = Get-Content (Join-Path $root "ai-service\tests\test_counting.py") -Raw -Encoding UTF8
+  $contextTests = Get-Content (Join-Path $root "ai-service\tests\test_worker_context.py") -Raw -Encoding UTF8
+  $aiRequirements = Get-Content (Join-Path $root "ai-service\requirements-test.txt") -Raw -Encoding UTF8
+  $package = Get-Content (Join-Path $root "frontend\package.json") -Raw -Encoding UTF8 | ConvertFrom-Json
+  if ($package.packageManager -ne "npm@12.2.0") { throw "Frontend phải dùng npm@12.2.0." }
+  foreach ($relative in @("frontend\Dockerfile", ".github\workflows\ci.yml", ".github\workflows\ci-release-reusable.yml", ".github\workflows\release.yml")) {
+    $text = Get-Content (Join-Path $root $relative) -Raw -Encoding UTF8
+    if ($text -notmatch 'npm@12\.2\.0' -or $text -match 'npm@12\.1\.0') { throw "npm chưa đồng bộ 12.2.0 trong $relative." }
+  }
+  if ($counting -notmatch 'def observed_gate_crossing' -or $counting -notmatch 'commit: bool = True') { throw "V0.5.52 thiếu observed path / secondary admission contract." }
+  if ($worker -notmatch '_prepare_processing_frames' -or $worker -notmatch 'analysis_frame' -or $worker -notmatch '_record_bicycle_xframe_observations' -or $worker -notmatch 'commit=False') { throw "V0.5.52 thiếu clean inference frame / context admission / center transaction." }
+  if ($publish -notmatch 'gh release upload' -or $publish -notmatch '--clobber' -or $publish -notmatch 'headSha -eq \$headSha -and' -or $publish -notmatch 'event -eq "push"') { throw "V0.5.52 thiếu publish retry hoặc chọn đúng run của tag." }
+  if ($release -notmatch 'RELEASE_TAG' -or $release -notmatch 'inputs.tag' -or $release -notmatch 'refs/tags/\$tag\^\{commit\}') { throw "Release workflow chưa chạy đúng immutable tag khi dispatch." }
+  if ($aiTests -notmatch 'test_v0552_' -or $contextTests -notmatch 'test_v0552_preview_drawing_cannot_modify_analysis_pixels') { throw "V0.5.52 thiếu regression tests." }
+  if ($aiRequirements -notmatch '(?m)^numpy==2\.4\.6\s*$') { throw "Pixel regression test V0.5.52 thiếu dependency NumPy được pin." }
+  Write-Host "[OK] Observed Path + Clean Frame + Release Automation V0.5.52" -ForegroundColor Green
+}
+
 function Invoke-Step([string]$Title, [scriptblock]$Action) {
   Write-Host "`n[Traffic AI] $Title" -ForegroundColor Cyan
   & $Action
@@ -1664,6 +1688,7 @@ Assert-BalancedRecallRecoveryV0547Contract
 Assert-PrecisionRecoveryV0549Contract
 Assert-GeometrySemanticV0550Contract
 Assert-SpanShadowV0551Contract
+Assert-ObservedPathCleanFrameV0552Contract
 Assert-LegacySemanticCompatibilityV0523R1
 
 Write-Host "`n[Traffic AI] Road Zone + Frame Browser V0.5.11" -ForegroundColor Cyan
@@ -1774,7 +1799,7 @@ Invoke-Step "Frontend build" {
   if (Test-Path $frontendDist) { Remove-Item $frontendDist -Recurse -Force }
   if (Test-Path $frontendLock) { Remove-Item $frontendLock -Force }
   docker run --rm -v "${root}:/src" -w /src/frontend node:26.10.0-alpine `
-    sh -lc "npm install -g npm@12.1.0 && npm install && npm audit --audit-level=high && npm run build"
+    sh -lc "npm install -g npm@12.2.0 && npm install && npm audit --audit-level=high && npm run build"
 }
 
 if (-not $SkipDockerBuild) {

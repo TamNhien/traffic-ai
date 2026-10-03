@@ -75,6 +75,9 @@ class _PendingGuardCrossing:
     snapshot_frame: object
     observed_frame_index: int | None = None
     span_passage_state: object | None = None
+    heavy_passage_state: object | None = None
+    two_wheel_passage_state: object | None = None
+    heavy_rescue_was_recorded: bool | None = None
 
 
 class PipelineWorker(threading.Thread):
@@ -107,6 +110,8 @@ class PipelineWorker(threading.Thread):
         self._bicycle_context_rescue_tracks: set[int] = set()
         self._bicycle_context_xframe_trail: dict[int, list[tuple[int, str, float, float]]] = {}
         self._bicycle_context_xframe_last_scan: dict[int, int] = {}
+        self._bicycle_context_last_observation: dict[int, tuple[int, list[tuple[str, float, float]]]] = {}
+        self._bicycle_context_xframe_last_consumed: dict[int, int] = {}
         self._bicycle_xframe_audit_this_frame: list[dict] = []
         self._truck_class_rescue_tracks: set[int] = set()
         self._class_consensus_rescue_tracks: set[int] = set()
@@ -527,14 +532,37 @@ class PipelineWorker(threading.Thread):
     def _rollback_guard_crossing(
         self, counter: LineCrossingCounter, track_id: int, direction: str,
         span_passage_state: object | None,
+        heavy_passage_state: object | None = None,
+        two_wheel_passage_state: object | None = None,
+        heavy_rescue_was_recorded: bool | None = None,
     ) -> None:
         revoked = counter.revoke_last_crossing(track_id, direction)
-        span_rescuer = getattr(self, "_anchor_span_rescuer", None)
-        if revoked is not False and span_rescuer is not None and span_passage_state is not None:
-            span_rescuer.restore_passage_state(track_id, span_passage_state)
+        if revoked is False:
+            return
+        for attribute, passage_state in (
+            ("_anchor_span_rescuer", span_passage_state),
+            ("_heavy_rescuer", heavy_passage_state),
+            ("_two_wheel_rescuer", two_wheel_passage_state),
+        ):
+            rescuer = getattr(self, attribute, None)
+            if rescuer is not None and passage_state is not None:
+                rescuer.restore_passage_state(track_id, passage_state)
+        two_wheel_rescuer = getattr(self, "_two_wheel_rescuer", None)
+        if two_wheel_rescuer is not None:
+            self.state.two_wheel_center_rescues = two_wheel_rescuer.rescues
+        heavy_rescue_tracks = getattr(self, "_heavy_center_rescue_tracks", None)
+        if heavy_rescue_tracks is not None and heavy_rescue_was_recorded is not None:
+            if heavy_rescue_was_recorded:
+                heavy_rescue_tracks.add(int(track_id))
+            else:
+                heavy_rescue_tracks.discard(int(track_id))
+            self.state.heavy_center_rescues = len(heavy_rescue_tracks)
 
     def _drop_guard_crossing(self, counter: LineCrossingCounter, pending: _PendingGuardCrossing, *, expired: bool = False) -> None:
-        self._rollback_guard_crossing(counter, pending.track_id, pending.direction, pending.span_passage_state)
+        self._rollback_guard_crossing(
+            counter, pending.track_id, pending.direction, pending.span_passage_state,
+            pending.heavy_passage_state, pending.two_wheel_passage_state, pending.heavy_rescue_was_recorded,
+        )
         self._pending_guard_crossings.pop(int(pending.track_id), None)
         self.state.human_guard_pending_crossings = len(self._pending_guard_crossings)
         if expired:
@@ -1013,6 +1041,8 @@ class PipelineWorker(threading.Thread):
                 min_side_distance_ratio=self.two_wheel_center_min_side_ratio,
                 road_margin_ratio=self.two_wheel_center_road_margin_ratio,
             ) if self.two_wheel_center_rescue_enabled else None
+            self._heavy_rescuer = heavy_rescuer
+            self._two_wheel_rescuer = two_wheel_rescuer
 
             self._event_dispatcher.start()
             self.state.status = "running"
@@ -1065,7 +1095,7 @@ class PipelineWorker(threading.Thread):
                     self.state.status = "completed"
                     break
 
-                frame = self._resize_for_processing(cv2, source_frame)
+                analysis_frame, frame = self._prepare_processing_frames(cv2, source_frame)
                 height, width = frame.shape[:2]
                 self.state.frame_width = width
                 self.state.frame_height = height
@@ -1088,7 +1118,7 @@ class PipelineWorker(threading.Thread):
                         min_span_ratio=self.gate_roi_min_span,
                         endpoint_margin_ratio=self.gate_endpoint_margin,
                     )
-                infer_frame = roi.crop(frame) if roi is not None else frame
+                infer_frame = roi.crop(analysis_frame) if roi is not None else analysis_frame
                 offset_x = roi.x1 if roi is not None else 0
                 offset_y = roi.y1 if roi is not None else 0
                 if roi is not None:
@@ -1233,7 +1263,7 @@ class PipelineWorker(threading.Thread):
                             and refines_used_this_frame < self.refine_max_per_frame
                         ):
                             class_refined, did_refine = self._observe_class_refiner(
-                                track_id, frame_index, frame, rect, display_label, device, use_half, force=False
+                                track_id, frame_index, analysis_frame, rect, display_label, device, use_half, force=False
                             )
                             if did_refine:
                                 refines_used_this_frame += 1
@@ -1267,7 +1297,7 @@ class PipelineWorker(threading.Thread):
                         buffered = self._pending_guard_crossings.get(track_id)
                         if buffered is not None:
                             action, _ = self._observe_human_guard(
-                                track_id, frame_index, frame, rect, buffered.label, confidence_f,
+                                track_id, frame_index, analysis_frame, rect, buffered.label, confidence_f,
                                 device, use_half, velocity=velocity, force=True,
                             )
                             if action == "rejected":
@@ -1295,7 +1325,7 @@ class PipelineWorker(threading.Thread):
                         )
                         if suspect_human and not self._human_guard_policy.is_rider(track_id):
                             self._observe_human_guard(
-                                track_id, frame_index, frame, rect, display_label, confidence_f,
+                                track_id, frame_index, analysis_frame, rect, display_label, confidence_f,
                                 device, use_half, velocity=velocity, force=False,
                             )
 
@@ -1327,10 +1357,13 @@ class PipelineWorker(threading.Thread):
                                     float(gate_distance_ratio), float(confidence_f), int(track_id), rect
                                 ))
 
+                        heavy_passage_state = heavy_rescuer.capture_passage_state(track_id) if heavy_rescuer is not None else None
+                        two_wheel_passage_state = two_wheel_rescuer.capture_passage_state(track_id) if two_wheel_rescuer is not None else None
+                        heavy_rescue_was_recorded = int(track_id) in self._heavy_center_rescue_tracks
                         heavy_center_candidate = None
                         if heavy_rescuer is not None and vehicle_family(display_label) == "four-wheel":
                             heavy_center_candidate = heavy_rescuer.update(
-                                track_id, center, width, height, frame_index
+                                track_id, center, width, height, frame_index, commit=False
                             )
                         two_wheel_center_candidate = None
                         if (
@@ -1340,10 +1373,11 @@ class PipelineWorker(threading.Thread):
                             and track_on_road
                         ):
                             two_wheel_center_candidate = two_wheel_rescuer.update(
-                                track_id, center, width, height, frame_index
+                                track_id, center, width, height, frame_index, commit=False
                             )
 
                         span_passage_state = anchor_span_rescuer.capture_passage_state(track_id)
+                        center_crossing_source = None
                         direction = counter.update(
                             track_id, anchor, width, height, frame_index=frame_index,
                             origin_probe=(
@@ -1370,8 +1404,6 @@ class PipelineWorker(threading.Thread):
                                 if accepted_span:
                                     anchor_span_rescuer.consume_override_qualification(track_id)
                                     direction = span_direction
-                        else:
-                            anchor_span_rescuer.mark_counted(track_id, direction, frame_index)
                         if direction is None and heavy_center_candidate is not None:
                             heavy_direction, heavy_crossing_point = heavy_center_candidate
                             heavy_crossing_frame = heavy_rescuer.crossing_frame_for(track_id) if heavy_rescuer is not None else None
@@ -1380,6 +1412,7 @@ class PipelineWorker(threading.Thread):
                                 crossing_frame=heavy_crossing_frame,
                             ):
                                 direction = heavy_direction
+                                center_crossing_source = "heavy"
                                 self._heavy_center_rescue_tracks.add(int(track_id))
                                 self.state.heavy_center_rescues = len(self._heavy_center_rescue_tracks)
                         if direction is None and two_wheel_center_candidate is not None:
@@ -1391,11 +1424,23 @@ class PipelineWorker(threading.Thread):
                                 mode=two_wheel_mode, crossing_frame=two_wheel_crossing_frame,
                             ):
                                 direction = two_wheel_direction
-                                self.state.two_wheel_center_rescues += 1
+                                center_crossing_source = "two-wheel"
                         if direction is not None:
-                            # Keep the secondary gate aligned with every accepted
-                            # crossing path, not only primary/anchor-span events.
+                            # Center candidates are provisional until the main
+                            # gate accepts. Commit every secondary passage once
+                            # here, then restore all three if Human Guard drops it.
                             anchor_span_rescuer.mark_counted(track_id, direction, frame_index)
+                            if heavy_rescuer is not None:
+                                heavy_rescuer.mark_counted(
+                                    track_id, direction, frame_index,
+                                    commit_candidate=center_crossing_source == "heavy",
+                                )
+                            if two_wheel_rescuer is not None:
+                                two_wheel_rescuer.mark_counted(
+                                    track_id, direction, frame_index,
+                                    commit_candidate=center_crossing_source == "two-wheel",
+                                )
+                                self.state.two_wheel_center_rescues = two_wheel_rescuer.rescues
                         self.state.video_start_rescues = counter.origin_rescues
                         self.state.rejected_outside_road = counter.rejected_outside_road
                         self.state.fast_confirm_rescues = counter.fast_confirm_rescues
@@ -1452,7 +1497,7 @@ class PipelineWorker(threading.Thread):
                                 and refines_used_this_frame < self.refine_max_per_frame
                             ):
                                 refined, did_refine = self._observe_class_refiner(
-                                    track_id, frame_index, frame, rect, display_label,
+                                    track_id, frame_index, analysis_frame, rect, display_label,
                                     device, use_half, force=True,
                                 )
                                 if did_refine:
@@ -1494,7 +1539,7 @@ class PipelineWorker(threading.Thread):
                                 and bicycle_context_used_this_frame < self.bicycle_context_max_per_frame
                             ):
                                 context_bicycle = self._refine_bicycle_context(
-                                    track_id, frame_index, frame, rect, device, use_half, confidence_f
+                                    track_id, frame_index, analysis_frame, rect, device, use_half, confidence_f
                                 )
                                 bicycle_context_used_this_frame += 1
                                 if context_bicycle is not None:
@@ -1536,11 +1581,14 @@ class PipelineWorker(threading.Thread):
 
                             if event_label in TWO_WHEEL_LABELS:
                                 action, _ = self._observe_human_guard(
-                                    track_id, frame_index, frame, rect, event_label, event_confidence,
+                                    track_id, frame_index, analysis_frame, rect, event_label, event_confidence,
                                     device, use_half, velocity=velocity, force=True,
                                 )
                                 if action == "rejected":
-                                    self._rollback_guard_crossing(counter, track_id, direction, span_passage_state)
+                                    self._rollback_guard_crossing(
+                                        counter, track_id, direction, span_passage_state,
+                                        heavy_passage_state, two_wheel_passage_state, heavy_rescue_was_recorded,
+                                    )
                                     self._draw_detection(
                                         cv2, frame, rect, track_id, "PERSON-GUARD", event_confidence,
                                         anchor, class_certainty, raw_track_id,
@@ -1566,6 +1614,9 @@ class PipelineWorker(threading.Thread):
                                         crossing_y=crossing_y,
                                         snapshot_frame=guard_snapshot,
                                         span_passage_state=span_passage_state,
+                                        heavy_passage_state=heavy_passage_state,
+                                        two_wheel_passage_state=two_wheel_passage_state,
+                                        heavy_rescue_was_recorded=heavy_rescue_was_recorded,
                                     )
                                     self.state.human_guard_pending_crossings = len(self._pending_guard_crossings)
                                     continue
@@ -1616,6 +1667,10 @@ class PipelineWorker(threading.Thread):
                     ):
                         continue
                     anchor_span_rescuer.consume_override_qualification(lost_track_id)
+                    if heavy_rescuer is not None:
+                        heavy_rescuer.mark_counted(lost_track_id, lost_direction, last_seen_frame, commit_candidate=False)
+                    if two_wheel_rescuer is not None:
+                        two_wheel_rescuer.mark_counted(lost_track_id, lost_direction, last_seen_frame, commit_candidate=False)
                     self._record_committed_crossing(lost_label, lost_direction, "rescued")
                     selected_frame, corrected, clamped = select_event_crossing_frame(
                         last_seen_frame, counter.crossing_frame_for(lost_track_id), "rescued",
@@ -1641,11 +1696,15 @@ class PipelineWorker(threading.Thread):
                 # vehicle that is actually about to cross gets the context trail.
                 if self.bicycle_context_xframe_enabled and bicycle_xframe_scan_candidates:
                     prioritized_xframe_scans = prioritize_bicycle_xframe_candidates(
-                        bicycle_xframe_scan_candidates, self.bicycle_context_xframe_max_per_frame
+                        [
+                            candidate for candidate in bicycle_xframe_scan_candidates
+                            if self._bicycle_context_xframe_last_consumed.get(int(candidate[2])) != int(frame_index)
+                        ],
+                        self.bicycle_context_xframe_max_per_frame,
                     )
                     for _distance, _confidence, scan_track_id, scan_rect in prioritized_xframe_scans:
                         self._scan_bicycle_xframe_context(
-                            scan_track_id, frame_index, frame, scan_rect, device, use_half
+                            scan_track_id, frame_index, analysis_frame, scan_rect, device, use_half
                         )
                         self._bicycle_context_xframe_last_scan[int(scan_track_id)] = int(frame_index)
                         self.state.bicycle_context_xframe_priority_scans += 1
@@ -1821,6 +1880,16 @@ class PipelineWorker(threading.Thread):
         if self.payload.source_type == "webcam":
             return int(self.payload.source_url)
         return self.payload.source_url
+
+    def _prepare_processing_frames(self, cv2, source_frame):
+        """Keep all inference crops free of preview boxes and labels.
+
+        Track drawing mutates the preview during iteration. In particular,
+        crossing-time refiners and the deferred cross-frame scan run after
+        drawing, so sharing this buffer changes their model input.
+        """
+        analysis_frame = self._resize_for_processing(cv2, source_frame)
+        return analysis_frame, analysis_frame.copy()
 
     def _resize_for_processing(self, cv2, frame):
         height, width = frame.shape[:2]
@@ -2026,13 +2095,14 @@ class PipelineWorker(threading.Thread):
                 return None
             bike = select_contextual_two_wheel_refinement(
                 target_crop, candidates, label="bicycle",
-                # V0.5.38 must retain 0.10-0.119 bicycle evidence for the
-                # near-margin fallback. Stricter V0.5.37/legacy decisions still
-                # apply their own thresholds later, so collecting it here does
-                # not weaken those branches.
+                # Retain observations down to each configured policy's input
+                # floor. Final decisions still enforce their separate strength,
+                # source and distinct-frame requirements.
                 min_confidence=min(
                     self.bicycle_context_competitive_min_source_conf,
                     self.bicycle_context_near_margin_min_source_conf,
+                    self.bicycle_context_xframe_min_source_conf
+                    if self.bicycle_context_xframe_enabled else 1.0,
                 ),
             )
             moto = select_contextual_two_wheel_refinement(
@@ -2047,26 +2117,53 @@ class PipelineWorker(threading.Thread):
         except Exception:
             return None
 
+    def _observe_bicycle_context(
+        self, track_id: int, frame_index: int, frame, rect, device, use_half: bool,
+    ) -> list[tuple[str, float, float]]:
+        """Share one context observation per track/source frame across callers."""
+        tid, frame_idx = int(track_id), int(frame_index)
+        cached = self._bicycle_context_last_observation.get(tid)
+        if cached is not None and cached[0] == frame_idx:
+            return list(cached[1])
+        observations: list[tuple[str, float, float]] = []
+        for source, model, ids in (
+            ("domain", self._refiner_model, self._refine_ids),
+            ("general", self._general_refiner_model, self._general_refine_ids),
+        ):
+            if model is None or not ids:
+                continue
+            pair = self._context_two_wheel_from_model(frame, rect, device, use_half, ids, model)
+            if pair is not None:
+                observations.append((source, float(pair[0]), float(pair[1])))
+        self._bicycle_context_last_observation[tid] = (frame_idx, observations)
+        return list(observations)
+
+    def _record_bicycle_xframe_observations(
+        self, track_id: int, frame_index: int, observations: list[tuple[str, float, float]],
+    ) -> None:
+        tid, frame_idx = int(track_id), int(frame_index)
+        cutoff = frame_idx - self.bicycle_context_xframe_history
+        # Two callers on one source frame must never create extra evidence.
+        keyed = {
+            (item[0], item[1]): item
+            for item in self._bicycle_context_xframe_trail.get(tid, [])
+            if cutoff <= item[0] <= frame_idx
+        }
+        for source, bike, moto in observations:
+            keyed[(frame_idx, str(source))] = (frame_idx, str(source), float(bike), float(moto))
+        self._bicycle_context_xframe_trail[tid] = sorted(keyed.values(), key=lambda item: (item[0], item[1]))[-24:]
+
     def _scan_bicycle_xframe_context(
         self, track_id: int, frame_index: int, frame, rect, device, use_half: bool,
     ) -> None:
         tid = int(track_id)
+        if self._bicycle_context_xframe_last_consumed.get(tid) == int(frame_index):
+            # The crossing already sampled and consumed this source frame. Do
+            # not seed the next passage with its evidence or repeat inference.
+            return
         self.state.bicycle_context_xframe_scans += 1
-        trail = self._bicycle_context_xframe_trail.setdefault(tid, [])
-        if self._refiner_model is not None and self._refine_ids:
-            pair = self._context_two_wheel_from_model(
-                frame, rect, device, use_half, self._refine_ids, self._refiner_model
-            )
-            if pair is not None:
-                trail.append((int(frame_index), "domain", float(pair[0]), float(pair[1])))
-        if self._general_refiner_model is not None and self._general_refine_ids:
-            pair = self._context_two_wheel_from_model(
-                frame, rect, device, use_half, self._general_refine_ids, self._general_refiner_model
-            )
-            if pair is not None:
-                trail.append((int(frame_index), "general", float(pair[0]), float(pair[1])))
-        cutoff = int(frame_index) - self.bicycle_context_xframe_history
-        self._bicycle_context_xframe_trail[tid] = [item for item in trail if item[0] >= cutoff][-24:]
+        observations = self._observe_bicycle_context(track_id, frame_index, frame, rect, device, use_half)
+        self._record_bicycle_xframe_observations(track_id, frame_index, observations)
 
     def _audit_cross_frame_bicycle(
         self, track_id: int, frame_index: int, detector_confidence: float,
@@ -2087,7 +2184,12 @@ class PipelineWorker(threading.Thread):
             dual_fused_confidence=self.bicycle_context_xframe_dual_conf,
             fused_margin=self.bicycle_context_xframe_fused_margin,
         )
-        audit = {"track_id": tid, "frame_index": int(frame_index), **audit}
+        audit = {
+            "track_id": tid, "frame_index": int(frame_index),
+            "context_frames": sorted({item[0] for item in trail}),
+            "current_frame_sources": sorted({item[1] for item in trail if item[0] == int(frame_index)}),
+            **audit,
+        }
         self._bicycle_xframe_audit_this_frame.append(audit)
         if decision is None:
             self.state.bicycle_context_xframe_audit_rejects += 1
@@ -2119,27 +2221,15 @@ class PipelineWorker(threading.Thread):
         if not self.bicycle_context_rescue_enabled:
             return None
         self.state.bicycle_context_checks += 1
-        observations: list[tuple[str, float]] = []
-        competitive: list[tuple[str, float, float]] = []
-
-        if self._refiner_model is not None and self._refine_ids:
-            pair = self._context_two_wheel_from_model(
-                frame, rect, device, use_half, self._refine_ids, self._refiner_model
-            )
-            if pair is not None:
-                bike_conf, moto_conf = pair
-                competitive.append(("domain", bike_conf, moto_conf))
-                if bike_conf >= self.bicycle_context_min_source_conf:
-                    observations.append(("domain", bike_conf))
-        if self._general_refiner_model is not None and self._general_refine_ids:
-            pair = self._context_two_wheel_from_model(
-                frame, rect, device, use_half, self._general_refine_ids, self._general_refiner_model
-            )
-            if pair is not None:
-                bike_conf, moto_conf = pair
-                competitive.append(("general", bike_conf, moto_conf))
-                if bike_conf >= self.bicycle_context_min_source_conf:
-                    observations.append(("general", bike_conf))
+        competitive = self._observe_bicycle_context(track_id, frame_index, frame, rect, device, use_half)
+        observations = [
+            (source, bike_conf) for source, bike_conf, _moto_conf in competitive
+            if bike_conf >= self.bicycle_context_min_source_conf
+        ]
+        if self.bicycle_context_xframe_enabled:
+            # Include evidence already inferred on the crossing frame before
+            # deciding. A late scan can no longer strand the second source.
+            self._record_bicycle_xframe_observations(track_id, frame_index, competitive)
 
         decision = contextual_bicycle_decision(
             observations,
@@ -2205,6 +2295,10 @@ class PipelineWorker(threading.Thread):
             )
             if decision is not None:
                 self.state.bicycle_context_temporal_rescues += 1
+        # Every geometry-proven crossing consumes its trail, including earlier
+        # same-frame context rescues that did not enter the cross-frame branch.
+        self._bicycle_context_xframe_trail.pop(int(track_id), None)
+        self._bicycle_context_xframe_last_consumed[int(track_id)] = int(frame_index)
         if decision is None:
             return None
         tid = int(track_id)

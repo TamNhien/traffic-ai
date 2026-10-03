@@ -271,6 +271,31 @@ class _GateSample:
     side: int
 
 
+def observed_gate_crossing(
+    history: list[_GateSample], start: _GateSample, end: _GateSample,
+    a: Point, b: Point, *, segment_margin: float = 0.0,
+) -> tuple[_GateSample, _GateSample, Point] | None:
+    """Use the observed bracket, including neutral samples, for finite geometry.
+
+    A stable-side endpoint chord can cut the gate even when intervening observed
+    anchors went around its endpoint. Conversely, the chord can miss a real
+    crossing visible in those neutral samples. Sparse trajectories still have a
+    valid two-observation bracket; they need no invented replacement chord.
+    """
+    window = [start] + [
+        item for item in history if start.frame_index < item.frame_index < end.frame_index
+    ] + [end]
+    bracket = None
+    for left, right in zip(window, window[1:]):
+        if left.distance * right.distance <= 0.0 and left.distance != right.distance:
+            bracket = left, right
+    if bracket is None:
+        return None
+    left, right = bracket
+    crossing = segment_crossing_point(left.point, right.point, a, b, segment_margin=segment_margin)
+    return (left, right, crossing) if crossing is not None else None
+
+
 @dataclass(slots=True)
 class _TrackGateState:
     history: deque[_GateSample] = field(default_factory=lambda: deque(maxlen=48))
@@ -592,9 +617,12 @@ class VerifiedAnchorSpanRescuer:
         same_direction_candidate = direction in state.counted_directions
         if same_direction_candidate and sample.frame_index - state.last_count_frame < self.same_direction_min_frames:
             return None
-        crossing = segment_crossing_point(previous.point, sample.point, a, b, segment_margin=self.segment_margin)
-        if crossing is None:
+        observed_crossing = observed_gate_crossing(
+            list(state.history), previous, sample, a, b, segment_margin=self.segment_margin,
+        )
+        if observed_crossing is None:
             return None
+        crossing_start, crossing_end, crossing = observed_crossing
         dx = sample.point[0] - previous.point[0]
         dy = sample.point[1] - previous.point[1]
         move_len = max(hypot(dx, dy), 1e-6)
@@ -603,7 +631,7 @@ class VerifiedAnchorSpanRescuer:
         side_depth_ratio = min(abs(sample.distance), abs(previous.distance)) / scale
         road_ok, road_edge_rescue = self._road_ok(previous, sample, crossing, width, height)
         approach_span = False
-        crossing_frame = crossing_frame_between(previous, sample, crossing)
+        crossing_frame = crossing_frame_between(crossing_start, crossing_end, crossing)
         if (
             normal_ratio < self.min_normal_ratio
             or jump_ratio > self.max_jump_ratio
@@ -834,9 +862,131 @@ class VerifiedAnchorSpanRescuer:
 class _HeavyRescueState:
     history: deque[_GateSample] = field(default_factory=lambda: deque(maxlen=128))
     counted_directions: set[str] = field(default_factory=set)
+    last_count_frame: int = -10_000
 
 
-class HeavyVehicleCrossingRescuer:
+@dataclass(slots=True)
+class _CenterCrossingCandidate:
+    direction: str
+    frame_index: int
+    crossing_frame: float
+    mode: str
+
+
+class _CenterPassageRescuer:
+    """Keep proposed center geometry separate from accepted passage identity."""
+
+    def capture_passage_state(self, track_id: int) -> tuple[frozenset[str], int, float | None, str | None, bool]:
+        tid = int(track_id)
+        state = self._tracks.get(tid)
+        return (
+            frozenset(state.counted_directions) if state is not None else frozenset(),
+            state.last_count_frame if state is not None else -10_000,
+            self._last_crossing_frame.get(tid), self._last_crossing_mode.get(tid),
+            tid in self._last_committed_rescue,
+        )
+
+    def restore_passage_state(
+        self, track_id: int, snapshot: tuple[frozenset[str], int, float | None, str | None, bool],
+    ) -> None:
+        tid = int(track_id)
+        directions, clock, crossing_frame, mode, was_rescue = snapshot
+        state = self._tracks.get(tid)
+        if state is not None:
+            if state.last_count_frame != clock and tid in self._last_committed_rescue:
+                self.rescues = max(0, self.rescues - 1)
+            state.counted_directions = set(directions)
+            state.last_count_frame = clock
+            # A semantic rejection must not be replayed from the rejected chord.
+            state.history.clear()
+        self._crossing_candidates.pop(tid, None)
+        for mapping, value in ((self._last_crossing_frame, crossing_frame), (self._last_crossing_mode, mode)):
+            if value is None:
+                mapping.pop(tid, None)
+            else:
+                mapping[tid] = value
+        if was_rescue:
+            self._last_committed_rescue.add(tid)
+        else:
+            self._last_committed_rescue.discard(tid)
+
+    def mark_counted(
+        self, track_id: int, direction: str, frame_index: int | None = None,
+        *, commit_candidate: bool = True,
+    ) -> None:
+        tid = int(track_id)
+        state = self._tracks.get(tid)
+        if state is None:
+            state = self._state_type()
+            self._tracks[tid] = state
+        candidate = self._crossing_candidates.pop(tid, None)
+        clock = int(frame_index) if frame_index is not None else (
+            candidate.frame_index if candidate is not None else state.last_count_frame
+        )
+        if candidate is None and clock == state.last_count_frame and state.counted_directions == {str(direction)}:
+            return
+        state.counted_directions = {str(direction)}
+        state.last_count_frame = max(state.last_count_frame, clock)
+        if commit_candidate and candidate is not None and candidate.direction == direction:
+            self._last_crossing_frame[tid] = candidate.crossing_frame
+            self._last_crossing_mode[tid] = candidate.mode
+            self._last_committed_rescue.add(tid)
+            self.rescues += 1
+        else:
+            self._last_crossing_frame.pop(tid, None)
+            self._last_crossing_mode.pop(tid, None)
+            self._last_committed_rescue.discard(tid)
+        if state.history:
+            state.history = deque([state.history[-1]], maxlen=self._history_maxlen)
+
+    def crossing_frame_for(self, track_id: int) -> float | None:
+        tid = int(track_id)
+        candidate = self._crossing_candidates.get(tid)
+        return candidate.crossing_frame if candidate is not None else self._last_crossing_frame.get(tid)
+
+    def crossing_mode_for(self, track_id: int) -> str:
+        tid = int(track_id)
+        candidate = self._crossing_candidates.get(tid)
+        return candidate.mode if candidate is not None else self._last_crossing_mode.get(tid, "rescued")
+
+    def merge_track(self, source_track_id: int, target_track_id: int) -> None:
+        source, target = int(source_track_id), int(target_track_id)
+        if source == target:
+            return
+        src = self._tracks.pop(source, None)
+        if src is None:
+            return
+        dst = self._tracks.get(target)
+        source_is_latest = dst is None or src.last_count_frame > dst.last_count_frame
+        if dst is None:
+            self._tracks[target] = src
+        else:
+            history = {item.frame_index: item for item in src.history}
+            history.update({item.frame_index: item for item in dst.history})
+            dst.history = deque(sorted(history.values(), key=lambda item: item.frame_index)[-self._history_maxlen:], maxlen=self._history_maxlen)
+            if source_is_latest:
+                dst.counted_directions = set(src.counted_directions)
+            elif src.last_count_frame == dst.last_count_frame and not dst.counted_directions:
+                dst.counted_directions = set(src.counted_directions)
+            dst.last_count_frame = max(dst.last_count_frame, src.last_count_frame)
+        self._crossing_candidates.pop(source, None)
+        self._crossing_candidates.pop(target, None)
+        for mapping in (self._last_crossing_frame, self._last_crossing_mode):
+            value = mapping.pop(source, None)
+            if source_is_latest:
+                if value is None:
+                    mapping.pop(target, None)
+                else:
+                    mapping[target] = value
+        if source_is_latest:
+            if source in self._last_committed_rescue:
+                self._last_committed_rescue.add(target)
+            else:
+                self._last_committed_rescue.discard(target)
+        self._last_committed_rescue.discard(source)
+
+
+class HeavyVehicleCrossingRescuer(_CenterPassageRescuer):
     """Secondary center-trajectory gate for large four-wheel vehicles.
 
     Large vans/trucks can keep a valid track while the motion-leading anchor is
@@ -873,6 +1023,11 @@ class HeavyVehicleCrossingRescuer:
         self.rejected_motion = 0
         self.rejected_segment = 0
         self._last_crossing_frame: dict[int, float] = {}
+        self._last_crossing_mode: dict[int, str] = {}
+        self._crossing_candidates: dict[int, _CenterCrossingCandidate] = {}
+        self._last_committed_rescue: set[int] = set()
+        self._state_type = _HeavyRescueState
+        self._history_maxlen = 128
 
     def update(
         self,
@@ -881,6 +1036,7 @@ class HeavyVehicleCrossingRescuer:
         frame_width: int,
         frame_height: int,
         frame_index: int,
+        *, commit: bool = True,
     ) -> tuple[str, Point] | None:
         a, b = self.line.denormalize(frame_width, frame_height)
         scale = max(1.0, min(frame_width, frame_height))
@@ -889,6 +1045,9 @@ class HeavyVehicleCrossingRescuer:
         side = 0 if abs(distance) <= dead_band else (1 if distance > 0 else -1)
         sample = _GateSample(int(frame_index), center, distance, side)
         state = self._tracks.setdefault(int(track_id), _HeavyRescueState())
+        if state.history and sample.frame_index <= state.history[-1].frame_index:
+            return None
+        self._crossing_candidates.pop(int(track_id), None)
         state.history.append(sample)
         if side == 0:
             return None
@@ -910,12 +1069,13 @@ class HeavyVehicleCrossingRescuer:
         if direction in state.counted_directions:
             return None
 
-        crossing = segment_crossing_point(
-            previous.point, center, a, b, segment_margin=self.segment_margin
+        observed_crossing = observed_gate_crossing(
+            list(state.history), previous, sample, a, b, segment_margin=self.segment_margin,
         )
-        if crossing is None:
+        if observed_crossing is None:
             self.rejected_segment += 1
             return None
+        crossing_start, crossing_end, crossing = observed_crossing
 
         dx = center[0] - previous.point[0]
         dy = center[1] - previous.point[1]
@@ -943,43 +1103,22 @@ class HeavyVehicleCrossingRescuer:
                 self.rejected_road += 1
                 return None
 
-        state.counted_directions.add(direction)
-        self._last_crossing_frame[int(track_id)] = crossing_frame_between(previous, sample, crossing)
-        self.rescues += 1
-        state.history = deque([sample], maxlen=128)
+        self._crossing_candidates[int(track_id)] = _CenterCrossingCandidate(
+            direction, sample.frame_index, crossing_frame_between(crossing_start, crossing_end, crossing), "rescued",
+        )
+        if commit:
+            self.mark_counted(track_id, direction, frame_index)
         return direction, crossing
-
-    def crossing_frame_for(self, track_id: int) -> float | None:
-        return self._last_crossing_frame.get(int(track_id))
-
-    def merge_track(self, source_track_id: int, target_track_id: int) -> None:
-        source = int(source_track_id)
-        target = int(target_track_id)
-        if source == target:
-            return
-        src = self._tracks.pop(source, None)
-        if src is None:
-            return
-        dst = self._tracks.get(target)
-        if dst is None:
-            self._tracks[target] = src
-        else:
-            samples = list(dst.history) + list(src.history)
-            samples.sort(key=lambda sample: sample.frame_index)
-            dst.history = deque(samples[-128:], maxlen=128)
-            dst.counted_directions.update(src.counted_directions)
-        if source in self._last_crossing_frame:
-            self._last_crossing_frame[target] = self._last_crossing_frame[source]
-            self._last_crossing_frame.pop(source, None)
 
 
 @dataclass(slots=True)
 class _TwoWheelRescueState:
     history: deque[_GateSample] = field(default_factory=lambda: deque(maxlen=64))
     counted_directions: set[str] = field(default_factory=set)
+    last_count_frame: int = -10_000
 
 
-class TwoWheelCenterCrossingRescuer:
+class TwoWheelCenterCrossingRescuer(_CenterPassageRescuer):
     """Conservative center-trajectory rescue for fragmented two-wheel tracks.
 
     V0.5.34 keeps the strict motion-leading-anchor gate as the primary source of
@@ -1031,6 +1170,10 @@ class TwoWheelCenterCrossingRescuer:
         self.rejected_road = 0
         self._last_crossing_frame: dict[int, float] = {}
         self._last_crossing_mode: dict[int, str] = {}
+        self._crossing_candidates: dict[int, _CenterCrossingCandidate] = {}
+        self._last_committed_rescue: set[int] = set()
+        self._state_type = _TwoWheelRescueState
+        self._history_maxlen = 64
 
     @staticmethod
     def _segment_fraction(point: Point, a: Point, b: Point) -> float:
@@ -1048,6 +1191,7 @@ class TwoWheelCenterCrossingRescuer:
         frame_width: int,
         frame_height: int,
         frame_index: int,
+        *, commit: bool = True,
     ) -> tuple[str, Point] | None:
         a, b = self.line.denormalize(frame_width, frame_height)
         scale = max(1.0, min(frame_width, frame_height))
@@ -1057,6 +1201,9 @@ class TwoWheelCenterCrossingRescuer:
         side = 0 if abs(distance) <= dead_band else (1 if distance > 0 else -1)
         sample = _GateSample(int(frame_index), center, distance, side)
         state = self._tracks.setdefault(int(track_id), _TwoWheelRescueState())
+        if state.history and sample.frame_index <= state.history[-1].frame_index:
+            return None
+        self._crossing_candidates.pop(int(track_id), None)
         state.history.append(sample)
         if side == 0:
             return None
@@ -1078,12 +1225,13 @@ class TwoWheelCenterCrossingRescuer:
         if direction in state.counted_directions:
             return None
 
-        crossing = segment_crossing_point(
-            previous.point, center, a, b, segment_margin=self.segment_margin
+        observed_crossing = observed_gate_crossing(
+            list(state.history), previous, sample, a, b, segment_margin=self.segment_margin,
         )
-        if crossing is None:
+        if observed_crossing is None:
             self.rejected_segment += 1
             return None
+        crossing_start, crossing_end, crossing = observed_crossing
         fraction = self._segment_fraction(crossing, a, b)
         if fraction < self.segment_edge_ratio or fraction > 1.0 - self.segment_edge_ratio:
             self.rejected_segment += 1
@@ -1125,41 +1273,14 @@ class TwoWheelCenterCrossingRescuer:
                 self.rejected_road += 1
                 return None
 
-        state.counted_directions.add(direction)
         gap = sample.frame_index - previous.frame_index
         mode = "interpolated" if gap <= self.interpolation_gap_frames else "rescued"
-        self._last_crossing_mode[int(track_id)] = mode
-        self._last_crossing_frame[int(track_id)] = crossing_frame_between(previous, sample, crossing)
-        self.rescues += 1
-        state.history = deque([sample], maxlen=64)
+        self._crossing_candidates[int(track_id)] = _CenterCrossingCandidate(
+            direction, sample.frame_index, crossing_frame_between(crossing_start, crossing_end, crossing), mode,
+        )
+        if commit:
+            self.mark_counted(track_id, direction, frame_index)
         return direction, crossing
-
-    def crossing_frame_for(self, track_id: int) -> float | None:
-        return self._last_crossing_frame.get(int(track_id))
-
-    def crossing_mode_for(self, track_id: int) -> str:
-        return self._last_crossing_mode.get(int(track_id), "rescued")
-
-    def merge_track(self, source_track_id: int, target_track_id: int) -> None:
-        source = int(source_track_id)
-        target = int(target_track_id)
-        if source == target:
-            return
-        src = self._tracks.pop(source, None)
-        if src is None:
-            return
-        dst = self._tracks.get(target)
-        if dst is None:
-            self._tracks[target] = src
-        else:
-            samples = list(dst.history) + list(src.history)
-            samples.sort(key=lambda sample: sample.frame_index)
-            dst.history = deque(samples[-64:], maxlen=64)
-            dst.counted_directions.update(src.counted_directions)
-        if source in self._last_crossing_frame:
-            self._last_crossing_frame[target] = self._last_crossing_frame.pop(source)
-        if source in self._last_crossing_mode:
-            self._last_crossing_mode[target] = self._last_crossing_mode.pop(source)
 
 
 class LineCrossingCounter:
@@ -1330,6 +1451,10 @@ class LineCrossingCounter:
 
         state = self._tracks.setdefault(int(track_id), _TrackGateState())
         sample = _GateSample(int(frame_index), anchor, distance, side)
+        if state.history and sample.frame_index <= state.history[-1].frame_index:
+            # Aliases observed in the same source frame cannot supply a second
+            # destination observation or re-arm an accepted passage.
+            return None
         if origin_probe is not None:
             origin_distance = signed_distance(origin_probe, a, b)
             origin_side = 0 if abs(origin_distance) <= dead_band else (1 if origin_distance > 0 else -1)
@@ -1512,25 +1637,14 @@ class LineCrossingCounter:
         crossing_start = previous
         crossing_end = sample
         if not origin_candidate:
-            for left, right in zip(history[previous_index:-1], history[previous_index + 1:]):
-                if left.frame_index >= sample.frame_index:
-                    break
-                # Adjacent samples bracket/touch the infinite gate. The finite-gate
-                # intersection below still decides whether the visible segment was
-                # really crossed.
-                if left.side == 0 or right.side == 0 or left.side * right.side < 0:
-                    crossing_start, crossing_end = left, right
-
-        crossing = segment_crossing_point(
-            crossing_start.point,
-            crossing_end.point,
-            a,
-            b,
-            segment_margin=self.segment_margin,
-        )
-        if crossing is None:
-            # Fallback to the stable opposite-side pair for sparse/fast tracks.
-            crossing_start, crossing_end = previous, sample
+            observed_crossing = observed_gate_crossing(
+                history, previous, sample, a, b, segment_margin=self.segment_margin,
+            )
+            if observed_crossing is None:
+                self.rejected_outside_segment += 1
+                return None
+            crossing_start, crossing_end, crossing = observed_crossing
+        else:
             crossing = segment_crossing_point(
                 previous.point,
                 anchor,
@@ -1889,12 +2003,12 @@ class LineCrossingCounter:
         if dst is None:
             self._tracks[target] = src
         else:
-            history = list(dst.history) + list(src.history)
-            history.sort(key=lambda sample: sample.frame_index)
-            dst.history = deque(history[-48:], maxlen=48)
-            origin_history = list(dst.origin_history) + list(src.origin_history)
-            origin_history.sort(key=lambda sample: sample.frame_index)
-            dst.origin_history = deque(origin_history[-20:], maxlen=20)
+            history = {item.frame_index: item for item in src.history}
+            history.update({item.frame_index: item for item in dst.history})
+            dst.history = deque(sorted(history.values(), key=lambda item: item.frame_index)[-48:], maxlen=48)
+            origin_history = {item.frame_index: item for item in src.origin_history}
+            origin_history.update({item.frame_index: item for item in dst.origin_history})
+            dst.origin_history = deque(sorted(origin_history.values(), key=lambda item: item.frame_index)[-20:], maxlen=20)
             # V0.5.46: counted_directions represents the latest accepted
             # passage direction, not a lifetime set.  Canonical fusion must keep
             # the newer passage state instead of unioning IN and OUT forever.
@@ -1907,9 +2021,18 @@ class LineCrossingCounter:
             dst.first_frame = min([value for value in (dst.first_frame, src.first_frame) if value is not None], default=None)
             dst.total_samples += src.total_samples
             dst.max_abs_distance_since_count = max(dst.max_abs_distance_since_count, src.max_abs_distance_since_count)
-            latest = max(dst.history, key=lambda sample: sample.frame_index, default=None)
-            if latest is not None:
-                dst.last_nonzero_side = latest.side if latest.side != 0 else dst.last_nonzero_side
+            # Confirmation follows the merged observations, not whichever alias
+            # happened to be the destination ID. Neutral observations preserve
+            # the nonzero-side streak just as update() does.
+            dst.last_nonzero_side = 0
+            dst.side_streak = 0
+            for item in dst.history:
+                if item.side:
+                    if item.side == dst.last_nonzero_side:
+                        dst.side_streak += 1
+                    else:
+                        dst.last_nonzero_side = item.side
+                        dst.side_streak = 1
         for mapping in (self._last_crossing_mode, self._last_crossing_point, self._last_crossing_frame):
             value = mapping.pop(source, None)
             if source_is_latest:
