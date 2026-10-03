@@ -16,10 +16,21 @@ def trace_path(session_id: int) -> Path:
 def _gate_span_audit(rows: list[dict]) -> dict:
     tracks: dict[int, dict[str, list[float] | str]] = {}
     xframe_audits: list[dict] = []
+    context_audits: dict[tuple[int, int], dict] = {}
     for row in rows:
         for audit in row.get("bicycle_xframe_decision_audit", []) or []:
             if isinstance(audit, dict):
-                xframe_audits.append(audit)
+                if audit.get("kind") == "bicycle_context":
+                    try:
+                        key = (int(audit["track_id"]), int(audit["frame_index"]))
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                    # Rolling snapshots repeat a proposal; a later guard outcome
+                    # replaces it while keeping the source observation identity.
+                    context_audits.pop(key, None)
+                    context_audits[key] = audit
+                else:
+                    xframe_audits.append(audit)
         for item in row.get("gate_tracks", []) or []:
             try:
                 tid = int(item.get("track_id"))
@@ -55,6 +66,7 @@ def _gate_span_audit(rows: list[dict]) -> dict:
     return {
         "anchor_span": anchor_span, "center_only_span": center_only, "near_no_span": near,
         "bicycle_xframe_audit": xframe_audits[-8:],
+        "bicycle_context_audit": list(context_audits.values())[-8:],
     }
 
 
@@ -77,8 +89,13 @@ def diagnose_trace(session_id: int, times: Iterable[float], window_seconds: floa
     for raw_time in times:
         target = max(0.0, float(raw_time))
         nearby = [row for row in rows if abs(float(row.get("source_time_seconds", -9999.0)) - target) <= window]
+        gate_audit = _gate_span_audit(nearby)
+        nearby = [row for row in nearby if not row.get("audit_only")]
         if not nearby:
-            result.append({"time": target, "reason": "no_trace_window", "max_det": 0, "max_track": 0, "max_road": 0})
+            result.append({"time": target, "reason": "no_trace_window", "max_det": 0, "max_track": 0, "max_road": 0,
+                           "gate_span_audit": gate_audit,
+                           "bicycle_xframe_audit": gate_audit["bicycle_xframe_audit"],
+                           "bicycle_context_audit": gate_audit["bicycle_context_audit"]})
             continue
         max_det = max(int(row.get("detections", 0)) for row in nearby)
         max_track = max(int(row.get("tracks", 0)) for row in nearby)
@@ -88,7 +105,6 @@ def diagnose_trace(session_id: int, times: Iterable[float], window_seconds: floa
         confirm_delta = max(int(row.get("rejected_unconfirmed_side", 0)) for row in nearby) - min(int(row.get("rejected_unconfirmed_side", 0)) for row in nearby)
         cooldown_delta = max(int(row.get("rejected_cooldown", 0)) for row in nearby) - min(int(row.get("rejected_cooldown", 0)) for row in nearby)
         road_edge_rescue_delta = max(int(row.get("road_edge_rescues", 0)) for row in nearby) - min(int(row.get("road_edge_rescues", 0)) for row in nearby)
-        gate_audit = _gate_span_audit(nearby)
         if max_det <= 0:
             reason = "detector_miss"
         elif max_track <= 0:
@@ -121,5 +137,6 @@ def diagnose_trace(session_id: int, times: Iterable[float], window_seconds: floa
             "road_edge_rescue_delta": road_edge_rescue_delta,
             "gate_span_audit": gate_audit,
             "bicycle_xframe_audit": gate_audit["bicycle_xframe_audit"],
+            "bicycle_context_audit": gate_audit["bicycle_context_audit"],
         })
     return {"available": True, "session_id": int(session_id), "window_seconds": window, "items": result}

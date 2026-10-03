@@ -264,3 +264,133 @@ def test_v0553_guard_rollback_refreshes_committed_span_and_override_telemetry() 
     assert worker.state.anchor_span_cooldown_overrides == 0
     assert span.capture_passage_state(77) == before
     assert counter.total_crossings == 0
+
+
+def _enable_context_commit(worker):
+    worker._bicycle_context_rescue_tracks = set()
+    worker._class_refine_overrides = {}
+    worker.state.bicycle_context_rescues = 0
+    worker.state.bicycle_context_weak_motor_rescues = 0
+    worker._bicycle_xframe_audit_this_frame = []
+
+
+def test_v0554_guard_drop_does_not_commit_proposed_context_label_or_rescue() -> None:
+    worker = _worker()
+    _enable_context_commit(worker)
+    pending = _pending()
+    pending.label = "bicycle"
+    pending.bicycle_context_method = "weak_motor"
+    pending.bicycle_context_audit = {"kind": "bicycle_context", "decision_accepted": True, "commit_status": "pending"}
+    worker._pending_guard_crossings[pending.track_id] = pending
+
+    worker._drop_guard_crossing(_Counter(), pending, expired=True)
+
+    assert worker.state.bicycle_context_rescues == 0
+    assert worker.state.bicycle_context_weak_motor_rescues == 0
+    assert worker._class_refine_overrides == {}
+    assert worker.state.counts_by_type["bicycle"] == 0
+    assert worker._bicycle_xframe_audit_this_frame[-1]["decision_accepted"] is True
+    assert worker._bicycle_xframe_audit_this_frame[-1]["commit_status"] == "expired"
+
+
+def test_v0554_guard_commit_records_context_rescue_for_original_passage_only() -> None:
+    worker = _worker()
+    _enable_context_commit(worker)
+    pending = _pending()
+    pending.label = "bicycle"
+    pending.bicycle_context_method = "weak_motor"
+    pending.bicycle_context_audit = {"kind": "bicycle_context", "decision_accepted": True, "commit_status": "pending"}
+    pending.observed_frame_index = 522
+    worker._class_refine_overrides[77] = ("motorcycle", .99, 526)
+    worker._pending_guard_crossings[pending.track_id] = pending
+
+    worker._commit_guard_crossing(object(), pending)
+
+    assert worker.state.bicycle_context_rescues == 1
+    assert worker.state.bicycle_context_weak_motor_rescues == 1
+    assert worker._class_refine_overrides[77] == ("motorcycle", .99, 526)
+    assert worker.state.counts_by_type["bicycle"] == 1
+    payload = worker._event_dispatcher.payloads[0]
+    assert payload["source_frame_index"] == 519
+    assert payload["source_time_seconds"] == 20.72
+    assert worker._bicycle_xframe_audit_this_frame[-1]["commit_status"] == "accepted"
+
+
+def test_v0554_eof_flush_persists_expiry_at_original_observation_clock() -> None:
+    import io
+    import json
+
+    worker = _worker()
+    _enable_context_commit(worker)
+    worker.state.source_fps = 25.0
+    worker.state.processed_frames = 999
+    pending = _pending()
+    pending.label = "bicycle"
+    pending.bicycle_context_method = "weak_motor"
+    pending.observed_frame_index = 522
+    pending.bicycle_context_audit = {
+        "kind": "bicycle_context", "track_id": 77, "frame_index": 522,
+        "decision_accepted": True, "commit_status": "pending",
+    }
+    worker._pending_guard_crossings[77] = pending
+    trace = io.StringIO()
+    # This row is already on disk when EOF is reached.
+    trace.write(json.dumps({"source_time_seconds": 20.84, "bicycle_xframe_decision_audit": [dict(pending.bicycle_context_audit)]}) + "\n")
+
+    worker._expire_guard_crossings(_Counter(), trace)
+
+    rows = [json.loads(line) for line in trace.getvalue().splitlines()]
+    assert len(rows) == 2
+    assert rows[0]["bicycle_xframe_decision_audit"][0]["commit_status"] == "pending"
+    assert rows[1]["audit_only"] is True
+    assert rows[1]["frame_index"] == 522
+    assert rows[1]["source_time_seconds"] == 20.84
+    assert rows[1]["bicycle_xframe_decision_audit"][0]["commit_status"] == "expired"
+    assert "detections" not in rows[1] and "crossing_events" not in rows[1]
+    assert worker.state.human_guard_pending_crossings == 0
+    assert worker.state.human_guard_pending_drops == 1
+    assert worker.state.bicycle_context_rescues == 0
+    assert worker._event_dispatcher.payloads == []
+
+
+def test_v0554_eof_without_context_audit_does_not_write_an_analyzed_frame() -> None:
+    import io
+
+    worker = _worker()
+    pending = _pending()
+    worker._pending_guard_crossings[pending.track_id] = pending
+    trace = io.StringIO()
+
+    worker._expire_guard_crossings(_Counter(), trace)
+    worker._expire_guard_crossings(_Counter(), trace)
+
+    assert trace.getvalue() == ""
+    assert worker.state.human_guard_pending_drops == 1
+    assert worker.state.total_count == 0
+
+
+def test_v0554_eof_trace_io_failure_still_revokes_every_pending_passage() -> None:
+    worker = _worker()
+    _enable_context_commit(worker)
+    for track_id in (77, 78):
+        pending = _pending()
+        pending.track_id = track_id
+        pending.bicycle_context_audit = {
+            "kind": "bicycle_context", "track_id": track_id, "frame_index": 522,
+            "decision_accepted": True, "commit_status": "pending",
+        }
+        worker._pending_guard_crossings[track_id] = pending
+
+    class BrokenTrace:
+        def write(self, _value):
+            raise OSError("trace storage unavailable")
+
+    counter = _Counter()
+    worker._expire_guard_crossings(counter, BrokenTrace())
+
+    assert counter.revoked == [(77, "in"), (78, "in")]
+    assert worker.state.human_guard_pending_drops == 2
+    assert worker._pending_guard_crossings == {}
+    assert worker.state.total_count == 0
+    assert worker._event_dispatcher.payloads == []
+    assert worker.state.last_error == "Benchmark trace shutdown failed: trace storage unavailable"

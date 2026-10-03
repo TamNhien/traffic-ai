@@ -499,7 +499,11 @@ def start_camera(camera_id: int, db: Session = Depends(get_db)) -> dict:
     except Exception as exc:
         session.status = SessionStatus.error
         session.ended_at = datetime.now(timezone.utc)
-        camera.status = CameraStatus.error
+        latest_session = db.scalar(select(CountingSession).where(
+            CountingSession.camera_id == camera_id,
+        ).order_by(CountingSession.id.desc()))
+        if _session_finish_owns_camera(session, latest_session):
+            camera.status = CameraStatus.error
         db.commit()
         raise HTTPException(status_code=502, detail=f"AI service could not start pipeline: {exc}") from exc
     return {"session_id": session.id, "camera_id": camera_id, "source_repaired": source_repaired, "source_url": camera.source_url, "pipeline": response.json()}
@@ -510,7 +514,10 @@ def stop_camera(camera_id: int, db: Session = Depends(get_db)) -> dict:
     camera = db.get(Camera, camera_id)
     if camera is None:
         raise HTTPException(status_code=404, detail="Camera not found")
-    session = db.scalar(select(CountingSession).where(CountingSession.camera_id == camera_id, CountingSession.status == SessionStatus.running).order_by(CountingSession.id.desc()))
+    expected_session = db.scalar(select(CountingSession).where(
+        CountingSession.camera_id == camera_id,
+    ).order_by(CountingSession.id.desc()))
+    session = expected_session if expected_session is not None and expected_session.status == SessionStatus.running else None
     try:
         response = httpx.post(f"{settings.ai_service_url}/pipelines/{camera_id}/stop", timeout=12.0)
         if response.status_code not in (200, 404):
@@ -519,8 +526,13 @@ def stop_camera(camera_id: int, db: Session = Depends(get_db)) -> dict:
         raise HTTPException(status_code=502, detail=f"AI service could not stop pipeline: {exc}") from exc
     if session:
         session.status = SessionStatus.stopped
-        session.ended_at = datetime.now(timezone.utc)
-    camera.status = CameraStatus.inactive
+        if session.ended_at is None:
+            session.ended_at = datetime.now(timezone.utc)
+    latest_session = db.scalar(select(CountingSession).where(
+        CountingSession.camera_id == camera_id,
+    ).order_by(CountingSession.id.desc()))
+    if _session_finish_owns_camera(expected_session, latest_session):
+        camera.status = CameraStatus.inactive
     db.commit()
     return {"status": "stopped", "camera_id": camera_id}
 
@@ -909,9 +921,37 @@ def _same_track_source_neighbor(payload: VehicleEventCreate, candidates: list[Ve
     return candidates[0]
 
 
+def _event_session_camera_matches(session: CountingSession, camera_id: int) -> bool:
+    """A source passage belongs to the camera that created its session."""
+    return int(session.camera_id) == int(camera_id)
+
+
+def _sync_session_persisted_total(session: CountingSession, persisted_count: int) -> None:
+    """Keep stored suppression telemetry correct after deferred event delivery."""
+    session.total_vehicles = max(0, int(persisted_count))
+    if session.worker_total_vehicles is not None:
+        session.dedup_suppressed_events = max(0, int(session.worker_total_vehicles) - session.total_vehicles)
+
+
+def _session_finish_owns_camera(session: CountingSession | None, latest_session: CountingSession | None) -> bool:
+    """A stale replay's remote callback must not change the current camera."""
+    return latest_session is None or (session is not None and int(latest_session.id) == int(session.id))
+
+
 @router.post("/internal/events", response_model=VehicleEventRead, status_code=201)
 def internal_event(payload: VehicleEventCreate, response: Response, x_ai_token: str | None = Header(default=None), db: Session = Depends(get_db)) -> VehicleEvent:
     _assert_ai_token(x_ai_token)
+
+    # V0.5.54: validate ownership before returning a duplicate or changing
+    # counters. A stale worker must not attach another camera's source clock
+    # and track IDs to this replay's session.
+    session = None
+    if payload.session_id is not None:
+        session = db.get(CountingSession, payload.session_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="Session not found")
+        if not _event_session_camera_matches(session, payload.camera_id):
+            raise HTTPException(status_code=422, detail="Event camera does not match session camera")
 
     # Event delivery is retried by the AI service. V0.5.44 keeps retries
     # idempotent by source frame/time instead of treating one tracking ID and
@@ -1144,10 +1184,8 @@ def internal_event(payload: VehicleEventCreate, response: Response, x_ai_token: 
     response.headers["X-TrafficAI-Deduplicated"] = "0"
     event = VehicleEvent(**payload.model_dump(exclude_none=True))
     db.add(event)
-    if payload.session_id:
-        session = db.get(CountingSession, payload.session_id)
-        if session:
-            session.total_vehicles += 1
+    if session is not None:
+        _sync_session_persisted_total(session, int(session.total_vehicles or 0) + 1)
 
     now = datetime.now(timezone.utc)
     period_start = now.replace(minute=0, second=0, microsecond=0)
@@ -1191,18 +1229,21 @@ def internal_session_finish(session_id: int, payload: SessionFinish, x_ai_token:
         label = str(getattr(event.vehicle_type, "value", event.vehicle_type))
         persisted_by_type[label if label in persisted_by_type else "other"] += 1
     session.worker_total_vehicles = int(payload.total_vehicles)
-    session.total_vehicles = persisted_count
-    session.dedup_suppressed_events = max(0, int(payload.total_vehicles) - persisted_count)
+    _sync_session_persisted_total(session, persisted_count)
     session.human_guard_rejections = max(0, int(payload.human_guard_rejections or 0))
     session.average_fps = payload.average_fps
     if payload.source_fps is not None:
         session.source_fps = payload.source_fps
     if payload.source_duration_seconds is not None:
         session.source_duration_seconds = payload.source_duration_seconds
-    session.ended_at = datetime.now(timezone.utc)
+    if session.ended_at is None:
+        session.ended_at = datetime.now(timezone.utc)
     session.status = SessionStatus.error if payload.status == "error" else (SessionStatus.completed if payload.status == "completed" else SessionStatus.stopped)
     camera = db.get(Camera, session.camera_id)
-    if camera:
+    latest_session = db.scalar(select(CountingSession).where(
+        CountingSession.camera_id == session.camera_id,
+    ).order_by(CountingSession.id.desc()))
+    if camera and _session_finish_owns_camera(session, latest_session):
         camera.status = CameraStatus.error if payload.status == "error" else CameraStatus.inactive
     db.commit()
     return {
@@ -1472,6 +1513,38 @@ def delete_ground_truth_mark(benchmark_id: int, mark_id: int, db: Session = Depe
     return {"status": "deleted", "mark_id": mark_id}
 
 
+def _benchmark_trace_targets(report: dict, timed_events: list[VehicleEvent]) -> list[tuple[dict, float]]:
+    """Diagnose semantic errors at the AI crossing's actual source position."""
+    targets = [(item, float(item["time"])) for item in report["missed_items"]]
+    event_by_id = {int(event.id): event for event in timed_events}
+    for item in report["class_mismatch_items"]:
+        event = event_by_id.get(int(item["ai_event_id"]))
+        source_time = getattr(event, "source_time_seconds", None)
+        if source_time is None:
+            source_time = item.get("ai_time", item["time"])
+        item["ai_tracking_id"] = getattr(event, "tracking_id", item.get("tracking_id"))
+        targets.append((item, float(source_time)))
+    return targets
+
+
+def _attach_benchmark_trace_diagnosis(item: dict, diagnosis: dict) -> None:
+    """Keep class evidence scoped to the matched canonical event track."""
+    attached = dict(diagnosis)
+    tracking_id = item.get("ai_tracking_id")
+    if tracking_id is not None:
+        def same_track_audits(audits: list[dict]) -> list[dict]:
+            return [audit for audit in audits if audit.get("track_id") == tracking_id]
+
+        if "bicycle_context_audit" in attached:
+            attached["bicycle_context_audit"] = same_track_audits(attached["bicycle_context_audit"] or [])
+        if isinstance(attached.get("gate_span_audit"), dict):
+            span = dict(attached["gate_span_audit"])
+            if "bicycle_context_audit" in span:
+                span["bicycle_context_audit"] = same_track_audits(span["bicycle_context_audit"] or [])
+            attached["gate_span_audit"] = span
+    item["diagnosis"] = attached
+
+
 def _build_benchmark_report(benchmark_id: int, db: Session) -> dict:
     benchmark = db.get(CountingBenchmark, benchmark_id)
     if benchmark is None:
@@ -1489,12 +1562,13 @@ def _build_benchmark_report(benchmark_id: int, db: Session) -> dict:
     timed_events = [event for event in all_events if event.source_time_seconds is not None]
     report = match_crossings(marks, timed_events, benchmark.tolerance_seconds)
     trace_available = False
-    if report["missed_items"]:
+    trace_targets = _benchmark_trace_targets(report, timed_events)
+    if trace_targets:
         try:
             response = httpx.post(
                 f"{settings.ai_service_url}/benchmark-traces/{benchmark.session_id}/diagnose",
                 json={
-                    "times": [item["time"] for item in report["missed_items"]],
+                    "times": [source_time for _, source_time in trace_targets],
                     "window_seconds": min(1.0, max(0.35, benchmark.tolerance_seconds)),
                 },
                 timeout=8.0,
@@ -1502,8 +1576,8 @@ def _build_benchmark_report(benchmark_id: int, db: Session) -> dict:
             if response.is_success:
                 trace = response.json()
                 trace_available = bool(trace.get("available"))
-                for item, diagnosis in zip(report["missed_items"], trace.get("items", [])):
-                    item["diagnosis"] = diagnosis
+                for (item, _), diagnosis in zip(trace_targets, trace.get("items", [])):
+                    _attach_benchmark_trace_diagnosis(item, diagnosis)
         except Exception:
             trace_available = False
     miss_reason_counts: dict[str, int] = {}

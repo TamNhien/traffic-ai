@@ -20,7 +20,7 @@ def test_root_metadata() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["name"] == "Traffic AI"
-    assert payload["version"] == "0.5.53"
+    assert payload["version"] == "0.5.54"
     assert payload["docs"] == "/docs"
     assert payload["health"] == "/api/health"
 
@@ -158,7 +158,7 @@ def test_benchmark_clone_compatibility_rejects_different_line() -> None:
 
 
 def test_backend_version_metadata() -> None:
-    assert app.version == "0.5.53"
+    assert app.version == "0.5.54"
 
 
 def test_v0531_startup_crossing_signature_guard_is_narrow() -> None:
@@ -179,7 +179,7 @@ def test_v0533_ground_truth_mark_update_schema() -> None:
 
 
 def test_v0533_version() -> None:
-    assert app.version == "0.5.53"
+    assert app.version == "0.5.54"
 
 
 def test_v0533_ground_truth_mark_update_keeps_timecode() -> None:
@@ -754,3 +754,277 @@ def test_v0553_deferred_same_track_jitter_finds_adjacent_source_passage() -> Non
         assert response.headers["X-TrafficAI-Dedup-Reason"] == "same-track-repeat-jitter"
         assert db.scalar(select(func.count()).select_from(VehicleEvent)) == 2
         assert db.get(CountingSession, 1).total_vehicles == 2
+
+
+def test_v0554_session_event_requires_owning_camera() -> None:
+    from types import SimpleNamespace
+    from app.api.routes import _event_session_camera_matches
+
+    session = SimpleNamespace(camera_id=1)
+    assert _event_session_camera_matches(session, 1) is True
+    assert _event_session_camera_matches(session, 2) is False
+
+
+def test_v0554_session_late_delivery_refreshes_suppression() -> None:
+    from types import SimpleNamespace
+    from app.api.routes import _sync_session_persisted_total
+
+    session = SimpleNamespace(total_vehicles=3, worker_total_vehicles=7, dedup_suppressed_events=4)
+    _sync_session_persisted_total(session, 4)
+    assert session.total_vehicles == 4
+    assert session.dedup_suppressed_events == 3
+
+
+def test_v0554_session_running_totals_do_not_invent_worker_suppression() -> None:
+    from types import SimpleNamespace
+    from app.api.routes import _sync_session_persisted_total
+
+    session = SimpleNamespace(total_vehicles=3, worker_total_vehicles=None, dedup_suppressed_events=0)
+    _sync_session_persisted_total(session, 4)
+    assert session.total_vehicles == 4
+    assert session.dedup_suppressed_events == 0
+
+
+def test_v0554_session_delayed_count_never_makes_suppression_negative() -> None:
+    from types import SimpleNamespace
+    from app.api.routes import _sync_session_persisted_total
+
+    session = SimpleNamespace(total_vehicles=3, worker_total_vehicles=3, dedup_suppressed_events=0)
+    _sync_session_persisted_total(session, 4)
+    assert session.total_vehicles == 4
+    assert session.dedup_suppressed_events == 0
+
+
+def test_v0554_session_finish_cannot_own_a_newer_replay_camera() -> None:
+    from types import SimpleNamespace
+    from app.api.routes import _session_finish_owns_camera
+
+    old = SimpleNamespace(id=1)
+    latest = SimpleNamespace(id=2)
+    assert _session_finish_owns_camera(old, latest) is False
+    assert _session_finish_owns_camera(latest, latest) is True
+    assert _session_finish_owns_camera(old, None) is True
+
+
+def test_v0554_session_remote_stop_without_initial_session_cannot_own_new_replay() -> None:
+    from types import SimpleNamespace
+    from app.api.routes import _session_finish_owns_camera
+
+    assert _session_finish_owns_camera(None, None) is True
+    assert _session_finish_owns_camera(None, SimpleNamespace(id=1)) is False
+
+
+def test_v0554_session_camera_mismatch_is_rejected_before_delivery_retry() -> None:
+    import pytest
+    from fastapi import HTTPException
+    from sqlalchemy import func, select
+    from app.models.all_models import CountingSession, VehicleCount, VehicleEvent
+
+    with _dedup_event_database() as db:
+        first, _ = _submit_dedup_event(db)
+        with pytest.raises(HTTPException) as rejected:
+            _submit_dedup_event(db, camera_id=2)
+        assert rejected.value.status_code == 422
+        assert db.scalar(select(func.count()).select_from(VehicleEvent)) == 1
+        assert db.get(CountingSession, 1).total_vehicles == 1
+        assert db.scalar(select(func.sum(VehicleCount.count))) == 1
+        assert first.camera_id == 1
+
+
+def test_v0554_session_missing_event_owner_is_rejected_without_writes() -> None:
+    import pytest
+    from fastapi import HTTPException
+    from sqlalchemy import func, select
+    from app.models.all_models import CountingSession, VehicleCount, VehicleEvent
+
+    with _dedup_event_database() as db:
+        with pytest.raises(HTTPException) as rejected:
+            _submit_dedup_event(db, session_id=999)
+        assert rejected.value.status_code == 404
+        assert db.scalar(select(func.count()).select_from(VehicleEvent)) == 0
+        assert db.get(CountingSession, 1).total_vehicles == 0
+        assert db.scalar(select(func.count()).select_from(VehicleCount)) == 0
+
+
+def test_v0554_session_finish_retry_keeps_newer_camera_active_and_first_end_time() -> None:
+    from app.api.routes import SessionFinish, internal_session_finish, settings
+    from app.models.all_models import Camera, CameraStatus, CountingSession, SessionStatus
+
+    with _dedup_event_database() as db:
+        _submit_dedup_event(db)
+        internal_session_finish(1, SessionFinish(status="completed", total_vehicles=3), settings.ai_shared_token, db)
+        ended_at = db.get(CountingSession, 1).ended_at
+        db.add(CountingSession(id=2, camera_id=1, status=SessionStatus.running))
+        db.get(Camera, 1).status = CameraStatus.active
+        db.commit()
+
+        internal_session_finish(1, SessionFinish(status="error", total_vehicles=3), settings.ai_shared_token, db)
+        assert db.get(Camera, 1).status == CameraStatus.active
+        assert db.get(CountingSession, 2).status == SessionStatus.running
+        assert db.get(CountingSession, 1).ended_at == ended_at
+
+
+def test_v0554_session_late_old_replay_event_updates_only_its_session_totals() -> None:
+    from app.api.routes import SessionFinish, internal_session_finish, settings
+    from app.models.all_models import Camera, CameraStatus, CountingSession, SessionStatus
+
+    with _dedup_event_database() as db:
+        _submit_dedup_event(db)
+        internal_session_finish(1, SessionFinish(status="completed", total_vehicles=3), settings.ai_shared_token, db)
+        assert db.get(CountingSession, 1).dedup_suppressed_events == 2
+        db.add(CountingSession(id=2, camera_id=1, status=SessionStatus.running))
+        db.get(Camera, 1).status = CameraStatus.active
+        db.commit()
+
+        late, response = _submit_dedup_event(db, source_time_seconds=20.0, source_frame_index=501)
+        assert response.headers["X-TrafficAI-Deduplicated"] == "0"
+        assert late.session_id == 1
+        assert db.get(CountingSession, 1).total_vehicles == 2
+        assert db.get(CountingSession, 1).dedup_suppressed_events == 1
+        assert db.get(CountingSession, 2).total_vehicles == 0
+        assert db.get(Camera, 1).status == CameraStatus.active
+
+
+def test_v0554_stale_failed_start_preserves_newer_active_camera(monkeypatch) -> None:
+    from types import SimpleNamespace
+    import pytest
+    from fastapi import HTTPException
+    from app.api.routes import start_camera
+    from app.models.all_models import Camera, CameraStatus, CountingSession, SessionStatus
+
+    with _dedup_event_database() as db:
+        monkeypatch.setattr("app.api.routes.httpx.get", lambda *_args, **_kwargs: SimpleNamespace(is_success=True, json=lambda: {"status": "completed"}))
+
+        def remote_post(url, **_kwargs):
+            if url.endswith("/sources/validate"):
+                return SimpleNamespace(raise_for_status=lambda: None, json=lambda: {"valid": True})
+            assert url.endswith("/pipelines/start")
+            db.add(CountingSession(id=3, camera_id=1, status=SessionStatus.running))
+            db.get(Camera, 1).status = CameraStatus.active
+            db.commit()
+            raise RuntimeError("Deferred failure for the earlier start request")
+
+        monkeypatch.setattr("app.api.routes.httpx.post", remote_post)
+        with pytest.raises(HTTPException) as rejected:
+            start_camera(1, db)
+        assert rejected.value.status_code == 502
+        assert db.get(CountingSession, 2).status == SessionStatus.error
+        assert db.get(CountingSession, 3).status == SessionStatus.running
+        assert db.get(Camera, 1).status == CameraStatus.active
+
+
+def test_v0554_stale_stop_preserves_newer_active_camera(monkeypatch) -> None:
+    from types import SimpleNamespace
+    from app.api.routes import stop_camera
+    from app.models.all_models import Camera, CameraStatus, CountingSession, SessionStatus
+
+    with _dedup_event_database() as db:
+        db.get(Camera, 1).status = CameraStatus.active
+        db.commit()
+
+        def remote_stop(_url, **_kwargs):
+            db.add(CountingSession(id=2, camera_id=1, status=SessionStatus.running))
+            db.get(Camera, 1).status = CameraStatus.active
+            db.commit()
+            return SimpleNamespace(status_code=200)
+
+        monkeypatch.setattr("app.api.routes.httpx.post", remote_stop)
+        assert stop_camera(1, db)["status"] == "stopped"
+        assert db.get(CountingSession, 1).status == SessionStatus.stopped
+        assert db.get(CountingSession, 2).status == SessionStatus.running
+        assert db.get(Camera, 1).status == CameraStatus.active
+
+
+def test_v0554_class_trace_targets_use_ai_clock_without_changing_scoring() -> None:
+    from types import SimpleNamespace
+    from app.api.routes import _benchmark_trace_targets
+    from app.benchmarking import match_crossings
+
+    gt = SimpleNamespace(id=1, source_time_seconds=10.0, direction="in", vehicle_type="bicycle")
+    event = SimpleNamespace(id=11, source_time_seconds=10.6203, direction="in", vehicle_type="motorcycle", tracking_id=77)
+    report = match_crossings([gt], [event], 0.75)
+    scores = {key: report[key] for key in ("matched", "missed", "false_positives", "class_accuracy")}
+    targets = _benchmark_trace_targets(report, [event])
+    assert len(targets) == 1
+    assert targets[0][1] == 10.6203
+    assert targets[0][0]["time"] == 10.0
+    assert targets[0][0]["ai_tracking_id"] == 77
+    assert scores == {key: report[key] for key in scores}
+
+
+def test_v0554_class_trace_missing_event_uses_ai_time_and_known_track() -> None:
+    from app.api.routes import _benchmark_trace_targets
+
+    mismatch = {"ai_event_id": 11, "time": 10.0, "ai_time": 10.6, "tracking_id": 77}
+    missed = {"ground_truth_id": 2, "time": 20.0}
+    targets = _benchmark_trace_targets({"missed_items": [missed], "class_mismatch_items": [mismatch]}, [])
+    assert targets == [(missed, 20.0), (mismatch, 10.6)]
+    assert mismatch["ai_tracking_id"] == 77
+    assert "ai_tracking_id" not in missed
+
+
+def test_v0554_class_trace_filters_other_tracks_in_top_and_nested_audit() -> None:
+    from app.api.routes import _attach_benchmark_trace_diagnosis
+
+    own = {"track_id": 77, "frame_index": 251, "reason": "two-source-two-frame-bicycle"}
+    unrelated = {"track_id": 88, "frame_index": 251, "reason": "motor-veto"}
+    unknown = {"frame_index": 251, "reason": "unknown-track"}
+    diagnosis = {
+        "reason": "no-gate-miss",
+        "bicycle_context_audit": [own, unrelated, unknown],
+        "gate_span_audit": {"anchor_span_candidates": 1, "bicycle_context_audit": [unrelated, own]},
+    }
+    mismatch = {"ai_tracking_id": 77}
+    _attach_benchmark_trace_diagnosis(mismatch, diagnosis)
+    attached = mismatch["diagnosis"]
+    assert attached["bicycle_context_audit"] == [own]
+    assert attached["gate_span_audit"]["bicycle_context_audit"] == [own]
+    assert attached["gate_span_audit"]["anchor_span_candidates"] == 1
+    assert diagnosis["bicycle_context_audit"] == [own, unrelated, unknown]
+    assert diagnosis["gate_span_audit"]["bicycle_context_audit"] == [unrelated, own]
+
+
+def test_v0554_class_trace_unknown_track_keeps_nearby_evidence_for_review() -> None:
+    from app.api.routes import _attach_benchmark_trace_diagnosis
+
+    diagnosis = {"bicycle_context_audit": [{"track_id": 77}], "gate_span_audit": {"bicycle_context_audit": [{"track_id": 88}]}}
+    item = {"ai_tracking_id": None}
+    _attach_benchmark_trace_diagnosis(item, diagnosis)
+    assert item["diagnosis"] == diagnosis
+
+
+def test_v0554_class_mismatch_report_fetches_trace_without_gate_miss(monkeypatch) -> None:
+    from types import SimpleNamespace
+    from app.api.routes import _build_benchmark_report
+    from app.models.all_models import CountingBenchmark, GroundTruthCrossing
+
+    with _dedup_event_database() as db:
+        event, _ = _submit_dedup_event(db, source_time_seconds=10.6203)
+        db.add(CountingBenchmark(id=1, camera_id=1, session_id=1, name="Semantic trace regression", source_url="clip.mp4"))
+        db.flush()
+        db.add(GroundTruthCrossing(benchmark_id=1, source_time_seconds=10.0, vehicle_type="bicycle", direction="in"))
+        db.commit()
+        calls = []
+        own = {"track_id": 10, "frame_index": 251, "reason": "motor-veto"}
+        other = {"track_id": 99, "frame_index": 251, "reason": "two-source-two-frame-bicycle"}
+
+        def trace_post(_url, **kwargs):
+            calls.append(kwargs["json"])
+            return SimpleNamespace(is_success=True, json=lambda: {
+                "available": True,
+                "items": [{"reason": "class-audit", "bicycle_context_audit": [other, own], "gate_span_audit": {"bicycle_context_audit": [other, own]}}],
+            })
+
+        monkeypatch.setattr("app.api.routes.httpx.post", trace_post)
+        report = _build_benchmark_report(1, db)
+        assert calls[0]["times"] == [event.source_time_seconds]
+        assert report["matched"] == 1
+        assert report["missed"] == 0
+        assert report["false_positives"] == 0
+        assert report["class_accuracy"] == 0.0
+        assert report["miss_reason_counts"] == {}
+        assert report["trace_available"] is True
+        semantic = report["class_mismatch_items"][0]
+        assert semantic["ai_tracking_id"] == 10
+        assert semantic["diagnosis"]["bicycle_context_audit"] == [own]
+        assert semantic["diagnosis"]["gate_span_audit"]["bicycle_context_audit"] == [own]

@@ -642,3 +642,159 @@ def test_v0553_truck_expired_confidence_does_not_inflate_new_lock() -> None:
     assert lock.observe(7, 100, stable_label="truck", certainty=0.99, hits=6) == ("truck", 0.99)
     assert lock.observe(7, 200, stable_label="truck", certainty=0.82, hits=6) == ("truck", 0.82)
     assert lock.resolve(7, 210, "car") == ("truck", 0.82)
+
+
+def test_v0554_context_overlap_cannot_bypass_bounded_center_for_either_class() -> None:
+    from app.classification import RefineCandidate, select_contextual_two_wheel_refinement
+
+    target = (80.0, 70.0, 120.0, 150.0)
+    # The huge box covers the entire small target, but its center is more than
+    # two target diagonals away. Overlap cannot identify a local context owner.
+    for label in ("bicycle", "motorcycle"):
+        candidates = [RefineCandidate(label, 0.95, (85.0, 20.0, 500.0, 210.0))]
+        assert select_contextual_two_wheel_refinement(target, candidates, label=label) is None
+
+
+def test_v0554_context_custom_center_bound_applies_to_strict_matching() -> None:
+    from app.classification import RefineCandidate, select_contextual_two_wheel_refinement
+
+    target = (80.0, 70.0, 120.0, 150.0)
+    for label in ("bicycle", "motorcycle"):
+        candidates = [RefineCandidate(label, 0.70, (50.0, 45.0, 180.0, 165.0))]
+        assert select_contextual_two_wheel_refinement(
+            target, candidates, label=label, max_center_distance_ratio=0.10,
+        ) is None
+        assert select_contextual_two_wheel_refinement(target, candidates, label=label) is not None
+
+
+def test_v0554_context_bounded_candidate_survives_high_score_remote_overlap() -> None:
+    from app.classification import RefineCandidate, select_contextual_bicycle_refinement
+
+    match = select_contextual_bicycle_refinement(
+        (80.0, 70.0, 120.0, 150.0),
+        [
+            RefineCandidate("bicycle", 0.99, (85.0, 20.0, 500.0, 210.0)),
+            RefineCandidate("bicycle", 0.46, (55.0, 45.0, 135.0, 165.0)),
+        ],
+    )
+    assert match is not None and match.confidence == 0.46
+
+
+def test_v0554_no_confidence_cannot_prove_temporal_hits_or_source_diversity() -> None:
+    from app.classification import RefineEvidenceAccumulator
+
+    evidence = RefineEvidenceAccumulator()
+    for frame, confidence, source in [(100, 0.0, "domain"), (110, float("nan"), "general"), (120, -0.4, "general")]:
+        evidence.update(7, frame, "bicycle", confidence, source)
+    assert evidence.support(7, 120, "bicycle") == (0, 0.0, 0.0)
+    assert evidence.source_count(7, 120, "bicycle") == 0
+    evidence.update(7, 120, "bicycle", 0.80, "general")
+    assert evidence.support(7, 120, "bicycle")[0] == 1
+    assert evidence.source_count(7, 120, "bicycle") == 1
+    assert evidence.minority_consensus(7, 120, "motorcycle") is None
+
+
+def test_v0554_retry_same_opinion_cannot_evict_distinct_temporal_evidence() -> None:
+    from app.classification import RefineEvidenceAccumulator
+
+    evidence = RefineEvidenceAccumulator(max_observations=16)
+    for frame in (100, 110, 120):
+        evidence.update(7, frame, "bicycle", 0.60, "domain")
+    for _ in range(32):
+        evidence.update(7, 120, "bicycle", 0.60, "domain")
+    assert evidence.support(7, 120, "bicycle")[0] == 3
+    assert evidence.minority_consensus(7, 120, "motorcycle", bicycle_min_hits=3) is not None
+
+
+def test_v0554_merge_aliases_deduplicates_opinions_before_history_limit() -> None:
+    from app.classification import RefineEvidenceAccumulator
+
+    evidence = RefineEvidenceAccumulator(max_observations=16)
+    for frame in range(100, 108):
+        evidence.update(7, frame, "bicycle", 0.60, "domain")
+    for frame in range(100, 112):
+        evidence.update(8, frame, "bicycle", 0.60, "domain")
+    evidence.merge_track(7, 8)
+    assert evidence.support(8, 111, "bicycle")[0] == 12
+    assert evidence.support(7, 111, "bicycle")[0] == 0
+
+
+def test_v0554_temporal_bicycle_only_history_cannot_hide_motorcycle_contradiction() -> None:
+    from app.classification import RefineEvidenceAccumulator, contextual_bicycle_temporal_decision
+
+    evidence = RefineEvidenceAccumulator()
+    for frame in (100, 110, 120):
+        evidence.update(7, frame, "bicycle", 0.55, "domain")
+        evidence.update(7, frame, "motorcycle", 0.80, "general")
+    hits, fused, strongest, sources = evidence.competitive_support(7, 125, "bicycle", "motorcycle")
+    assert (hits, fused, strongest, sources) == (0, 0.0, 0.0, 0)
+    assert contextual_bicycle_temporal_decision(
+        [("domain", 0.60)], temporal_hits=hits, temporal_fused=fused,
+        temporal_strongest=strongest, temporal_sources=sources,
+    ) is None
+
+
+def test_v0554_temporal_tied_frame_cannot_prove_bicycle_agreement() -> None:
+    from app.classification import RefineEvidenceAccumulator
+
+    evidence = RefineEvidenceAccumulator()
+    for frame, bike, moto in [(100, 0.50, 0.50), (110, 0.52, 0.49), (120, 0.53, 0.50)]:
+        evidence.update(7, frame, "bicycle", bike, "domain")
+        evidence.update(7, frame, "motorcycle", moto, "general")
+    hits, fused, strongest, sources = evidence.competitive_support(
+        7, 125, "bicycle", "motorcycle", min_source_win=0.015,
+    )
+    assert hits == 2 and sources == 1 and fused > strongest > 0.0
+
+
+def test_v0554_temporal_winning_history_keeps_two_source_bicycle_rescue() -> None:
+    from app.classification import RefineEvidenceAccumulator, contextual_bicycle_temporal_decision
+
+    evidence = RefineEvidenceAccumulator()
+    evidence.update(7, 100, "bicycle", 0.50, "domain")
+    evidence.update(7, 110, "bicycle", 0.55, "general")
+    hits, fused, strongest, sources = evidence.competitive_support(7, 115, "bicycle", "motorcycle")
+    assert hits == 2 and sources == 2
+    assert contextual_bicycle_temporal_decision(
+        [("domain", 0.50)], temporal_hits=hits, temporal_fused=fused,
+        temporal_strongest=strongest, temporal_sources=sources,
+    ) is not None
+
+
+def test_v0554_temporal_losing_source_cannot_borrow_another_sources_win() -> None:
+    from app.classification import RefineEvidenceAccumulator
+
+    evidence = RefineEvidenceAccumulator()
+    for frame in (100, 110):
+        evidence.update(7, frame, "bicycle", 0.55, "general")
+        evidence.update(7, frame, "bicycle", 0.10, "domain")
+        evidence.update(7, frame, "motorcycle", 0.45, "domain")
+    hits, _, _, sources = evidence.competitive_support(7, 115, "bicycle", "motorcycle")
+    assert hits == 2 and sources == 1
+
+
+def test_v0554_temporal_context_needs_earlier_frames_and_ignores_future_or_expired() -> None:
+    from app.classification import RefineEvidenceAccumulator
+
+    evidence = RefineEvidenceAccumulator(history_frames=20)
+    for frame in (10, 90, 100, 110):
+        evidence.update(7, frame, "bicycle", 0.60, "domain")
+    # Frame100 is the current crossing opinion, not another prior agreement.
+    hits, _, _, sources = evidence.competitive_support(
+        7, 100, "bicycle", "motorcycle", include_current_frame=False,
+    )
+    assert hits == 1 and sources == 1
+    assert evidence.competitive_support(7, 100, "bicycle", "motorcycle")[0] == 2
+
+
+def test_v0554_completed_passage_consumes_all_labels_but_preserves_newer_samples() -> None:
+    from app.classification import RefineEvidenceAccumulator
+
+    evidence = RefineEvidenceAccumulator()
+    evidence.update(7, 100, "bicycle", 0.60, "domain")
+    evidence.update(7, 105, "motorcycle", 0.80, "general")
+    evidence.update(7, 110, "bicycle", 0.70, "general")
+    evidence.consume_through(7, 105)
+    assert evidence.support(7, 105, "bicycle") == (0, 0.0, 0.0)
+    assert evidence.support(7, 105, "motorcycle") == (0, 0.0, 0.0)
+    assert evidence.support(7, 110, "bicycle") == (1, 0.70, 0.70)

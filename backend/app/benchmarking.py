@@ -122,17 +122,29 @@ def _false_positive_diagnostics(
                 # A temporally closer vehicle in another lane must not hide a
                 # matched event at this actual crossing point. Prefer a spatial
                 # candidate inside the existing audit radius; no scoring changes.
-                def candidate_key(other: TimedCrossing) -> tuple[int, float]:
+                def candidate_key(other: TimedCrossing) -> tuple[int, float, float, int]:
+                    spatial_distance = inf
                     if (
                         event.crossing_x is not None and event.crossing_y is not None
                         and other.crossing_x is not None and other.crossing_y is not None
                     ):
                         dx = event.crossing_x - other.crossing_x
                         dy = event.crossing_y - other.crossing_y
-                        spatial_priority = 0 if (dx * dx + dy * dy) ** 0.5 <= 0.045 else 2
+                        spatial_distance = (dx * dx + dy * dy) ** 0.5
+                        spatial_priority = 0 if spatial_distance <= 0.045 else 2
                     else:
                         spatial_priority = 1
-                    return spatial_priority, abs(other.source_time_seconds - event.source_time_seconds)
+                    # V0.5.54: among candidates inside the same audit radius,
+                    # use the closest physical point. Otherwise a temporally
+                    # nearer vehicle in an adjacent lane can still hide the
+                    # actual same-point rediscovery. IDs break exact ties so
+                    # source/input order cannot change diagnostic attribution.
+                    return (
+                        spatial_priority,
+                        spatial_distance if spatial_priority == 0 else inf,
+                        abs(other.source_time_seconds - event.source_time_seconds),
+                        other.id,
+                    )
 
                 nearest = min(near_matched, key=candidate_key)
                 dt = abs(nearest.source_time_seconds - event.source_time_seconds)

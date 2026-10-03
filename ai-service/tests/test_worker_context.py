@@ -376,3 +376,148 @@ def test_v0553_return_crossing_requires_fresh_context_after_direct_bicycle_event
     audit = worker._bicycle_xframe_audit_this_frame[-1]
     assert audit["context_frames"] == [108]
     assert audit["reason"] == "insufficient_frames"
+
+
+def test_v0554_pre_gate_refinement_uses_finite_distance_for_extensions() -> None:
+    worker = _worker()
+    gate = ((100, 500), (900, 500), 1000, 1000)
+
+    assert worker._finite_gate_distance_ratio((1200, 500), *gate) == .30
+    assert worker._finite_gate_distance_ratio((500, 550), *gate) == .05
+    assert worker._finite_gate_distance_ratio((940, 530), *gate) == .05
+    assert worker._finite_gate_distance_ratio((500, 500), (500, 500), (500, 500), 1000, 1000) == float("inf")
+
+
+def test_v0554_absolute_context_cannot_erase_recent_target_motorcycle_veto() -> None:
+    worker = _worker()
+    worker._bicycle_context_xframe_trail[7] = [(100, "domain", .19, .70)]
+    worker._context_two_wheel_from_model = lambda *_args: (.80, .01)
+
+    assert worker._refine_bicycle_context(7, 104, object(), object(), "cpu", False, .30) is None
+    assert worker.state.bicycle_context_rescues == 0
+    assert 7 not in worker._class_refine_overrides
+
+
+def test_v0554_expired_target_motorcycle_vote_does_not_veto_fresh_absolute_context() -> None:
+    worker = _worker()
+    worker._bicycle_context_xframe_trail[7] = [(80, "domain", .19, .70)]
+    worker._context_two_wheel_from_model = lambda *_args: (.80, .01)
+
+    decision = worker._refine_bicycle_context(7, 104, object(), object(), "cpu", False, .30)
+    assert decision is not None and decision[0] == "bicycle"
+    assert worker.state.bicycle_context_rescues == 1
+
+
+def test_v0554_losing_temporal_bicycle_votes_cannot_prove_context_rescue() -> None:
+    worker = _worker()
+    for frame in (100, 102):
+        worker._refine_consensus.update(7, frame, "bicycle", .40, "domain")
+        worker._refine_consensus.update(7, frame, "motorcycle", .80, "general")
+    worker._context_two_wheel_from_model = lambda *args: (
+        (.30, .01) if args[-1] is worker._general_refiner_model else None
+    )
+
+    assert worker._refine_bicycle_context(7, 104, object(), object(), "cpu", False, .30) is None
+    assert worker.state.bicycle_context_temporal_rescues == 0
+    assert worker.state.bicycle_context_competitive_rescues == 0
+
+
+def test_v0554_crossing_frame_refiner_is_not_a_second_pre_crossing_temporal_hit() -> None:
+    worker = _worker()
+    worker._refine_consensus.update(7, 100, "bicycle", .40, "domain")
+    worker._refine_consensus.update(7, 104, "bicycle", .40, "general")
+    worker._context_two_wheel_from_model = lambda *args: (
+        (.30, .01) if args[-1] is worker._general_refiner_model else None
+    )
+
+    assert worker._refine_bicycle_context(7, 104, object(), object(), "cpu", False, .30) is None
+    assert worker.state.bicycle_context_temporal_rescues == 0
+
+
+def test_v0554_context_proposal_waits_for_guard_before_rescue_commit() -> None:
+    worker = _worker()
+    worker._context_two_wheel_from_model = lambda *_args: (.80, .01)
+    trace = {}
+
+    decision = worker._refine_bicycle_context(
+        7, 104, object(), object(), "cpu", False, .30, commit=False, decision_trace=trace,
+    )
+
+    assert decision is not None and decision[0] == "bicycle"
+    assert trace["method"] == "absolute"
+    assert worker.state.bicycle_context_rescues == 0
+    assert worker._bicycle_context_rescue_tracks == set()
+    assert 7 not in worker._class_refine_overrides
+    assert worker._bicycle_context_xframe_last_consumed[7] == 104
+    worker._commit_bicycle_context_rescue(7, 104, decision, trace["method"], remember_override=False)
+    assert worker.state.bicycle_context_rescues == 1
+    assert 7 not in worker._class_refine_overrides
+
+
+def test_v0554_passage_consumes_semantic_votes_without_erasing_future_samples() -> None:
+    worker = _worker()
+    worker._refine_consensus.update(7, 100, "bicycle", .90, "domain")
+    worker._refine_consensus.update(7, 104, "motorcycle", .80, "general")
+    worker._refine_consensus.update(7, 108, "bicycle", .60, "general")
+
+    worker._consume_bicycle_context_passage(7, 104)
+
+    assert worker._refine_consensus.support(7, 104, "bicycle") == (0, 0.0, 0.0)
+    assert worker._refine_consensus.support(7, 104, "motorcycle") == (0, 0.0, 0.0)
+    assert worker._refine_consensus.support(7, 108, "bicycle") == (1, .60, .60)
+
+
+def test_v0554_deferred_context_commit_keeps_newer_semantic_override() -> None:
+    worker = _worker()
+    worker._class_refine_overrides[7] = ("motorcycle", .99, 108)
+
+    worker._commit_bicycle_context_rescue(7, 104, ("bicycle", .80), "absolute")
+
+    assert worker.state.bicycle_context_rescues == 1
+    assert worker._class_refine_overrides[7] == ("motorcycle", .99, 108)
+
+
+def test_v0554_context_audit_exposes_proposal_scores_without_claiming_guard_commit() -> None:
+    worker = _worker()
+    worker._context_two_wheel_from_model = lambda *_args: (.80, .01)
+    trace = {}
+
+    decision = worker._refine_bicycle_context(
+        7, 104, object(), (20, 20, 60, 80), "cpu", False, .52,
+        commit=False, decision_trace=trace,
+    )
+
+    assert decision is not None
+    record = trace["audit"]
+    assert record["kind"] == "bicycle_context"
+    assert record["branch"] == "absolute"
+    assert record["decision_accepted"] is True
+    assert record["commit_status"] == "proposed"
+    assert record["primary_confidence"] == .52
+    assert record["target_rect"] == [20.0, 20.0, 60.0, 80.0]
+    assert record["temporal_hits"] == 0
+    assert record["context_frames"] == [104]
+    assert record["observations"] == [
+        {"frame_index": 104, "source": "domain", "bicycle": .80, "motorcycle": .01},
+        {"frame_index": 104, "source": "general", "bicycle": .80, "motorcycle": .01},
+    ]
+    assert len([row for row in worker._bicycle_xframe_audit_this_frame if row.get("kind") == "bicycle_context"]) == 1
+
+
+def test_v0554_veto_context_audit_keeps_the_contradictory_source_frame() -> None:
+    worker = _worker()
+    worker._bicycle_context_xframe_trail[7] = [(100, "domain", .19, .70)]
+    worker._context_two_wheel_from_model = lambda *_args: (.80, .01)
+    trace = {}
+
+    assert worker._refine_bicycle_context(
+        7, 104, object(), object(), "cpu", False, .30, commit=False, decision_trace=trace,
+    ) is None
+    record = trace["audit"]
+    assert record["decision_accepted"] is False
+    assert record["commit_status"] == "not_applicable"
+    assert record["reason"] == "motorcycle_source_veto"
+    assert record["context_frames"] == [100, 104]
+    assert record["observations"][0] == {
+        "frame_index": 100, "source": "domain", "bicycle": .19, "motorcycle": .70,
+    }

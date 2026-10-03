@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './styles.css'
 
-const APP_VERSION = '0.5.53'
+const APP_VERSION = '0.5.54'
 const vehicleLabels = {
   motorcycle: 'Xe máy', bicycle: 'Xe đạp', car: 'Ô tô', bus: 'Xe buýt', truck: 'Xe tải', other: 'Khác'
 }
@@ -61,6 +61,36 @@ const falsePositiveAuditDetail = item => {
     parts.push(`GT gần nhất ${signedSeconds(review.delta_seconds)} · ${String(review.direction || '').toUpperCase()} ${label} · ${window}`)
   }
   return parts.join(' · ')
+}
+
+const bicycleBranchLabels = {
+  absolute: 'Điểm xe đạp cao', weak_motor: 'Xe máy có điểm thấp',
+  competitive: 'So sánh hai loại xe', near_margin: 'Hai loại có điểm gần nhau',
+  xframe: 'Bằng chứng qua nhiều frame', temporal: 'Bằng chứng từ frame trước',
+  veto: 'Bằng chứng xe máy chặn đổi loại', none: 'Chưa đủ bằng chứng xe đạp',
+}
+const bicycleCommitLabels = {
+  proposed: 'Đang đề xuất', pending: 'Chờ xác nhận người/xe',
+  accepted: 'Đã ghi nhận crossing', rejected: 'Bị bước xác nhận loại',
+  expired: 'Hết thời gian chờ xác nhận', not_applicable: 'Không đề xuất đổi loại',
+}
+const auditScore = value => value != null && Number.isFinite(Number(value)) ? Number(value).toFixed(3) : '—'
+
+function BicycleContextAudit({ item }) {
+  const audits = item?.diagnosis?.bicycle_context_audit || []
+  if (!audits.length) return null
+  return <details className="bicycle-context-audit">
+    <summary>Bằng chứng phân loại xe đạp ({audits.length})</summary>
+    {audits.map(audit=><div className="bicycle-context-record" key={`${audit.track_id}-${audit.frame_index}`}>
+      <strong>Track {audit.track_id} · frame {audit.frame_index} · {bicycleBranchLabels[audit.branch] || audit.branch}</strong>
+      <p>{audit.decision_accepted ? 'Model đề xuất xe đạp' : 'Model giữ loại xe'} · {bicycleCommitLabels[audit.commit_status] || audit.commit_status}</p>
+      <p>Điểm class gốc {auditScore(audit.primary_confidence)} · hỗ trợ từ {audit.temporal_hits ?? 0} frame trước · điểm gộp {auditScore(audit.temporal_fused)}</p>
+      {audit.reason === 'motorcycle_source_veto' && <p>Bằng chứng xe máy đối nghịch đã chặn đổi sang xe đạp.</p>}
+      {(audit.observations || []).slice(-4).map((observation,index)=><p key={`${observation.frame_index}-${observation.source}-${index}`}>
+        Frame {observation.frame_index} · {observation.source === 'general' ? 'model tổng quát' : observation.source === 'domain' ? 'model chuyên biệt' : observation.source} · xe đạp {auditScore(observation.bicycle)} / xe máy {auditScore(observation.motorcycle)}
+      </p>)}
+    </div>)}
+  </details>
 }
 
 const clamp01 = value => Math.min(1, Math.max(0, Number(value)))
@@ -697,7 +727,7 @@ function GroundTruthBenchmark({ selectedCameraId, sessions }) {
         {report.dominant_false_positive_reason && <div className="source-status warn"><strong>Nguyên nhân đếm dư nghi ngờ: {falsePositiveReasonLabels[report.dominant_false_positive_reason] || report.dominant_false_positive_reason}</strong><span>{Object.entries(report.false_positive_reason_counts || {}).map(([reason,count])=>`${falsePositiveReasonLabels[reason] || reason}: ${count}`).join(' · ')}</span></div>}
         {report.legacy_ai_events_without_source_time > 0 && <div className="source-status bad"><strong>⚠ Phiên cũ thiếu timecode</strong><span>{report.legacy_ai_events_without_source_time} event được tạo trước V0.5.19 nên không thể ghép chính xác. Hãy chạy lại clip một lần trên V0.5.19 rồi benchmark session mới.</span></div>}
         <h3 className="benchmark-subhead">Sai loại phương tiện ({report.class_mismatch_items?.length || 0})</h3>
-        <div className="benchmark-diff-list">{report.class_mismatch_items?.length ? report.class_mismatch_items.map(item=><div key={`c-${item.ground_truth_id}-${item.ai_event_id}`} className="diff-row false-positive class-audit-row"><button className="time-link" onClick={()=>seekTo(item.time)}><strong>{formatVideoTime(item.time)}</strong></button><span>{String(item.direction).toUpperCase()} · GT {vehicleLabels[item.ground_truth_vehicle_type] || item.ground_truth_vehicle_type}</span><em>AI → {vehicleLabels[item.ai_vehicle_type] || item.ai_vehicle_type}</em><select className="gt-class-edit" value={item.ground_truth_vehicle_type} disabled={busy} title="Sửa class GT tại timecode này" onChange={e=>updateMarkVehicle(item.ground_truth_id,e.target.value)}>{Object.entries(vehicleLabels).map(([key,label])=><option key={key} value={key}>{label}</option>)}</select></div>) : <div className="empty">Không có event đã khớp thời gian nhưng sai loại xe.</div>}</div>
+        <div className="benchmark-diff-list">{report.class_mismatch_items?.length ? report.class_mismatch_items.map(item=><div key={`c-${item.ground_truth_id}-${item.ai_event_id}`} className="diff-row false-positive class-audit-row"><button className="time-link" onClick={()=>seekTo(item.time)}><strong>{formatVideoTime(item.time)}</strong></button><span>{String(item.direction).toUpperCase()} · GT {vehicleLabels[item.ground_truth_vehicle_type] || item.ground_truth_vehicle_type}</span><em>AI → {vehicleLabels[item.ai_vehicle_type] || item.ai_vehicle_type}</em><select className="gt-class-edit" value={item.ground_truth_vehicle_type} disabled={busy} title="Sửa class GT tại timecode này" onChange={e=>updateMarkVehicle(item.ground_truth_id,e.target.value)}>{Object.entries(vehicleLabels).map(([key,label])=><option key={key} value={key}>{label}</option>)}</select><BicycleContextAudit item={item} /></div>) : <div className="empty">Không có event đã khớp thời gian nhưng sai loại xe.</div>}</div>
         <h3 className="benchmark-subhead">Lọt không đếm ({report.missed_items?.length || 0})</h3>
         <div className="benchmark-diff-list benchmark-audit-list">{report.missed_items?.length ? report.missed_items.map(item=>{const detail=missedAuditDetail(item);return <button key={`m-${item.ground_truth_id}`} className="diff-row audit-diff-row missed" onClick={()=>seekTo(item.time)}><strong className="diff-time">{formatVideoTime(item.time)}</strong><span className="diff-meta">{String(item.direction).toUpperCase()} · {vehicleLabels[item.vehicle_type] || item.vehicle_type}</span><em className="diff-reason">{item.diagnosis?.reason ? (missReasonLabels[item.diagnosis.reason] || item.diagnosis.reason) : 'GT có · AI không có'}</em>{detail && <small className="diff-detail">{detail}</small>}</button>}) : <div className="empty">Chưa có xe lọt trong cửa sổ ghép hiện tại.</div>}</div>
         <h3 className="benchmark-subhead">AI đếm dư ({report.false_positive_items?.length || 0})</h3>

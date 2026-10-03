@@ -3,6 +3,165 @@ import pytest
 from app.counting import CountingLine, LineCrossingCounter, RoadZone
 
 
+def test_v0554_all_gates_use_observed_road_corridor_for_curved_valid_path() -> None:
+    from app.counting import HeavyVehicleCrossingRescuer, TwoWheelCenterCrossingRescuer, VerifiedAnchorSpanRescuer
+
+    line = CountingLine(0.1, 0.5, 0.9, 0.5)
+    zone = RoadZone(0.5, 0.3, 0.8, 0.3, 0.8, 0.8, 0.5, 0.8)
+    # The measured crossing is vertical at x=505. The stable endpoint chord's
+    # artificial before-probe lies outside x=500, although every observation is
+    # inside the road and the actual crossing corridor is fully inside it.
+    path = [(500, 470), (505, 497), (505, 503), (570, 530)]
+    primary = LineCrossingCounter(line, road_zone=zone)
+    for frame, point in enumerate(path, 1):
+        result = primary.update(5801, point, 1000, 1000, frame)
+    assert result == "in"
+    assert primary.crossing_point_for(5801) == (505.0, 500.0)
+    assert primary.crossing_frame_for(5801) == pytest.approx(2.5)
+    for gate in (HeavyVehicleCrossingRescuer(line, zone), TwoWheelCenterCrossingRescuer(line, zone)):
+        for frame, point in enumerate(path, 1):
+            result = gate.update(5801, point, 1000, 1000, frame)
+        assert result == ("in", (505.0, 500.0))
+        assert gate.crossing_frame_for(5801) == pytest.approx(2.5)
+    anchor = VerifiedAnchorSpanRescuer(line, zone)
+    for frame, point in enumerate(path, 1):
+        assert anchor.update(5801, point, 1000, 1000, frame) is None
+    assert anchor.update(5801, (570, 540), 1000, 1000, 5) == ("in", (505.0, 500.0))
+    assert anchor.crossing_frame_for(5801) == pytest.approx(2.5)
+
+
+def test_v0554_all_gates_reject_actual_corridor_outside_road_despite_valid_chord() -> None:
+    from app.counting import HeavyVehicleCrossingRescuer, TwoWheelCenterCrossingRescuer, VerifiedAnchorSpanRescuer
+
+    line = CountingLine(0.1, 0.5, 0.9, 0.5)
+    zone = RoadZone(0.5, 0.3, 0.8, 0.3, 0.8, 0.8, 0.5, 0.8)
+    # The stable chord is vertical and its probes pass at x=510. The observed
+    # local bracket angles outside the left road edge; all measured anchors
+    # themselves remain inside, so corridor validation must catch the defect.
+    path = [(550, 470), (520, 497), (500, 503), (550, 530), (550, 540)]
+    for gate in (
+        LineCrossingCounter(line, zone), VerifiedAnchorSpanRescuer(line, zone),
+        HeavyVehicleCrossingRescuer(line, zone), TwoWheelCenterCrossingRescuer(line, zone),
+    ):
+        for frame, point in enumerate(path, 1):
+            assert gate.update(5802, point, 1000, 1000, frame) is None
+
+
+def test_v0554_all_gates_reject_outside_road_neutral_observation_in_span() -> None:
+    from app.counting import HeavyVehicleCrossingRescuer, TwoWheelCenterCrossingRescuer, VerifiedAnchorSpanRescuer
+
+    line = CountingLine(0.1, 0.5, 0.9, 0.5)
+    zone = RoadZone(0.5, 0.3, 0.8, 0.3, 0.8, 0.8, 0.5, 0.8)
+    path = [(550, 470), (450, 496), (550, 497), (550, 503), (550, 530), (550, 540)]
+    for gate in (
+        LineCrossingCounter(line, zone), VerifiedAnchorSpanRescuer(line, zone),
+        HeavyVehicleCrossingRescuer(line, zone), TwoWheelCenterCrossingRescuer(line, zone),
+    ):
+        for frame, point in enumerate(path, 1):
+            assert gate.update(5803, point, 1000, 1000, frame) is None
+
+
+def test_v0554_anchor_expiry_cannot_reopen_old_span_with_new_end_clock() -> None:
+    from app.counting import VerifiedAnchorSpanRescuer
+
+    gate = VerifiedAnchorSpanRescuer(CountingLine(), immediate_min_normal_ratio=0.95)
+    for frame, point in [(10, (450, 460)), (11, (500, 540)), (19, (500, 560)), (20, (500, 580))]:
+        assert gate.update(5804, point, 1000, 1000, frame) is None
+    assert gate.finalize_lost(5804, 21) is None
+    assert gate.verified_anchor_span_rescues == 0
+
+
+def test_v0554_anchor_expiry_retains_later_observations_for_fresh_reverse_span() -> None:
+    from app.counting import VerifiedAnchorSpanRescuer
+
+    gate = VerifiedAnchorSpanRescuer(CountingLine(), immediate_min_normal_ratio=0.95)
+    for frame, point in [(10, (450, 460)), (11, (500, 540)), (16, (500, 500)), (18, (500, 530))]:
+        assert gate.update(5805, point, 1000, 1000, frame) is None
+    assert gate.update(5805, (500, 450), 1000, 1000, 19) == ("out", (500.0, 500.0))
+    assert gate.crossing_frame_for(5805) == pytest.approx(18.375)
+
+
+def test_v0554_invalid_pending_jump_cannot_replay_prior_geometry() -> None:
+    from app.counting import VerifiedAnchorSpanRescuer
+
+    gate = VerifiedAnchorSpanRescuer(CountingLine(), immediate_min_normal_ratio=0.95)
+    for frame, point in [(10, (450, 460)), (11, (500, 540)), (12, (950, 503)), (13, (500, 540)), (14, (500, 560))]:
+        assert gate.update(5806, point, 1000, 1000, frame) is None
+    assert gate.finalize_lost(5806, 15) is None
+    assert gate.verified_anchor_span_rescues == 0
+
+
+def test_v0554_invalid_pending_road_observation_cannot_replay_prior_geometry() -> None:
+    from app.counting import VerifiedAnchorSpanRescuer
+
+    zone = RoadZone(0.4, 0.2, 0.6, 0.2, 0.6, 0.8, 0.4, 0.8)
+    gate = VerifiedAnchorSpanRescuer(CountingLine(), zone, immediate_min_normal_ratio=0.95)
+    for frame, point in [(10, (450, 460)), (11, (500, 540)), (12, (620, 503)), (13, (500, 540)), (14, (500, 560))]:
+        assert gate.update(5807, point, 1000, 1000, frame) is None
+    assert gate.finalize_lost(5807, 15) is None
+    assert gate.verified_anchor_span_rescues == 0
+
+
+def test_v0554_external_override_rejects_older_actual_crossing_despite_later_emission() -> None:
+    gate = LineCrossingCounter(CountingLine(), crossing_cooldown_frames=60)
+    assert gate.register_external_crossing(5808, "in", 20, (500, 500), crossing_frame=18.5)
+    for direction, frame in [("in", 18.5), ("out", 18.0)]:
+        assert not gate.register_external_crossing(
+            5808, direction, 30, (500, 500), crossing_frame=frame, verified_anchor_span=True,
+        )
+        assert gate.external_rejection_reason_for(5808) == "stale-crossing-frame"
+    assert gate.total_crossings == 1
+    assert gate.crossing_frame_for(5808) == 18.5
+    assert gate.verified_same_direction_overrides == gate.verified_cooldown_overrides == 0
+
+
+def test_v0554_external_override_rejects_nonfinite_or_future_crossing_clock() -> None:
+    gate = LineCrossingCounter(CountingLine())
+    for frame in [float("nan"), float("inf"), 30.5]:
+        assert not gate.register_external_crossing(5809, "in", 30, (500, 500), crossing_frame=frame, verified_anchor_span=True)
+        assert gate.external_rejection_reason_for(5809) == "stale-crossing-frame"
+    assert gate.total_crossings == 0
+
+
+def test_v0554_external_override_accepts_new_source_crossing_before_prior_emission_clock() -> None:
+    gate = LineCrossingCounter(CountingLine(), crossing_cooldown_frames=60)
+    assert gate.register_external_crossing(5810, "in", 20, (500, 500), crossing_frame=18.5)
+    # Emission is delayed relative to geometry. The actual new OUT at 19.5 is
+    # later than accepted IN at 18.5; it need not be later than its emission 20.
+    assert gate.register_external_crossing(5810, "out", 30, (500, 500), crossing_frame=19.5, verified_anchor_span=True)
+    assert gate.total_crossings == 2
+    assert gate.verified_cooldown_overrides == 1
+
+
+def test_v0554_primary_alias_merge_preserves_latest_rearmed_passage_in_both_directions() -> None:
+    for old_is_source in (True, False):
+        gate = LineCrossingCounter(CountingLine())
+        assert gate.register_external_crossing(5811, "out", 10, (500, 500))
+        assert gate.register_external_crossing(5812, "in", 50, (500, 500))
+        assert gate.update(5812, (500, 550), 1000, 1000, 60) is None
+        source, target = (5811, 5812) if old_is_source else (5812, 5811)
+        gate.merge_track(source, target)
+        assert gate.update(target, (500, 450), 1000, 1000, 61) == "out"
+        assert gate.total_crossings == 3
+
+
+def test_v0554_primary_alias_old_excursion_cannot_release_new_passage_cooldown() -> None:
+    for old_is_source in (True, False):
+        gate = LineCrossingCounter(
+            CountingLine(), crossing_cooldown_frames=60, adaptive_cooldown=True,
+            cooldown_release_ratio=0.30,
+        )
+        assert gate.register_external_crossing(5813, "out", 10, (500, 500))
+        assert gate.update(5813, (500, 0), 1000, 1000, 11) is None
+        assert gate.register_external_crossing(5814, "in", 50, (500, 500))
+        assert gate.update(5814, (500, 540), 1000, 1000, 51) is None
+        source, target = (5813, 5814) if old_is_source else (5814, 5813)
+        gate.merge_track(source, target)
+        assert gate.update(target, (500, 450), 1000, 1000, 60) is None
+        assert gate.rejected_cooldown == 1
+        assert gate.adaptive_cooldown_releases == 0
+
+
 def test_v0553_observed_bracket_ignores_later_same_side_touch_source_time() -> None:
     from app.counting import _GateSample, crossing_frame_between, observed_gate_crossing
 

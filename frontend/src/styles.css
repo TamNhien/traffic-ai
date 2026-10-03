@@ -111,3 +111,7 @@
 .content-grid>article,.benchmark-layout>article{min-width:0;width:100%}
 .benchmark-report-panel .benchmark-diff-list,.benchmark-report-panel .benchmark-audit-list{width:100%;padding:2px 8px 2px 2px;scrollbar-gutter:stable}
 .benchmark-report-panel .diff-row,.benchmark-report-panel .audit-diff-row{width:100%;min-width:0;padding:9px 10px;margin:0}
+
+.panel .class-audit-row{grid-template-areas:"time gt" "ai ai" "edit edit" "audit audit"}
+.bicycle-context-audit{grid-area:audit;min-width:0;color:#9db1c8;font-size:.72rem;line-height:1.45;overflow-wrap:anywhere}.bicycle-context-audit summary{cursor:pointer;color:#7dd3fc;padding:4px 0}.bicycle-context-record{margin-top:7px;padding:7px 9px;border-left:2px solid #1e3654;background:#081525;border-radius:5px}.bicycle-context-record strong{font-size:.72rem}.bicycle-context-record p{margin:4px 0}
+@media(max-width:720px){.panel .class-audit-row{grid-template-areas:"time" "gt" "ai" "edit" "audit"}}

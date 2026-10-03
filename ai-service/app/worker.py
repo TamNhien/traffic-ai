@@ -79,6 +79,8 @@ class _PendingGuardCrossing:
     heavy_passage_state: object | None = None
     two_wheel_passage_state: object | None = None
     heavy_rescue_was_recorded: bool | None = None
+    bicycle_context_method: str | None = None
+    bicycle_context_audit: dict | None = None
 
 
 class PipelineWorker(threading.Thread):
@@ -522,6 +524,15 @@ class PipelineWorker(threading.Thread):
 
     def _commit_guard_crossing(self, cv2, pending: _PendingGuardCrossing) -> None:
         snapshot = self._save_crossing_snapshot(cv2, pending.snapshot_frame, pending.observed_frame_index or pending.frame_index)
+        if pending.bicycle_context_method is not None:
+            self._commit_bicycle_context_rescue(
+                pending.track_id, pending.observed_frame_index or pending.frame_index,
+                (pending.label, pending.confidence), pending.bicycle_context_method,
+                remember_override=False,
+            )
+            if pending.bicycle_context_audit is not None:
+                pending.bicycle_context_audit["commit_status"] = "accepted"
+                self._bicycle_xframe_audit_this_frame.append(dict(pending.bicycle_context_audit))
         self._record_committed_crossing(pending.label, pending.direction, pending.crossing_method)
         self._event_dispatcher.submit(
             self._event_payload(
@@ -582,10 +593,39 @@ class PipelineWorker(threading.Thread):
             counter, pending.track_id, pending.direction, pending.span_passage_state,
             pending.heavy_passage_state, pending.two_wheel_passage_state, pending.heavy_rescue_was_recorded,
         )
+        if pending.bicycle_context_audit is not None:
+            pending.bicycle_context_audit["commit_status"] = "expired" if expired else "rejected"
+            self._bicycle_xframe_audit_this_frame.append(dict(pending.bicycle_context_audit))
         self._pending_guard_crossings.pop(int(pending.track_id), None)
         self.state.human_guard_pending_crossings = len(self._pending_guard_crossings)
         if expired:
             self.state.human_guard_pending_drops += 1
+
+    def _expire_guard_crossings(self, counter: LineCrossingCounter, trace_file=None) -> None:
+        """Persist EOF context status without inventing another analyzed frame."""
+        audit_rows = []
+        for pending in list(self._pending_guard_crossings.values()):
+            self._drop_guard_crossing(counter, pending, expired=True)
+            if trace_file is None or pending.bicycle_context_audit is None:
+                continue
+            audit = dict(pending.bicycle_context_audit)
+            observed_frame = int(audit.get("frame_index", pending.observed_frame_index or pending.frame_index))
+            source_fps = float(getattr(self.state, "source_fps", 0.0) or 0.0)
+            source_time = ((observed_frame - 1.0) / source_fps) if source_fps > 0.0 else pending.source_time_seconds
+            audit_rows.append({
+                "audit_only": True, "frame_index": observed_frame,
+                "source_time_seconds": source_time,
+                "bicycle_xframe_decision_audit": [audit],
+            })
+        if audit_rows:
+            try:
+                for row in audit_rows:
+                    trace_file.write(json.dumps(row, separators=(",", ":")) + "\n")
+                trace_file.flush()
+            except Exception as exc:
+                # Trace I/O must not interrupt dispatcher/encoder shutdown or
+                # leave another provisional crossing unrevoked.
+                self.state.last_error = getattr(self.state, "last_error", None) or f"Benchmark trace shutdown failed: {exc}"
 
     def _refresh_truck_semantic_lock(
         self,
@@ -1270,7 +1310,7 @@ class PipelineWorker(threading.Thread):
                         # this is where a bicycle/motorcycle mistake affects the
                         # persisted benchmark class.
                         line_a, line_b = counter.line.denormalize(width, height)
-                        gate_distance_ratio = abs(signed_distance(anchor, line_a, line_b)) / max(1.0, min(width, height))
+                        gate_distance_ratio = self._finite_gate_distance_ratio(anchor, line_a, line_b, width, height)
                         track_on_road = (
                             counter.road_zone is None
                             or counter.road_zone.contains_with_margin(anchor, width, height, 0.02)
@@ -1552,13 +1592,15 @@ class PipelineWorker(threading.Thread):
                             # geometry-proven motorcycle crossing gets one wider
                             # target crop, which is useful when the tracker box
                             # contains only the bicycle front wheel / basket.
+                            context_trace = {}
                             if (
                                 event_label == "motorcycle"
                                 and self.bicycle_context_rescue_enabled
                                 and bicycle_context_used_this_frame < self.bicycle_context_max_per_frame
                             ):
                                 context_bicycle = self._refine_bicycle_context(
-                                    track_id, frame_index, analysis_frame, rect, device, use_half, confidence_f
+                                    track_id, frame_index, analysis_frame, rect, device, use_half, confidence_f,
+                                    commit=False, decision_trace=context_trace,
                                 )
                                 bicycle_context_used_this_frame += 1
                                 if context_bicycle is not None:
@@ -1609,6 +1651,8 @@ class PipelineWorker(threading.Thread):
                                     device, use_half, velocity=velocity, force=True,
                                 )
                                 if action == "rejected":
+                                    if context_trace.get("audit") is not None:
+                                        context_trace["audit"]["commit_status"] = "rejected"
                                     self._rollback_guard_crossing(
                                         counter, track_id, direction, span_passage_state,
                                         heavy_passage_state, two_wheel_passage_state, heavy_rescue_was_recorded,
@@ -1619,6 +1663,8 @@ class PipelineWorker(threading.Thread):
                                     )
                                     continue
                                 if action == "pending":
+                                    if context_trace.get("audit") is not None:
+                                        context_trace["audit"]["commit_status"] = "pending"
                                     # Do not increment dashboard totals and do not
                                     # dispatch to backend yet. Keep the original
                                     # crossing frame/time/point in RAM; a later
@@ -1641,10 +1687,18 @@ class PipelineWorker(threading.Thread):
                                         heavy_passage_state=heavy_passage_state,
                                         two_wheel_passage_state=two_wheel_passage_state,
                                         heavy_rescue_was_recorded=heavy_rescue_was_recorded,
+                                        bicycle_context_method=context_trace.get("method"),
+                                        bicycle_context_audit=context_trace.get("audit"),
                                     )
                                     self.state.human_guard_pending_crossings = len(self._pending_guard_crossings)
                                     continue
 
+                            if context_trace.get("method") is not None:
+                                self._commit_bicycle_context_rescue(
+                                    track_id, frame_index, (event_label, event_confidence), context_trace["method"],
+                                    remember_override=False,
+                                )
+                                context_trace["audit"]["commit_status"] = "accepted"
                             self._record_committed_crossing(event_label, direction, crossing_method)
                             self.state.rejected_outside_road = counter.rejected_outside_road
                             pending_crossing_events.append((
@@ -1883,8 +1937,7 @@ class PipelineWorker(threading.Thread):
             # shutdown. If the source ended before a second semantic frame,
             # revoke the provisional geometry crossing and record a timeout drop.
             if counter is not None and self._pending_guard_crossings:
-                for pending in list(self._pending_guard_crossings.values()):
-                    self._drop_guard_crossing(counter, pending, expired=True)
+                self._expire_guard_crossings(counter, trace_file)
             if trace_file is not None:
                 try:
                     trace_file.close()
@@ -2146,6 +2199,21 @@ class PipelineWorker(threading.Thread):
         except Exception:
             return None
 
+    @staticmethod
+    def _finite_gate_distance_ratio(anchor, line_a, line_b, width: int, height: int) -> float:
+        """Use the visible counting segment for every two-wheel refine budget."""
+        dx, dy = float(line_b[0] - line_a[0]), float(line_b[1] - line_a[1])
+        length_squared = dx * dx + dy * dy
+        if length_squared <= 1e-12:
+            return float("inf")
+        fraction = max(0.0, min(1.0, (
+            (float(anchor[0]) - line_a[0]) * dx
+            + (float(anchor[1]) - line_a[1]) * dy
+        ) / length_squared))
+        offset_x = float(anchor[0]) - (line_a[0] + fraction * dx)
+        offset_y = float(anchor[1]) - (line_a[1] + fraction * dy)
+        return (offset_x * offset_x + offset_y * offset_y) ** .5 / max(1.0, min(width, height))
+
     def _bicycle_xframe_scan_candidate(
         self, track_id: int, frame_index: int, label: str, confidence: float,
         anchor, line_a, line_b, width: int, height: int, rect, *, track_on_road: bool,
@@ -2158,17 +2226,7 @@ class PipelineWorker(threading.Thread):
             or float(confidence) > self.bicycle_context_xframe_max_motor_conf
         ):
             return None
-        dx, dy = float(line_b[0] - line_a[0]), float(line_b[1] - line_a[1])
-        length_squared = dx * dx + dy * dy
-        if length_squared <= 1e-12:
-            return None
-        fraction = max(0.0, min(1.0, (
-            (float(anchor[0]) - line_a[0]) * dx
-            + (float(anchor[1]) - line_a[1]) * dy
-        ) / length_squared))
-        offset_x = float(anchor[0]) - (line_a[0] + fraction * dx)
-        offset_y = float(anchor[1]) - (line_a[1] + fraction * dy)
-        distance = (offset_x * offset_x + offset_y * offset_y) ** .5 / max(1.0, min(width, height))
+        distance = self._finite_gate_distance_ratio(anchor, line_a, line_b, width, height)
         if distance > self.bicycle_context_xframe_gate_distance_ratio:
             return None
         tid, frame_idx = int(track_id), int(frame_index)
@@ -2224,6 +2282,7 @@ class PipelineWorker(threading.Thread):
     def _consume_bicycle_context_passage(self, track_id: int, frame_index: int) -> None:
         tid = int(track_id)
         self._bicycle_context_xframe_trail.pop(tid, None)
+        self._refine_consensus.consume_through(tid, int(frame_index))
         self._bicycle_context_xframe_last_consumed[tid] = max(
             int(frame_index), self._bicycle_context_xframe_last_consumed.get(tid, -100000),
         )
@@ -2291,6 +2350,9 @@ class PipelineWorker(threading.Thread):
         device,
         use_half: bool,
         detector_confidence: float,
+        *,
+        commit: bool = True,
+        decision_trace: dict | None = None,
     ) -> tuple[str, float] | None:
         """Crossing-only wide-context bicycle rescue.
 
@@ -2319,11 +2381,47 @@ class PipelineWorker(threading.Thread):
             # deciding. A late scan can no longer strand the second source.
             self._record_bicycle_xframe_observations(track_id, frame_index, competitive)
 
-        if contextual_motorcycle_veto(
-            competitive, motorcycle_veto=self.bicycle_context_xframe_motor_veto,
-        ):
-            # Strong absolute bicycle scores cannot bypass a target-matched
-            # motorcycle lead from either independent verifier.
+        cutoff = frame_idx - self.bicycle_context_xframe_history
+        trail_by_frame = {}
+        for observed_frame, source, bike_conf, moto_conf in self._bicycle_context_xframe_trail.get(tid, []):
+            if cutoff <= observed_frame <= frame_idx:
+                trail_by_frame.setdefault(observed_frame, []).append((source, bike_conf, moto_conf))
+        hits, fused, strongest, sources = self._refine_consensus.competitive_support(
+            track_id, frame_index, "bicycle", "motorcycle",
+            min_source_win=self.bicycle_context_xframe_source_win,
+            competing_veto=self.bicycle_context_xframe_motor_veto,
+            include_current_frame=False,
+        )
+        keyed_observations = {
+            (observed_frame, source): (bike_conf, moto_conf)
+            for observed_frame, items in trail_by_frame.items()
+            for source, bike_conf, moto_conf in items
+        }
+        keyed_observations.update({(frame_idx, source): (bike, moto) for source, bike, moto in competitive})
+        context_audit = {
+            "kind": "bicycle_context", "track_id": tid, "frame_index": frame_idx,
+            "branch": "none", "decision_accepted": False, "commit_status": "not_applicable",
+            "reason": "insufficient_context", "primary_confidence": float(detector_confidence),
+            "temporal_hits": hits, "temporal_fused": fused,
+            "temporal_strongest": strongest, "temporal_sources": sources,
+            "context_frames": sorted({key[0] for key in keyed_observations}),
+            "observations": [
+                {"frame_index": key[0], "source": key[1], "bicycle": scores[0], "motorcycle": scores[1]}
+                for key, scores in sorted(keyed_observations.items())
+            ],
+        }
+        if isinstance(rect, (tuple, list)) and len(rect) == 4:
+            context_audit["target_rect"] = [float(value) for value in rect]
+        self._bicycle_xframe_audit_this_frame.append(context_audit)
+        if decision_trace is not None:
+            decision_trace["audit"] = context_audit
+        if any(contextual_motorcycle_veto(
+            items, motorcycle_veto=self.bicycle_context_xframe_motor_veto,
+        ) for items in [competitive, *trail_by_frame.values()]):
+            context_audit.update(branch="veto", reason="motorcycle_source_veto")
+            # Every rescue branch uses the same recent target-matched motor
+            # veto. An absolute current score cannot erase a contradictory
+            # source frame that the cross-frame branch would have rejected.
             if self.bicycle_context_xframe_enabled:
                 self._audit_cross_frame_bicycle(track_id, frame_index, detector_confidence)
             self._consume_bicycle_context_passage(tid, frame_idx)
@@ -2336,6 +2434,7 @@ class PipelineWorker(threading.Thread):
             min_source_confidence=self.bicycle_context_min_source_conf,
             min_strongest=self.bicycle_context_min_strong,
         )
+        rescue_method = "absolute" if decision is not None else None
         if decision is None:
             decision = contextual_bicycle_weak_motor_decision(
                 observations,
@@ -2346,10 +2445,8 @@ class PipelineWorker(threading.Thread):
                 min_strongest=self.bicycle_context_weak_motor_min_strong,
             )
             if decision is not None:
-                self.state.bicycle_context_weak_motor_rescues += 1
+                rescue_method = "weak_motor"
 
-        hits, fused, strongest = self._refine_consensus.support(track_id, frame_index, "bicycle")
-        sources = self._refine_consensus.source_count(track_id, frame_index, "bicycle")
         if decision is None:
             decision = contextual_bicycle_competitive_decision(
                 competitive, detector_confidence=detector_confidence,
@@ -2362,7 +2459,7 @@ class PipelineWorker(threading.Thread):
                 temporal_hits=hits, temporal_fused=fused,
             )
             if decision is not None:
-                self.state.bicycle_context_competitive_rescues += 1
+                rescue_method = "competitive"
 
         if decision is None:
             decision = contextual_bicycle_near_margin_decision(
@@ -2375,12 +2472,12 @@ class PipelineWorker(threading.Thread):
                 fused_margin=self.bicycle_context_near_margin_fused_margin,
             )
             if decision is not None:
-                self.state.bicycle_context_near_margin_rescues += 1
+                rescue_method = "near_margin"
 
         if decision is None and self.bicycle_context_xframe_enabled:
             decision = self._audit_cross_frame_bicycle(track_id, frame_index, detector_confidence)
             if decision is not None:
-                self.state.bicycle_context_xframe_rescues += 1
+                rescue_method = "xframe"
 
         if decision is None:
             decision = contextual_bicycle_temporal_decision(
@@ -2392,18 +2489,42 @@ class PipelineWorker(threading.Thread):
                 min_combined=self.bicycle_context_temporal_combined,
             )
             if decision is not None:
-                self.state.bicycle_context_temporal_rescues += 1
+                rescue_method = "temporal"
         # Every geometry-proven crossing consumes its trail, including earlier
         # same-frame context rescues that did not enter the cross-frame branch.
         self._consume_bicycle_context_passage(track_id, frame_index)
         if decision is None:
+            if self._bicycle_xframe_audit_this_frame[-1] is not context_audit:
+                context_audit["reason"] = self._bicycle_xframe_audit_this_frame[-1]["reason"]
             return None
+        context_audit.update(
+            branch=rescue_method, reason="accepted", decision_accepted=True,
+            commit_status="accepted" if commit else "proposed",
+        )
+        if decision_trace is not None:
+            decision_trace["method"] = rescue_method
+        if commit:
+            self._commit_bicycle_context_rescue(tid, frame_idx, decision, rescue_method)
+        return decision
+
+    def _commit_bicycle_context_rescue(
+        self, track_id: int, frame_index: int, decision: tuple[str, float], method: str,
+        *, remember_override: bool = True,
+    ) -> None:
+        """Commit crossing-only semantics after the Human Guard accepts it."""
+        if decision[0] != "bicycle":
+            return
         tid = int(track_id)
+        if method in {"weak_motor", "competitive", "near_margin", "xframe", "temporal"}:
+            attribute = f"bicycle_context_{method}_rescues"
+            setattr(self.state, attribute, getattr(self.state, attribute) + 1)
         if tid not in self._bicycle_context_rescue_tracks:
             self._bicycle_context_rescue_tracks.add(tid)
             self.state.bicycle_context_rescues = len(self._bicycle_context_rescue_tracks)
-        self._class_refine_overrides[tid] = ("bicycle", float(decision[1]), int(frame_index))
-        return decision
+        if remember_override:
+            existing = self._class_refine_overrides.get(tid)
+            if existing is None or int(existing[2]) <= int(frame_index):
+                self._class_refine_overrides[tid] = ("bicycle", float(decision[1]), int(frame_index))
 
     @staticmethod
     def _draw_raw_detection(cv2, frame, rect, label: str, confidence: float) -> None:

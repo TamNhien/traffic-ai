@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import deque
 import os
 from dataclasses import dataclass, field
-from math import hypot
+from math import hypot, isfinite
 
 Point = tuple[float, float]
 
@@ -304,6 +304,17 @@ def observed_gate_crossing(
     return (left, right, crossing) if crossing is not None else None
 
 
+def observed_road_path_ok(
+    road_zone: RoadZone, history: list[_GateSample], start: _GateSample,
+    end: _GateSample, width: int, height: int, margin_ratio: float,
+) -> bool:
+    """Validate every measured anchor in the geometry's source-frame window."""
+    return all(
+        road_zone.contains_with_margin(item.point, width, height, margin_ratio)
+        for item in history if start.frame_index <= item.frame_index <= end.frame_index
+    )
+
+
 @dataclass(slots=True)
 class _TrackGateState:
     history: deque[_GateSample] = field(default_factory=lambda: deque(maxlen=48))
@@ -469,11 +480,19 @@ class VerifiedAnchorSpanRescuer:
         if pending.approach_span:
             self.approach_span_rescues = max(0, self.approach_span_rescues + delta)
 
-    def _road_ok(self, start: _GateSample, end: _GateSample, crossing: Point, width: int, height: int) -> tuple[bool, bool]:
+    def _road_ok(
+        self, start: _GateSample, end: _GateSample, crossing: Point, width: int, height: int,
+        *, corridor_start: _GateSample | None = None, corridor_end: _GateSample | None = None,
+    ) -> tuple[bool, bool]:
         if self.road_zone is None:
             return True, False
-        dx = end.point[0] - start.point[0]
-        dy = end.point[1] - start.point[1]
+        # The finite intersection and the road probes describe the same actual
+        # observed bracket. A stable endpoint chord may point outside the road
+        # when a curved measured trajectory crosses inside, or hide the reverse.
+        local_start = corridor_start if corridor_start is not None else start
+        local_end = corridor_end if corridor_end is not None else end
+        dx = local_end.point[0] - local_start.point[0]
+        dy = local_end.point[1] - local_start.point[1]
         length = max(hypot(dx, dy), 1e-6)
         ux, uy = dx / length, dy / length
         probe = max(3.0, min(width, height) * 0.018)
@@ -555,11 +574,12 @@ class VerifiedAnchorSpanRescuer:
             if observed_crossing is None:
                 continue
             left, right, crossing = observed_crossing
-            road_ok, road_edge = self._road_ok(start, end, crossing, width, height)
-            local_road_ok, local_road_edge = self._road_ok(left, right, crossing, width, height)
-            if not (road_ok and local_road_ok):
+            road_ok, road_edge = self._road_ok(
+                start, end, crossing, width, height, corridor_start=left, corridor_end=right,
+            )
+            if not road_ok:
                 continue
-            return start, crossing, crossing_frame_between(left, right, crossing), normal_ratio, side_depth, bool(road_edge or local_road_edge)
+            return start, crossing, crossing_frame_between(left, right, crossing), normal_ratio, side_depth, road_edge
         return None
 
     def update(
@@ -602,9 +622,16 @@ class VerifiedAnchorSpanRescuer:
                 # an alias switch before the final confirming sample.
                 self.rejected_validation += 1
                 state.pending = None
+                state.history = deque([sample], maxlen=64)
                 return None
             if age > self.post_confirm_max_gap_frames:
                 state.pending = None
+                # Expiry closes the original geometry window. Retaining its
+                # pre-side samples would reopen the very same old crossing with
+                # a newer end timestamp and bypass post_confirm_max_gap_frames.
+                state.history = deque([
+                    item for item in state.history if item.frame_index > pending.end.frame_index
+                ], maxlen=64)
             elif side == -pending.destination_side:
                 # V0.5.43 Post-Confirm Closure 8.6: one opposite-side sample can
                 # be box jitter immediately after a proven span.  Require a
@@ -678,7 +705,15 @@ class VerifiedAnchorSpanRescuer:
         normal_ratio = abs(sample.distance - previous.distance) / move_len
         jump_ratio = move_len / max(hypot(width, height), 1.0)
         side_depth_ratio = min(abs(sample.distance), abs(previous.distance)) / scale
-        road_ok, road_edge_rescue = self._road_ok(previous, sample, crossing, width, height)
+        road_ok, road_edge_rescue = self._road_ok(
+            previous, sample, crossing, width, height,
+            corridor_start=crossing_start, corridor_end=crossing_end,
+        )
+        if self.road_zone is not None:
+            road_ok = road_ok and observed_road_path_ok(
+                self.road_zone, list(state.history), previous, sample, width, height,
+                self.road_margin_ratio,
+            )
         approach_span = False
         crossing_frame = crossing_frame_between(crossing_start, crossing_end, crossing)
         if (
@@ -1189,13 +1224,20 @@ class HeavyVehicleCrossingRescuer(_CenterPassageRescuer):
             return None
 
         if self.road_zone is not None:
-            ux, uy = dx / move_len, dy / move_len
+            local_dx = crossing_end.point[0] - crossing_start.point[0]
+            local_dy = crossing_end.point[1] - crossing_start.point[1]
+            local_len = max(hypot(local_dx, local_dy), 1e-6)
+            ux, uy = local_dx / local_len, local_dy / local_len
             probe = max(3.0, scale * 0.018)
             before = (crossing[0] - ux * probe, crossing[1] - uy * probe)
             after = (crossing[0] + ux * probe, crossing[1] + uy * probe)
             centers_ok = (
                 self.road_zone.contains_with_margin(previous.point, frame_width, frame_height, self.road_margin_ratio)
                 and self.road_zone.contains_with_margin(center, frame_width, frame_height, self.road_margin_ratio)
+                and observed_road_path_ok(
+                    self.road_zone, list(state.history), previous, sample, frame_width, frame_height,
+                    self.road_margin_ratio,
+                )
             )
             corridor_ok = (
                 self.road_zone.contains(crossing, frame_width, frame_height)
@@ -1359,13 +1401,20 @@ class TwoWheelCenterCrossingRescuer(_CenterPassageRescuer):
             return None
 
         if self.road_zone is not None:
-            ux, uy = dx / move_len, dy / move_len
+            local_dx = crossing_end.point[0] - crossing_start.point[0]
+            local_dy = crossing_end.point[1] - crossing_start.point[1]
+            local_len = max(hypot(local_dx, local_dy), 1e-6)
+            ux, uy = local_dx / local_len, local_dy / local_len
             probe = max(3.0, scale * 0.015)
             before = (crossing[0] - ux * probe, crossing[1] - uy * probe)
             after = (crossing[0] + ux * probe, crossing[1] + uy * probe)
             centers_ok = (
                 self.road_zone.contains_with_margin(previous.point, frame_width, frame_height, self.road_margin_ratio)
                 and self.road_zone.contains_with_margin(center, frame_width, frame_height, self.road_margin_ratio)
+                and observed_road_path_ok(
+                    self.road_zone, list(state.history), previous, sample, frame_width, frame_height,
+                    self.road_margin_ratio,
+                )
             )
             corridor_ok = (
                 self.road_zone.contains(crossing, frame_width, frame_height)
@@ -1823,8 +1872,8 @@ class LineCrossingCounter:
                     return None
 
         if self.road_zone is not None:
-            move_x_zone = anchor[0] - previous.point[0]
-            move_y_zone = anchor[1] - previous.point[1]
+            move_x_zone = crossing_end.point[0] - crossing_start.point[0]
+            move_y_zone = crossing_end.point[1] - crossing_start.point[1]
             move_len_zone = max(hypot(move_x_zone, move_y_zone), 1e-6)
             ux, uy = move_x_zone / move_len_zone, move_y_zone / move_len_zone
             zone_probe_ratio = max(0.0, float(os.getenv("AI_ROAD_ZONE_PROBE_RATIO", "0.018")))
@@ -1840,6 +1889,12 @@ class LineCrossingCounter:
             anchors_ok = (
                 self.road_zone.contains_with_margin(previous.point, frame_width, frame_height, self.road_anchor_margin_ratio)
                 and self.road_zone.contains_with_margin(anchor, frame_width, frame_height, self.road_anchor_margin_ratio)
+                and (
+                    origin_candidate or observed_road_path_ok(
+                        self.road_zone, history, previous, sample, frame_width, frame_height,
+                        self.road_anchor_margin_ratio,
+                    )
+                )
             )
             corridor_ok = (
                 self.road_zone.contains(crossing, frame_width, frame_height)
@@ -1962,6 +2017,18 @@ class LineCrossingCounter:
         same_direction_blocked = direction in state.counted_directions
         cooldown_blocked = int(frame_index) - state.last_count_frame < self.crossing_cooldown_frames
         self._last_external_reject_reason.pop(tid, None)
+        if crossing_frame is not None:
+            source_crossing = float(crossing_frame)
+            prior_crossing = self._last_crossing_frame.get(tid)
+            if (
+                not isfinite(source_crossing) or source_crossing > int(frame_index)
+                or (prior_crossing is not None and source_crossing <= prior_crossing)
+            ):
+                # Current emission time is not proof of a new source passage.
+                # Delayed confirmation of older alias geometry cannot override
+                # the clock of a newer accepted finite crossing.
+                self._last_external_reject_reason[tid] = "stale-crossing-frame"
+                return False
         if int(frame_index) <= state.last_count_frame:
             # Verified geometry can justify a later passage during cooldown;
             # it cannot turn an older alias/lost-track handoff into a new source
@@ -2123,13 +2190,27 @@ class LineCrossingCounter:
             # the newer passage state instead of unioning IN and OUT forever.
             if src.last_count_frame > dst.last_count_frame:
                 dst.counted_directions = set(src.counted_directions)
-            elif src.last_count_frame == dst.last_count_frame and not dst.counted_directions:
-                dst.counted_directions = set(src.counted_directions)
+                dst.armed = src.armed
+                dst.max_abs_distance_since_count = src.max_abs_distance_since_count
+            elif src.last_count_frame == dst.last_count_frame:
+                if not dst.counted_directions:
+                    dst.counted_directions = set(src.counted_directions)
+                dst.armed = dst.armed and src.armed if dst.counted_directions else (dst.armed or src.armed)
+                dst.max_abs_distance_since_count = max(dst.max_abs_distance_since_count, src.max_abs_distance_since_count)
+            # Re-arm and cooldown excursion belong to the same latest accepted
+            # passage as direction/clock. An older unarmed alias cannot disarm a
+            # new rearmed traversal, or lend its old far-away travel to release
+            # the new traversal's cooldown.
             dst.last_count_frame = max(dst.last_count_frame, src.last_count_frame)
-            dst.armed = dst.armed and src.armed if dst.counted_directions else (dst.armed or src.armed)
+            if dst.counted_directions:
+                dst.history = deque([
+                    item for item in dst.history if item.frame_index >= dst.last_count_frame
+                ], maxlen=48)
+                dst.origin_history = deque([
+                    item for item in dst.origin_history if item.frame_index >= dst.last_count_frame
+                ], maxlen=20)
             dst.first_frame = min([value for value in (dst.first_frame, src.first_frame) if value is not None], default=None)
             dst.total_samples += src.total_samples
-            dst.max_abs_distance_since_count = max(dst.max_abs_distance_since_count, src.max_abs_distance_since_count)
             # Confirmation follows the merged observations, not whichever alias
             # happened to be the destination ID. Neutral observations preserve
             # the nonzero-side streak just as update() does.

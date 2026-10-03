@@ -209,3 +209,33 @@ def test_v0553_duplicate_audit_keeps_separate_nearby_vehicles_unmatched() -> Non
     assert diagnostic["near_matched_spatial_distance"] == 0.1
     assert result["matched"] == 1
     assert result["false_positives"] == 1
+
+
+def test_v0554_duplicate_audit_prefers_closest_physical_crossing_inside_radius() -> None:
+    ai = [
+        rich_item(601, 10.0, tracking_id=111, crossing_method="direct", crossing_x=0.53, crossing_y=0.5),
+        rich_item(602, 11.0, tracking_id=112, crossing_method="direct", crossing_x=0.502, crossing_y=0.5),
+        rich_item(603, 10.2, tracking_id=113, crossing_method="rescued", crossing_x=0.5, crossing_y=0.5),
+    ]
+    result = match_crossings([rich_item(81, 10.0), rich_item(82, 11.0)], ai, 0.75)
+    assert result["matched"] == 2
+    assert result["missed"] == 0
+    assert result["false_positives"] == 1
+    diagnostic = result["false_positive_items"][0]
+    assert diagnostic["ai_event_id"] == 603
+    assert diagnostic["near_matched_ai_event_id"] == 602
+    assert diagnostic["near_matched_time_delta"] == 0.8
+    assert diagnostic["near_matched_spatial_distance"] == 0.002
+
+
+def test_v0554_duplicate_audit_exact_tie_is_independent_of_candidate_order() -> None:
+    from app.benchmarking import _false_positive_diagnostics, _timed
+
+    earlier = _timed(rich_item(611, 20.0, tracking_id=121, crossing_method="direct", crossing_x=0.5, crossing_y=0.5))
+    later = _timed(rich_item(612, 20.0, tracking_id=122, crossing_method="direct", crossing_x=0.5, crossing_y=0.5))
+    extra = _timed(rich_item(613, 20.3, tracking_id=123, crossing_method="rescued", crossing_x=0.505, crossing_y=0.5))
+    matched = [{"ai_event_id": 611}, {"ai_event_id": 612}]
+    for candidates in ([earlier, later, extra], [extra, later, earlier]):
+        diagnostics, _, _ = _false_positive_diagnostics([extra], candidates, matched, 0.75)
+        assert diagnostics[0]["near_matched_ai_event_id"] == 611
+        assert diagnostics[0]["near_matched_spatial_distance"] == 0.005

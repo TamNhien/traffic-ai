@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict, deque
 from dataclasses import dataclass
-from math import hypot
+from math import hypot, isfinite
 
 Rect = tuple[float, float, float, float]
 VEHICLE_CLASSES = {"bicycle", "car", "motorcycle", "bus", "truck"}
@@ -184,7 +184,10 @@ def select_contextual_bicycle_refinement(
         min_evidence_coverage=0.12, max_center_distance_ratio=1.15,
         target_family="two-wheel",
     )
-    if strict is not None:
+    # The relaxed target matcher can accept a large overlapping box even when
+    # its center is far away. Context still has a hard local envelope: apply
+    # the caller's bound to the strict path as well as the envelope fallback.
+    if strict is not None and strict.center_distance_ratio <= float(max_center_distance_ratio):
         return strict
 
     tx1, ty1, tx2, ty2 = [float(v) for v in target]
@@ -254,7 +257,7 @@ def select_contextual_two_wheel_refinement(
         min_evidence_coverage=0.12, max_center_distance_ratio=1.15,
         target_family="two-wheel",
     )
-    if strict is not None:
+    if strict is not None and strict.center_distance_ratio <= float(max_center_distance_ratio):
         return strict
 
     tx1, ty1, tx2, ty2 = [float(v) for v in target]
@@ -681,9 +684,27 @@ class RefineEvidenceAccumulator:
     def update(self, track_id: int, frame_index: int, label: str, confidence: float, source: str = "refiner") -> None:
         if str(label) not in VEHICLE_CLASSES:
             return
-        self._samples[int(track_id)].append(
-            (int(frame_index), str(label), max(0.0, min(1.0, float(confidence))), str(source))
+        value = float(confidence)
+        if not isfinite(value) or value <= 0.0:
+            return
+        tid = int(track_id)
+        self._store_samples(tid, [
+            *self._samples.get(tid, ()),
+            (int(frame_index), str(label), min(1.0, value), str(source)),
+        ])
+
+    def _store_samples(self, track_id: int, samples: list[tuple[int, str, float, str]]) -> None:
+        # A retry or track rebind must not fill the bounded history with copies
+        # of one source-frame opinion and evict genuine temporal evidence.
+        unique: dict[tuple[int, str, str], float] = {}
+        for frame, label, confidence, source in samples:
+            key = (int(frame), str(label), str(source))
+            unique[key] = max(unique.get(key, 0.0), float(confidence))
+        ordered = sorted(
+            (frame, label, confidence, source)
+            for (frame, label, source), confidence in unique.items()
         )
+        self._samples[int(track_id)] = deque(ordered[-self.max_observations :], maxlen=self.max_observations)
 
     def support(self, track_id: int, frame_index: int, label: str) -> tuple[int, float, float]:
         """Return (distinct-frame hits, fused confidence, strongest single hit).
@@ -728,6 +749,71 @@ class RefineEvidenceAccumulator:
             sources.add(str(source))
         return len(sources)
 
+    def competitive_support(
+        self,
+        track_id: int,
+        frame_index: int,
+        label: str,
+        competing_label: str,
+        *,
+        min_source_win: float = 0.0,
+        competing_veto: float = 0.10,
+        include_current_frame: bool = True,
+    ) -> tuple[int, float, float, int]:
+        """Return temporal support that wins its target's class competition.
+
+        Ordinary refiner history can contain a bicycle from one model and a
+        stronger motorcycle from another on the same source frame. Those
+        frames cannot prove repeated bicycle agreement for context rescue.
+        Apply the existing motor veto before retaining winning frames, then
+        fuse only one positive opinion per distinct frame with the same decay
+        used by ``support``. Future and expired samples remain ineligible.
+        """
+        current = int(frame_index)
+        by_frame: dict[int, dict[str, dict[str, float]]] = {}
+        for observed_frame, observed_label, confidence, source in self._samples.get(int(track_id), ()):
+            age = current - int(observed_frame)
+            if age < 0 or age > self.history_frames or observed_label not in {str(label), str(competing_label)}:
+                continue
+            if age == 0 and not include_current_frame:
+                continue
+            frame = by_frame.setdefault(int(observed_frame), {})
+            sources = frame.setdefault(str(observed_label), {})
+            sources[str(source)] = max(sources.get(str(source), 0.0), float(confidence))
+
+        margin = max(0.0, float(min_source_win))
+        veto = max(0.0, float(competing_veto))
+        winning: dict[int, float] = {}
+        supporting_sources: set[str] = set()
+        for observed_frame, frame in by_frame.items():
+            sources = frame.get(str(label), {})
+            confidence = max(sources.values(), default=0.0)
+            competing_confidence = max(frame.get(str(competing_label), {}).values(), default=0.0)
+            if competing_confidence - confidence > veto:
+                return 0, 0.0, 0.0, 0
+            if confidence <= 0.0 or confidence <= competing_confidence or confidence < competing_confidence + margin:
+                continue
+            winning[observed_frame] = confidence * (0.992 ** (current - observed_frame))
+            supporting_sources.update(
+                source for source, value in sources.items()
+                if value > competing_confidence and value >= competing_confidence + margin
+            )
+        if not winning:
+            return 0, 0.0, 0.0, 0
+        miss_probability = 1.0
+        for confidence in winning.values():
+            miss_probability *= max(0.0, 1.0 - confidence)
+        return len(winning), 1.0 - miss_probability, max(winning.values()), len(supporting_sources)
+
+    def consume_through(self, track_id: int, frame_index: int) -> None:
+        """Consume completed-passage evidence while preserving newer samples."""
+        tid = int(track_id)
+        remaining = [sample for sample in self._samples.get(tid, ()) if sample[0] > int(frame_index)]
+        if remaining:
+            self._store_samples(tid, remaining)
+        else:
+            self._samples.pop(tid, None)
+
     def merge_track(self, source_track_id: int, target_track_id: int) -> None:
         source = int(source_track_id)
         target = int(target_track_id)
@@ -736,11 +822,7 @@ class RefineEvidenceAccumulator:
         source_samples = list(self._samples.pop(source, ()))
         if not source_samples:
             return
-        merged = list(self._samples.get(target, ())) + source_samples
-        merged.sort(key=lambda item: item[0])
-        bucket = deque(maxlen=self.max_observations)
-        bucket.extend(merged[-self.max_observations :])
-        self._samples[target] = bucket
+        self._store_samples(target, [*self._samples.get(target, ()), *source_samples])
 
     def minority_consensus(
         self,
