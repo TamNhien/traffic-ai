@@ -816,12 +816,13 @@ def _crossing_point_distance(payload: VehicleEventCreate, existing: VehicleEvent
 def _same_track_cycle_duplicate_reason(payload: VehicleEventCreate, existing: VehicleEvent | None) -> str | None:
     """Reject only geometrically implausible rapid re-crossings for one canonical track.
 
-    Passage semantics remain intact: a vehicle may cross again later.  The guard
-    applies only near the same point and inside a short source-video interval.
+    Passage semantics remain intact: a vehicle may cross again later. The guard
+    applies inside a short source-video interval, with spatial tails beyond it.
     Same-direction repeats cannot be a second traversal of the same finite line
     without an intervening opposite traversal (or a loop around an endpoint), so
-    a very-near repeat inside ~3 s is treated as track/gate jitter.  Opposite
-    direction keeps the legacy 2 s guard and gains a spatially-gated tail to 3 s.
+    a repeat inside 4 s is treated as track/gate jitter. Opposite direction uses
+    3 s with a close-point tail to 4 s; secondary repeats have a close-point tail
+    to 5 s. Source seconds take precedence over fixed frame-count fallbacks.
     """
     if existing is None:
         return None
@@ -840,26 +841,33 @@ def _same_track_cycle_duplicate_reason(payload: VehicleEventCreate, existing: Ve
     # without an intervening opposite traversal (or an implausibly fast loop
     # around an endpoint), so the short-window guard no longer depends on the
     # noisy box-derived crossing point. Genuine later passage cycles stay valid.
+    # Source seconds are independent of camera FPS and delivery time. Frames
+    # are a fallback only when the pair has no comparable source timestamps.
+    if time_delta is not None:
+        short_flip, close_flip = time_delta <= 3.0, time_delta <= 4.0
+        short_repeat, close_repeat = time_delta <= 4.0, time_delta <= 5.0
+    else:
+        short_flip = frame_delta is not None and frame_delta <= 75
+        close_flip = frame_delta is not None and frame_delta <= 100
+        short_repeat = frame_delta is not None and frame_delta <= 100
+        close_repeat = frame_delta is not None and frame_delta <= 125
     if not same_direction:
-        if (frame_delta is not None and frame_delta <= 75) or (time_delta is not None and time_delta <= 3.0):
+        if short_flip:
             return "same-track-direction-flip"
         extended_close = (
             distance is not None and distance <= 0.030
-            and ((frame_delta is not None and frame_delta <= 100) or (time_delta is not None and time_delta <= 4.0))
+            and close_flip
         )
         return "same-track-direction-flip" if extended_close else None
 
-    if (frame_delta is not None and frame_delta <= 100) or (time_delta is not None and time_delta <= 4.0):
+    if short_repeat:
         return "same-track-repeat-jitter"
     # Outside the physical short-cycle window, keep a narrow spatial tail for a
     # secondary rediscovery, but never restore lifetime uniqueness.
     if distance is not None and distance <= 0.020:
         method = str(payload.crossing_method or "")
         other_method = str(getattr(existing, "crossing_method", "") or "")
-        if {method, other_method} != {"direct"} and (
-            (frame_delta is not None and frame_delta <= 125)
-            or (time_delta is not None and time_delta <= 5.0)
-        ):
+        if {method, other_method} != {"direct"} and close_repeat:
             return "same-track-repeat-jitter"
     return None
 
@@ -877,23 +885,28 @@ def _same_track_delivery_retry(payload: VehicleEventCreate, existing: VehicleEve
 
     if existing is None:
         return False
-    comparable = False
-    if payload.source_frame_index is not None and existing.source_frame_index is not None:
-        comparable = True
-        if abs(int(payload.source_frame_index) - int(existing.source_frame_index)) <= 2:
-            return True
     if payload.source_time_seconds is not None and existing.source_time_seconds is not None:
-        comparable = True
-        if abs(float(payload.source_time_seconds) - float(existing.source_time_seconds)) <= 0.12:
-            return True
+        return abs(float(payload.source_time_seconds) - float(existing.source_time_seconds)) <= 0.12
+    if payload.source_frame_index is not None and existing.source_frame_index is not None:
+        return abs(int(payload.source_frame_index) - int(existing.source_frame_index)) <= 2
     if payload.detected_at is not None and existing.detected_at is not None:
-        comparable = True
         try:
-            if abs((payload.detected_at - existing.detected_at).total_seconds()) <= 0.25:
-                return True
+            return abs((payload.detected_at - existing.detected_at).total_seconds()) <= 0.25
         except TypeError:
-            pass
-    return not comparable
+            return False
+    return True
+
+
+def _same_track_source_neighbor(payload: VehicleEventCreate, candidates: list[VehicleEvent]) -> VehicleEvent | None:
+    """Find the adjacent source passage even when delivery order differs."""
+    if not candidates:
+        return None
+    for name in ("source_time_seconds", "source_frame_index"):
+        position = getattr(payload, name)
+        comparable = [other for other in candidates if position is not None and getattr(other, name) is not None]
+        if comparable:
+            return min(comparable, key=lambda other: abs(float(getattr(other, name)) - float(position)))
+    return candidates[0]
 
 
 @router.post("/internal/events", response_model=VehicleEventRead, status_code=201)
@@ -903,27 +916,27 @@ def internal_event(payload: VehicleEventCreate, response: Response, x_ai_token: 
     # Event delivery is retried by the AI service. V0.5.44 keeps retries
     # idempotent by source frame/time instead of treating one tracking ID and
     # direction as lifetime-unique. This preserves genuine later passage cycles.
-    existing = None
+    same_track_events = []
     if payload.session_id is not None and payload.tracking_id is not None:
-        existing = db.scalar(select(VehicleEvent).where(
+        same_track_events = list(db.scalars(select(VehicleEvent).where(
             VehicleEvent.session_id == payload.session_id,
             VehicleEvent.tracking_id == payload.tracking_id,
-            VehicleEvent.direction == payload.direction,
-        ).order_by(VehicleEvent.id.desc()))
-    if _same_track_delivery_retry(payload, existing):
-        response.headers["X-TrafficAI-Deduplicated"] = "1"
-        response.headers["X-TrafficAI-Dedup-Reason"] = "same-track-delivery-retry"
-        return existing
+        ).order_by(VehicleEvent.id.desc())).all())
+    # A late retry may refer to an older passage after a newer IN/OUT cycle
+    # has already been stored. Inspect this track's passage rows, rather than
+    # assuming the greatest database ID is the physical crossing being retried.
+    for existing in same_track_events:
+        if existing.direction == payload.direction and _same_track_delivery_retry(payload, existing):
+            response.headers["X-TrafficAI-Deduplicated"] = "1"
+            response.headers["X-TrafficAI-Dedup-Reason"] = "same-track-delivery-retry"
+            return existing
 
     # V0.5.45 False Positive Closure 9.1: keep genuine later passage cycles, but
     # close rapid same-track repeats/direction flips that occur at the same gate
     # point. This targets benchmark-proven jitter without restoring a lifetime
     # uniqueness rule for tracking_id.
-    if payload.session_id is not None and payload.tracking_id is not None:
-        recent_same_track = db.scalar(select(VehicleEvent).where(
-            VehicleEvent.session_id == payload.session_id,
-            VehicleEvent.tracking_id == payload.tracking_id,
-        ).order_by(VehicleEvent.id.desc()))
+    if same_track_events:
+        recent_same_track = _same_track_source_neighbor(payload, same_track_events)
         cycle_reason = _same_track_cycle_duplicate_reason(payload, recent_same_track)
         if cycle_reason is not None:
             response.headers["X-TrafficAI-Deduplicated"] = "1"

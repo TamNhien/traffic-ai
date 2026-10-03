@@ -218,3 +218,49 @@ def test_v0552_immediate_guard_reject_keeps_previous_center_direction_and_clock(
     assert counter._tracks[77].last_count_frame == 5
     assert worker._heavy_center_rescue_tracks == {77}
     assert worker.state.heavy_center_rescues == 1
+
+
+def test_v0553_delayed_human_guard_cannot_add_a_strike_from_older_pixels() -> None:
+    worker = _worker()
+    worker._human_guard_last_observation = {77: (104, "pending", object())}
+    worker._human_guard_policy = SimpleNamespace(status=lambda _tid: "pending")
+    calls = []
+    worker._verify_human_candidate = lambda *_args, **_kwargs: calls.append(1)
+
+    assert worker._observe_human_guard(
+        77, 100, object(), object(), "motorcycle", .30, "cpu", False, force=True,
+    ) == ("pending", None)
+    assert calls == []
+    assert worker._human_guard_last_observation[77][0] == 104
+
+
+def test_v0553_guard_rollback_refreshes_committed_span_and_override_telemetry() -> None:
+    from app.counting import CountingLine, LineCrossingCounter, VerifiedAnchorSpanRescuer
+
+    line = CountingLine(.1, .5, .9, .5)
+    counter = LineCrossingCounter(line, crossing_cooldown_frames=60)
+    span = VerifiedAnchorSpanRescuer(line)
+    worker = _worker()
+    worker._anchor_span_rescuer = span
+    before = span.capture_passage_state(77)
+    assert span.update(77, (50, 47), 100, 100, 10, commit=False) is None
+    candidate = span.update(77, (50, 53), 100, 100, 11, commit=False)
+    assert candidate is not None
+    direction, point = candidate
+    assert counter.register_external_crossing(
+        77, direction, 11, point, crossing_frame=span.crossing_frame_for(77), verified_anchor_span=True,
+    ) is True
+    span.mark_counted(77, direction, 11, commit_candidate=True)
+    worker._refresh_anchor_span_telemetry(counter)
+    assert worker.state.verified_anchor_span_rescues == 1
+
+    worker._rollback_guard_crossing(counter, 77, direction, before)
+
+    assert worker.state.verified_anchor_span_rescues == 0
+    assert worker.state.post_confirm_closures == 0
+    assert worker.state.anchor_span_immediate_overrides == 0
+    assert worker.state.anchor_span_lost_finalizations == 0
+    assert worker.state.anchor_span_same_direction_overrides == 0
+    assert worker.state.anchor_span_cooldown_overrides == 0
+    assert span.capture_passage_state(77) == before
+    assert counter.total_crossings == 0

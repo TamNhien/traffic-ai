@@ -165,3 +165,47 @@ def test_v0544_unmatched_review_links_near_gt_and_ai_without_changing_scores() -
     assert reverse["ground_truth_id"] == 401
     assert reverse["outside_scoring_window"] is True
     assert reverse["delta_seconds"] == -0.92
+
+
+def test_v0553_duplicate_audit_prefers_same_point_over_nearer_separate_lane() -> None:
+    ai = [
+        rich_item(501, 10.0, tracking_id=81, crossing_method="direct", crossing_x=0.2, crossing_y=0.5),
+        rich_item(502, 11.0, tracking_id=82, crossing_method="direct", crossing_x=0.6, crossing_y=0.5),
+        rich_item(503, 10.2, tracking_id=83, crossing_method="rescued", crossing_x=0.605, crossing_y=0.5),
+    ]
+    result = match_crossings([rich_item(51, 10.0), rich_item(52, 11.0)], ai, 0.75)
+    assert result["matched"] == 2
+    assert result["false_positives"] == 1
+    diagnostic = result["false_positive_items"][0]
+    assert diagnostic["ai_event_id"] == 503
+    assert diagnostic["reason"] == "spatial_duplicate_near_gt"
+    assert diagnostic["near_matched_ai_event_id"] == 502
+    assert diagnostic["near_matched_time_delta"] == 0.8
+    assert diagnostic["near_matched_spatial_distance"] == 0.005
+
+
+def test_v0553_duplicate_audit_does_not_accuse_opposite_direct_crossing() -> None:
+    ai = [
+        rich_item(511, 20.0, "in", tracking_id=91, crossing_method="direct", crossing_x=0.5, crossing_y=0.5),
+        rich_item(512, 20.3, "out", tracking_id=92, crossing_method="direct", crossing_x=0.5, crossing_y=0.5),
+    ]
+    result = match_crossings([rich_item(61, 20.0, "in")], ai, 0.75)
+    diagnostic = result["false_positive_items"][0]
+    assert result["matched"] == 1
+    assert result["false_positives"] == 1
+    assert diagnostic["reason"] == "direct_unmatched"
+    assert diagnostic["near_matched_ai_event_id"] is None
+
+
+def test_v0553_duplicate_audit_keeps_separate_nearby_vehicles_unmatched() -> None:
+    ai = [
+        rich_item(521, 30.0, tracking_id=101, crossing_method="direct", crossing_x=0.2, crossing_y=0.5),
+        rich_item(522, 30.3, tracking_id=102, crossing_method="rescued", crossing_x=0.3, crossing_y=0.5),
+    ]
+    result = match_crossings([rich_item(71, 30.0)], ai, 0.75)
+    diagnostic = result["false_positive_items"][0]
+    assert diagnostic["reason"] == "rescued_gap_unmatched"
+    assert diagnostic["near_matched_ai_event_id"] == 521
+    assert diagnostic["near_matched_spatial_distance"] == 0.1
+    assert result["matched"] == 1
+    assert result["false_positives"] == 1

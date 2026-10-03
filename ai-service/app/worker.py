@@ -25,6 +25,7 @@ from app.classification import (
     contextual_bicycle_competitive_decision,
     contextual_bicycle_near_margin_decision,
     contextual_bicycle_cross_frame_decision,
+    contextual_motorcycle_veto,
     prioritize_bicycle_xframe_candidates,
     select_contextual_bicycle_refinement,
     select_contextual_two_wheel_refinement,
@@ -479,6 +480,10 @@ class PipelineWorker(threading.Thread):
         cached = self._human_guard_last_observation.get(tid)
         if cached is not None and cached[0] == frame_idx:
             return cached[1], cached[2]
+        if cached is not None and cached[0] > frame_idx:
+            # A delayed caller must not turn older pixels into a fresh strike
+            # or replace the newest semantic observation.
+            return self._human_guard_policy.status(tid), None
 
         last_guard = self._human_guard_last_check.get(tid, -10_000)
         if not force and frame_idx - last_guard < self.human_guard_check_interval:
@@ -557,6 +562,20 @@ class PipelineWorker(threading.Thread):
             else:
                 heavy_rescue_tracks.discard(int(track_id))
             self.state.heavy_center_rescues = len(heavy_rescue_tracks)
+        self._refresh_anchor_span_telemetry(counter)
+
+    def _refresh_anchor_span_telemetry(self, counter: LineCrossingCounter) -> None:
+        rescuer = getattr(self, "_anchor_span_rescuer", None)
+        if rescuer is not None:
+            self.state.verified_anchor_span_rescues = rescuer.verified_anchor_span_rescues
+            self.state.post_confirm_closures = rescuer.post_confirm_closures
+            self.state.post_confirm_jitter_holds = rescuer.post_confirm_jitter_holds
+            self.state.road_edge_span_rescues = rescuer.road_edge_span_rescues
+            self.state.anchor_span_lost_finalizations = rescuer.lost_track_finalizations
+            self.state.anchor_span_immediate_overrides = rescuer.immediate_override_qualifications
+            self.state.anchor_span_immediate_rejections = rescuer.immediate_handoff_rejections
+        self.state.anchor_span_same_direction_overrides = getattr(counter, "verified_same_direction_overrides", 0)
+        self.state.anchor_span_cooldown_overrides = getattr(counter, "verified_cooldown_overrides", 0)
 
     def _drop_guard_crossing(self, counter: LineCrossingCounter, pending: _PendingGuardCrossing, *, expired: bool = False) -> None:
         self._rollback_guard_crossing(
@@ -672,6 +691,8 @@ class PipelineWorker(threading.Thread):
         if entry is None:
             return None
         label, confidence, observed_frame = entry
+        if int(frame_index) < int(observed_frame):
+            return None
         ttl = self.class_override_ttl_frames
         if str(label) == "bicycle":
             ttl = self.bicycle_override_ttl_frames
@@ -696,6 +717,11 @@ class PipelineWorker(threading.Thread):
         base_display_label: str,
         refined: tuple[str, float] | None,
     ) -> tuple[str, float] | None:
+        existing = self._class_refine_overrides.get(int(track_id))
+        if existing is not None and int(frame_index) < int(existing[2]):
+            # Delayed refinements cannot consume future evidence or replace a
+            # correction established by a newer source observation.
+            return None
         if refined is None:
             return self._class_override_for(track_id, frame_index, base_display_label)
         resolved_label, resolved_conf = self._class_policy.final_label(
@@ -785,6 +811,8 @@ class PipelineWorker(threading.Thread):
         cached = self._class_refine_last_observation.get(tid)
         if cached is not None and cached[0] == frame_idx:
             return cached[1], False
+        if cached is not None and cached[0] > frame_idx:
+            return None, False
 
         last = self._class_refine_last_check.get(tid, -100000)
         interval = self.class_refine_heavy_interval if vehicle_family(target_label) == "four-wheel" else self.class_refine_interval
@@ -1341,21 +1369,15 @@ class PipelineWorker(threading.Thread):
                         # for weak motorcycle tracks. Sampling never creates an
                         # event; it only stores target-matched evidence for a
                         # later geometry-proven crossing decision.
-                        if (
-                            self.bicycle_context_xframe_enabled
-                            and display_label == "motorcycle"
-                            and confidence_f <= self.bicycle_context_xframe_max_motor_conf
-                            and gate_distance_ratio <= self.bicycle_context_xframe_gate_distance_ratio
-                        ):
-                            last_scan = self._bicycle_context_xframe_last_scan.get(int(track_id), -100000)
-                            if frame_index - last_scan >= self.bicycle_context_xframe_interval:
-                                # V0.5.43: do not let ByteTrack iteration order spend
-                                # the single pre-scan slot on a farther motorcycle.
-                                # Scan the closest-to-gate weak candidate after all
-                                # tracks have been ranked for this source frame.
-                                bicycle_xframe_scan_candidates.append((
-                                    float(gate_distance_ratio), float(confidence_f), int(track_id), rect
-                                ))
+                        xframe_candidate = self._bicycle_xframe_scan_candidate(
+                            track_id, frame_index, display_label, confidence_f, anchor,
+                            line_a, line_b, width, height, rect, track_on_road=track_on_road,
+                        )
+                        if xframe_candidate is not None:
+                            # Rank distance to the visible segment. Objects beside
+                            # its infinite extension or outside the road must not
+                            # consume the single pre-crossing inference slot.
+                            bicycle_xframe_scan_candidates.append(xframe_candidate)
 
                         heavy_passage_state = heavy_rescuer.capture_passage_state(track_id) if heavy_rescuer is not None else None
                         two_wheel_passage_state = two_wheel_rescuer.capture_passage_state(track_id) if two_wheel_rescuer is not None else None
@@ -1378,6 +1400,7 @@ class PipelineWorker(threading.Thread):
 
                         span_passage_state = anchor_span_rescuer.capture_passage_state(track_id)
                         center_crossing_source = None
+                        anchor_crossing_source = False
                         direction = counter.update(
                             track_id, anchor, width, height, frame_index=frame_index,
                             origin_probe=(
@@ -1389,7 +1412,7 @@ class PipelineWorker(threading.Thread):
                         )
                         if direction is None:
                             span_candidate = anchor_span_rescuer.update(
-                                track_id, anchor, width, height, frame_index
+                                track_id, anchor, width, height, frame_index, commit=False
                             )
                             if span_candidate is not None:
                                 span_direction, span_point = span_candidate
@@ -1404,6 +1427,7 @@ class PipelineWorker(threading.Thread):
                                 if accepted_span:
                                     anchor_span_rescuer.consume_override_qualification(track_id)
                                     direction = span_direction
+                                    anchor_crossing_source = True
                         if direction is None and heavy_center_candidate is not None:
                             heavy_direction, heavy_crossing_point = heavy_center_candidate
                             heavy_crossing_frame = heavy_rescuer.crossing_frame_for(track_id) if heavy_rescuer is not None else None
@@ -1429,7 +1453,10 @@ class PipelineWorker(threading.Thread):
                             # Center candidates are provisional until the main
                             # gate accepts. Commit every secondary passage once
                             # here, then restore all three if Human Guard drops it.
-                            anchor_span_rescuer.mark_counted(track_id, direction, frame_index)
+                            anchor_span_rescuer.mark_counted(
+                                track_id, direction, frame_index,
+                                commit_candidate=anchor_crossing_source,
+                            )
                             if heavy_rescuer is not None:
                                 heavy_rescuer.mark_counted(
                                     track_id, direction, frame_index,
@@ -1452,15 +1479,7 @@ class PipelineWorker(threading.Thread):
                         self.state.adaptive_cooldown_releases = counter.adaptive_cooldown_releases
                         self.state.passage_cycle_rearms = counter.passage_cycle_rearms
                         self.state.same_direction_cycle_rejections = counter.rejected_same_direction_cycle
-                        self.state.verified_anchor_span_rescues = anchor_span_rescuer.verified_anchor_span_rescues
-                        self.state.post_confirm_closures = anchor_span_rescuer.post_confirm_closures
-                        self.state.post_confirm_jitter_holds = anchor_span_rescuer.post_confirm_jitter_holds
-                        self.state.road_edge_span_rescues = anchor_span_rescuer.road_edge_span_rescues
-                        self.state.anchor_span_same_direction_overrides = counter.verified_same_direction_overrides
-                        self.state.anchor_span_cooldown_overrides = counter.verified_cooldown_overrides
-                        self.state.anchor_span_lost_finalizations = anchor_span_rescuer.lost_track_finalizations
-                        self.state.anchor_span_immediate_overrides = anchor_span_rescuer.immediate_override_qualifications
-                        self.state.anchor_span_immediate_rejections = anchor_span_rescuer.immediate_handoff_rejections
+                        self._refresh_anchor_span_telemetry(counter)
                         guard_status = self._human_guard_policy.status(track_id)
                         overlay_label = "PERSON-GUARD" if guard_status == "rejected" else ("HUMAN?" if guard_status == "pending" else display_label)
                         self._draw_detection(
@@ -1545,6 +1564,11 @@ class PipelineWorker(threading.Thread):
                                 if context_bicycle is not None:
                                     event_label = "bicycle"
                                     policy_conf = max(policy_conf, float(context_bicycle[1]))
+
+                            # Every accepted geometry passage consumes its context,
+                            # including already-correct bicycle labels and crossings
+                            # that cannot spend another context slot this frame.
+                            self._consume_bicycle_context_passage(track_id, frame_index)
 
                             event_label = event_label if event_label in VEHICLE_CLASSES else "other"
                             if event_label == "truck":
@@ -1656,7 +1680,7 @@ class PipelineWorker(threading.Thread):
                     lost_label, lost_confidence, last_seen_frame = meta
                     if lost_label in TWO_WHEEL_LABELS and self._human_guard_policy.status(lost_track_id) in {"pending", "rejected"}:
                         continue
-                    lost_candidate = anchor_span_rescuer.finalize_lost(lost_track_id, frame_index)
+                    lost_candidate = anchor_span_rescuer.finalize_lost(lost_track_id, frame_index, commit=False)
                     if lost_candidate is None:
                         continue
                     lost_direction, lost_point = lost_candidate
@@ -1667,6 +1691,10 @@ class PipelineWorker(threading.Thread):
                     ):
                         continue
                     anchor_span_rescuer.consume_override_qualification(lost_track_id)
+                    anchor_span_rescuer.mark_counted(
+                        lost_track_id, lost_direction, last_seen_frame, commit_candidate=True,
+                    )
+                    self._consume_bicycle_context_passage(lost_track_id, frame_index)
                     if heavy_rescuer is not None:
                         heavy_rescuer.mark_counted(lost_track_id, lost_direction, last_seen_frame, commit_candidate=False)
                     if two_wheel_rescuer is not None:
@@ -1703,11 +1731,11 @@ class PipelineWorker(threading.Thread):
                         self.bicycle_context_xframe_max_per_frame,
                     )
                     for _distance, _confidence, scan_track_id, scan_rect in prioritized_xframe_scans:
-                        self._scan_bicycle_xframe_context(
+                        did_scan = self._scan_bicycle_xframe_context(
                             scan_track_id, frame_index, analysis_frame, scan_rect, device, use_half
                         )
-                        self._bicycle_context_xframe_last_scan[int(scan_track_id)] = int(frame_index)
-                        self.state.bicycle_context_xframe_priority_scans += 1
+                        if did_scan:
+                            self.state.bicycle_context_xframe_priority_scans += 1
 
                 # Fail closed only for guard transactions that never receive a
                 # second semantic observation (for example a track disappears
@@ -1719,6 +1747,7 @@ class PipelineWorker(threading.Thread):
                 ]
                 for pending in expired_guard_crossings:
                     self._drop_guard_crossing(counter, pending, expired=True)
+                self._refresh_anchor_span_telemetry(counter)
 
                 calibration_stats = self._flow_calibrator.stats()
                 self.state.calibration_samples = calibration_stats["sample_count"]
@@ -2117,6 +2146,38 @@ class PipelineWorker(threading.Thread):
         except Exception:
             return None
 
+    def _bicycle_xframe_scan_candidate(
+        self, track_id: int, frame_index: int, label: str, confidence: float,
+        anchor, line_a, line_b, width: int, height: int, rect, *, track_on_road: bool,
+    ) -> tuple[float, float, int, object] | None:
+        """Keep the bounded prescan slot near the finite road counting gate."""
+        if (
+            not self.bicycle_context_xframe_enabled
+            or not track_on_road
+            or label != "motorcycle"
+            or float(confidence) > self.bicycle_context_xframe_max_motor_conf
+        ):
+            return None
+        dx, dy = float(line_b[0] - line_a[0]), float(line_b[1] - line_a[1])
+        length_squared = dx * dx + dy * dy
+        if length_squared <= 1e-12:
+            return None
+        fraction = max(0.0, min(1.0, (
+            (float(anchor[0]) - line_a[0]) * dx
+            + (float(anchor[1]) - line_a[1]) * dy
+        ) / length_squared))
+        offset_x = float(anchor[0]) - (line_a[0] + fraction * dx)
+        offset_y = float(anchor[1]) - (line_a[1] + fraction * dy)
+        distance = (offset_x * offset_x + offset_y * offset_y) ** .5 / max(1.0, min(width, height))
+        if distance > self.bicycle_context_xframe_gate_distance_ratio:
+            return None
+        tid, frame_idx = int(track_id), int(frame_index)
+        last_scan = self._bicycle_context_xframe_last_scan.get(tid, -100000)
+        last_consumed = self._bicycle_context_xframe_last_consumed.get(tid, -100000)
+        if frame_idx <= last_consumed or frame_idx - last_scan < self.bicycle_context_xframe_interval:
+            return None
+        return float(distance), float(confidence), tid, rect
+
     def _observe_bicycle_context(
         self, track_id: int, frame_index: int, frame, rect, device, use_half: bool,
     ) -> list[tuple[str, float, float]]:
@@ -2125,6 +2186,8 @@ class PipelineWorker(threading.Thread):
         cached = self._bicycle_context_last_observation.get(tid)
         if cached is not None and cached[0] == frame_idx:
             return list(cached[1])
+        if cached is not None and cached[0] > frame_idx:
+            return []
         observations: list[tuple[str, float, float]] = []
         for source, model, ids in (
             ("domain", self._refiner_model, self._refine_ids),
@@ -2142,6 +2205,11 @@ class PipelineWorker(threading.Thread):
         self, track_id: int, frame_index: int, observations: list[tuple[str, float, float]],
     ) -> None:
         tid, frame_idx = int(track_id), int(frame_index)
+        if self._bicycle_context_xframe_last_consumed.get(tid, -100000) >= frame_idx:
+            return
+        if any(item[0] > frame_idx for item in self._bicycle_context_xframe_trail.get(tid, [])):
+            # Preserve the newest trail if a delayed caller arrives out of order.
+            return
         cutoff = frame_idx - self.bicycle_context_xframe_history
         # Two callers on one source frame must never create extra evidence.
         keyed = {
@@ -2153,17 +2221,31 @@ class PipelineWorker(threading.Thread):
             keyed[(frame_idx, str(source))] = (frame_idx, str(source), float(bike), float(moto))
         self._bicycle_context_xframe_trail[tid] = sorted(keyed.values(), key=lambda item: (item[0], item[1]))[-24:]
 
+    def _consume_bicycle_context_passage(self, track_id: int, frame_index: int) -> None:
+        tid = int(track_id)
+        self._bicycle_context_xframe_trail.pop(tid, None)
+        self._bicycle_context_xframe_last_consumed[tid] = max(
+            int(frame_index), self._bicycle_context_xframe_last_consumed.get(tid, -100000),
+        )
+
     def _scan_bicycle_xframe_context(
         self, track_id: int, frame_index: int, frame, rect, device, use_half: bool,
-    ) -> None:
+    ) -> bool:
         tid = int(track_id)
-        if self._bicycle_context_xframe_last_consumed.get(tid) == int(frame_index):
+        if self._bicycle_context_xframe_last_consumed.get(tid, -100000) >= int(frame_index):
             # The crossing already sampled and consumed this source frame. Do
             # not seed the next passage with its evidence or repeat inference.
-            return
+            return False
+        if self._bicycle_context_xframe_last_scan.get(tid, -100000) >= int(frame_index):
+            return False
+        cached = self._bicycle_context_last_observation.get(tid)
+        if cached is not None and cached[0] > int(frame_index):
+            return False
+        self._bicycle_context_xframe_last_scan[tid] = int(frame_index)
         self.state.bicycle_context_xframe_scans += 1
         observations = self._observe_bicycle_context(track_id, frame_index, frame, rect, device, use_half)
         self._record_bicycle_xframe_observations(track_id, frame_index, observations)
+        return True
 
     def _audit_cross_frame_bicycle(
         self, track_id: int, frame_index: int, detector_confidence: float,
@@ -2220,6 +2302,12 @@ class PipelineWorker(threading.Thread):
         """
         if not self.bicycle_context_rescue_enabled:
             return None
+        tid, frame_idx = int(track_id), int(frame_index)
+        cached = self._bicycle_context_last_observation.get(tid)
+        if self._bicycle_context_xframe_last_consumed.get(tid, -100000) >= frame_idx:
+            return None
+        if cached is not None and cached[0] > frame_idx:
+            return None
         self.state.bicycle_context_checks += 1
         competitive = self._observe_bicycle_context(track_id, frame_index, frame, rect, device, use_half)
         observations = [
@@ -2230,6 +2318,16 @@ class PipelineWorker(threading.Thread):
             # Include evidence already inferred on the crossing frame before
             # deciding. A late scan can no longer strand the second source.
             self._record_bicycle_xframe_observations(track_id, frame_index, competitive)
+
+        if contextual_motorcycle_veto(
+            competitive, motorcycle_veto=self.bicycle_context_xframe_motor_veto,
+        ):
+            # Strong absolute bicycle scores cannot bypass a target-matched
+            # motorcycle lead from either independent verifier.
+            if self.bicycle_context_xframe_enabled:
+                self._audit_cross_frame_bicycle(track_id, frame_index, detector_confidence)
+            self._consume_bicycle_context_passage(tid, frame_idx)
+            return None
 
         decision = contextual_bicycle_decision(
             observations,
@@ -2297,8 +2395,7 @@ class PipelineWorker(threading.Thread):
                 self.state.bicycle_context_temporal_rescues += 1
         # Every geometry-proven crossing consumes its trail, including earlier
         # same-frame context rescues that did not enter the cross-frame branch.
-        self._bicycle_context_xframe_trail.pop(int(track_id), None)
-        self._bicycle_context_xframe_last_consumed[int(track_id)] = int(frame_index)
+        self._consume_bicycle_context_passage(track_id, frame_index)
         if decision is None:
             return None
         tid = int(track_id)

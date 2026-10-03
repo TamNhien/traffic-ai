@@ -286,9 +286,17 @@ def observed_gate_crossing(
         item for item in history if start.frame_index < item.frame_index < end.frame_index
     ] + [end]
     bracket = None
+    last_nonzero = start
     for left, right in zip(window, window[1:]):
-        if left.distance * right.distance <= 0.0 and left.distance != right.distance:
+        if right.distance == 0.0:
+            continue
+        # A return to the line followed by motion back to the same side is a
+        # touch, not a later crossing. In particular, a post-side zero-distance
+        # box sample outside an endpoint must not erase the genuine interior
+        # bracket or change its source time.
+        if last_nonzero.distance * right.distance < 0.0:
             bracket = left, right
+        last_nonzero = right
     if bracket is None:
         return None
     left, right = bracket
@@ -351,6 +359,13 @@ class _AnchorSpanState:
     pending: _AnchorSpanPending | None = None
     counted_directions: set[str] = field(default_factory=set)
     last_count_frame: int = -10_000
+
+
+@dataclass(slots=True)
+class _AnchorSpanProposal:
+    pending: _AnchorSpanPending
+    frame_index: int
+    kind: str
 
 
 class VerifiedAnchorSpanRescuer:
@@ -423,6 +438,36 @@ class VerifiedAnchorSpanRescuer:
         self._last_crossing_frame: dict[int, float] = {}
         self._override_qualified: set[int] = set()
         self._immediate_candidates: set[int] = set()
+        self._span_proposals: dict[int, _AnchorSpanProposal] = {}
+        self._committed_proposals: dict[int, _AnchorSpanProposal] = {}
+
+    def _propose_span(
+        self, track_id: int, pending: _AnchorSpanPending, frame_index: int, kind: str,
+    ) -> tuple[str, Point]:
+        self._span_proposals[track_id] = _AnchorSpanProposal(pending, int(frame_index), kind)
+        self._immediate_candidates.discard(track_id)
+        self._override_qualified.discard(track_id)
+        if kind == "immediate":
+            self._immediate_candidates.add(track_id)
+        else:
+            self._override_qualified.add(track_id)
+        return pending.direction, pending.crossing
+
+    def _account_span_proposal(self, proposal: _AnchorSpanProposal, delta: int) -> None:
+        pending = proposal.pending
+        self.verified_anchor_span_rescues = max(0, self.verified_anchor_span_rescues + delta)
+        if proposal.kind == "post-confirm":
+            self.post_confirm_closures = max(0, self.post_confirm_closures + delta)
+        elif proposal.kind == "lost":
+            self.lost_track_finalizations = max(0, self.lost_track_finalizations + delta)
+        elif proposal.kind == "immediate":
+            self.immediate_override_qualifications = max(0, self.immediate_override_qualifications + delta)
+        if pending.road_edge_rescue:
+            self.road_edge_span_rescues = max(0, self.road_edge_span_rescues + delta)
+        if pending.same_direction_candidate:
+            self.same_direction_overrides = max(0, self.same_direction_overrides + delta)
+        if pending.approach_span:
+            self.approach_span_rescues = max(0, self.approach_span_rescues + delta)
 
     def _road_ok(self, start: _GateSample, end: _GateSample, crossing: Point, width: int, height: int) -> tuple[bool, bool]:
         if self.road_zone is None:
@@ -504,16 +549,12 @@ class VerifiedAnchorSpanRescuer:
                 for item in window
             ):
                 continue
-            bracket = None
-            for left, right in zip(window, window[1:]):
-                if left.distance * right.distance <= 0.0 and left.distance != right.distance:
-                    bracket = left, right
-            if bracket is None:
+            observed_crossing = observed_gate_crossing(
+                window, start, end, a, b, segment_margin=self.segment_margin,
+            )
+            if observed_crossing is None:
                 continue
-            left, right = bracket
-            crossing = segment_crossing_point(left.point, right.point, a, b, segment_margin=self.segment_margin)
-            if crossing is None:
-                continue
+            left, right, crossing = observed_crossing
             road_ok, road_edge = self._road_ok(start, end, crossing, width, height)
             local_road_ok, local_road_edge = self._road_ok(left, right, crossing, width, height)
             if not (road_ok and local_road_ok):
@@ -521,7 +562,10 @@ class VerifiedAnchorSpanRescuer:
             return start, crossing, crossing_frame_between(left, right, crossing), normal_ratio, side_depth, bool(road_edge or local_road_edge)
         return None
 
-    def update(self, track_id: int, anchor: Point, width: int, height: int, frame_index: int) -> tuple[str, Point] | None:
+    def update(
+        self, track_id: int, anchor: Point, width: int, height: int, frame_index: int,
+        *, commit: bool = True,
+    ) -> tuple[str, Point] | None:
         if not self.enabled:
             return None
         tid = int(track_id)
@@ -536,6 +580,9 @@ class VerifiedAnchorSpanRescuer:
             # Canonical alias fusion can deliver the same source frame twice.
             # It supplies no distinct post-side evidence for an override.
             return None
+        self._span_proposals.pop(tid, None)
+        self._override_qualified.discard(tid)
+        self._immediate_candidates.discard(tid)
         last_sample = state.history[-1] if state.history else None
         state.history.append(sample)
 
@@ -577,6 +624,8 @@ class VerifiedAnchorSpanRescuer:
                 pending.confirmations += 1
                 if pending.confirmations >= self.post_confirm_samples:
                     if pending.direction not in state.counted_directions or pending.same_direction_candidate:
+                        if not commit:
+                            return self._propose_span(tid, pending, sample.frame_index, "post-confirm")
                         state.counted_directions = {pending.direction}
                         state.pending = None
                         self.verified_anchor_span_rescues += 1
@@ -671,6 +720,8 @@ class VerifiedAnchorSpanRescuer:
                 road_edge_rescue=road_edge_rescue, normal_ratio=normal_ratio,
                 side_depth_ratio=side_depth_ratio, same_direction_candidate=False,
             )
+            if not commit:
+                return self._propose_span(tid, state.pending, sample.frame_index, "immediate")
             self._immediate_candidates.add(tid)
             # Keep legacy rescuer-level telemetry semantics: a returned immediate
             # candidate counts as a rescue at this layer. If the primary hand-off
@@ -693,7 +744,9 @@ class VerifiedAnchorSpanRescuer:
         )
         return None
 
-    def finalize_lost(self, track_id: int, frame_index: int) -> tuple[str, Point] | None:
+    def finalize_lost(
+        self, track_id: int, frame_index: int, *, commit: bool = True,
+    ) -> tuple[str, Point] | None:
         """Close only a geometry-proven span when the tracker disappears.
 
         V0.5.47 never invents a crossing from disappearance alone.  A pending
@@ -725,6 +778,8 @@ class VerifiedAnchorSpanRescuer:
             return None
         if pending.side_depth_ratio < self.lost_finalize_min_side_distance_ratio:
             return None
+        if not commit:
+            return self._propose_span(tid, pending, pending.end.frame_index, "lost")
         state.pending = None
         state.counted_directions = {pending.direction}
         state.last_count_frame = pending.end.frame_index
@@ -749,6 +804,13 @@ class VerifiedAnchorSpanRescuer:
         if tid not in self._immediate_candidates:
             return
         self._immediate_candidates.discard(tid)
+        if tid in self._span_proposals:
+            # Proposed spans have not spent identity or rescue telemetry. A
+            # rejected primary handoff keeps the geometry available for a later
+            # observed confirmation. Accepted telemetry commits in mark_counted.
+            if not accepted:
+                self.immediate_handoff_rejections += 1
+            return
         if accepted:
             # This is an ordinary primary-gate acceptance now, not an override.
             self.immediate_override_qualifications += 1
@@ -774,18 +836,23 @@ class VerifiedAnchorSpanRescuer:
         self.cooldown_overrides += 1
 
     def crossing_frame_for(self, track_id: int) -> float | None:
-        return self._last_crossing_frame.get(int(track_id))
+        tid = int(track_id)
+        candidate = self._span_proposals.get(tid)
+        return candidate.pending.crossing_frame if candidate is not None else self._last_crossing_frame.get(tid)
 
-    def capture_passage_state(self, track_id: int) -> tuple[frozenset[str], int, float | None]:
+    def capture_passage_state(self, track_id: int) -> tuple[frozenset[str], int, float | None, _AnchorSpanProposal | None]:
         """Capture only accepted identity/clock for a downstream guard check."""
         tid = int(track_id)
         state = self._tracks.get(tid)
         if state is None:
-            return frozenset(), -10_000, None
-        return frozenset(state.counted_directions), state.last_count_frame, self._last_crossing_frame.get(tid)
+            return frozenset(), -10_000, None, None
+        return (
+            frozenset(state.counted_directions), state.last_count_frame,
+            self._last_crossing_frame.get(tid), self._committed_proposals.get(tid),
+        )
 
     def restore_passage_state(
-        self, track_id: int, snapshot: tuple[frozenset[str], int, float | None],
+        self, track_id: int, snapshot: tuple[frozenset[str], int, float | None, _AnchorSpanProposal | None],
     ) -> None:
         """Roll back identity and discard geometry rejected by a semantic guard.
 
@@ -793,7 +860,12 @@ class VerifiedAnchorSpanRescuer:
         re-offer it. New samples must establish a fresh finite crossing instead.
         """
         tid = int(track_id)
-        directions, last_count_frame, crossing_frame = snapshot
+        directions, last_count_frame, crossing_frame, prior_proposal = snapshot
+        current_proposal = self._committed_proposals.pop(tid, None)
+        if current_proposal is not None and current_proposal is not prior_proposal:
+            self._account_span_proposal(current_proposal, -1)
+        if prior_proposal is not None:
+            self._committed_proposals[tid] = prior_proposal
         state = self._tracks.setdefault(tid, _AnchorSpanState())
         state.counted_directions = set(directions)
         state.last_count_frame = int(last_count_frame)
@@ -801,19 +873,41 @@ class VerifiedAnchorSpanRescuer:
         state.history.clear()
         self._override_qualified.discard(tid)
         self._immediate_candidates.discard(tid)
+        self._span_proposals.pop(tid, None)
         if crossing_frame is None:
             self._last_crossing_frame.pop(tid, None)
         else:
             self._last_crossing_frame[tid] = crossing_frame
 
-    def mark_counted(self, track_id: int, direction: str, frame_index: int | None = None) -> None:
-        state = self._tracks.setdefault(int(track_id), _AnchorSpanState())
+    def mark_counted(
+        self, track_id: int, direction: str, frame_index: int | None = None,
+        *, commit_candidate: bool = True,
+    ) -> None:
+        tid = int(track_id)
+        state = self._tracks.setdefault(tid, _AnchorSpanState())
+        candidate = self._span_proposals.pop(tid, None)
+        clock = state.last_count_frame if frame_index is None else int(frame_index)
+        if commit_candidate and candidate is not None and candidate.pending.direction == direction:
+            self._account_span_proposal(candidate, 1)
+            self._last_crossing_frame[tid] = candidate.pending.crossing_frame
+            self._committed_proposals[tid] = candidate
+        elif clock != state.last_count_frame or state.counted_directions != {str(direction)}:
+            self._committed_proposals.pop(tid, None)
         state.counted_directions = {str(direction)}
         state.pending = None
         if frame_index is not None:
             state.last_count_frame = max(state.last_count_frame, int(frame_index))
         self._override_qualified.discard(int(track_id))
         self._immediate_candidates.discard(int(track_id))
+        # Accepted geometry belongs to the completed passage. Keeping the
+        # opposite-side tail allows a new alias or a long configured history
+        # window to re-propose the same physical span after its cooldown.
+        if state.history and (
+            frame_index is None or state.history[-1].frame_index >= int(frame_index)
+        ):
+            state.history = deque([state.history[-1]], maxlen=64)
+        else:
+            state.history.clear()
 
     def merge_track(self, source_track_id: int, target_track_id: int) -> None:
         source, target = int(source_track_id), int(target_track_id)
@@ -823,6 +917,7 @@ class VerifiedAnchorSpanRescuer:
         if src is None:
             return
         dst = self._tracks.get(target)
+        source_is_latest = dst is None or src.last_count_frame > dst.last_count_frame
         if dst is None:
             self._tracks[target] = src
         else:
@@ -851,11 +946,19 @@ class VerifiedAnchorSpanRescuer:
         self._override_qualified.discard(target)
         self._immediate_candidates.discard(source)
         self._immediate_candidates.discard(target)
+        self._span_proposals.pop(source, None)
+        self._span_proposals.pop(target, None)
+        source_proposal = self._committed_proposals.pop(source, None)
+        if source_is_latest:
+            self._committed_proposals.pop(target, None)
+        if source_is_latest and source_proposal is not None:
+            self._committed_proposals[target] = source_proposal
         source_crossing = self._last_crossing_frame.pop(source, None)
-        if source_crossing is not None:
-            self._last_crossing_frame[target] = max(
-                source_crossing, self._last_crossing_frame.get(target, source_crossing)
-            )
+        if source_is_latest:
+            if source_crossing is None:
+                self._last_crossing_frame.pop(target, None)
+            else:
+                self._last_crossing_frame[target] = source_crossing
 
 
 @dataclass(slots=True)
@@ -1859,6 +1962,12 @@ class LineCrossingCounter:
         same_direction_blocked = direction in state.counted_directions
         cooldown_blocked = int(frame_index) - state.last_count_frame < self.crossing_cooldown_frames
         self._last_external_reject_reason.pop(tid, None)
+        if int(frame_index) <= state.last_count_frame:
+            # Verified geometry can justify a later passage during cooldown;
+            # it cannot turn an older alias/lost-track handoff into a new source
+            # event or rewind the accepted passage clock.
+            self._last_external_reject_reason[tid] = "stale-source-frame"
+            return False
         if same_direction_blocked and not verified_anchor_span:
             self.rejected_same_direction_cycle += 1
             self._last_external_reject_reason[tid] = "same-direction"

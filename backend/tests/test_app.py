@@ -20,7 +20,7 @@ def test_root_metadata() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["name"] == "Traffic AI"
-    assert payload["version"] == "0.5.52"
+    assert payload["version"] == "0.5.53"
     assert payload["docs"] == "/docs"
     assert payload["health"] == "/api/health"
 
@@ -158,7 +158,7 @@ def test_benchmark_clone_compatibility_rejects_different_line() -> None:
 
 
 def test_backend_version_metadata() -> None:
-    assert app.version == "0.5.52"
+    assert app.version == "0.5.53"
 
 
 def test_v0531_startup_crossing_signature_guard_is_narrow() -> None:
@@ -179,7 +179,7 @@ def test_v0533_ground_truth_mark_update_schema() -> None:
 
 
 def test_v0533_version() -> None:
-    assert app.version == "0.5.52"
+    assert app.version == "0.5.53"
 
 
 def test_v0533_ground_truth_mark_update_keeps_timecode() -> None:
@@ -611,3 +611,146 @@ def test_v0551_heavy_signature_preserves_same_class_and_separate_four_wheel_vehi
         assert response.headers["X-TrafficAI-Deduplicated"] == "0"
         assert db.scalar(select(func.count()).select_from(VehicleEvent)) == 3
         assert db.get(CountingSession, 1).total_vehicles == 3
+
+
+def test_v0553_delivery_retry_prefers_source_seconds_over_frames_and_wall_clock() -> None:
+    from datetime import datetime, timedelta, timezone
+    from types import SimpleNamespace
+    from app.api.routes import _same_track_delivery_retry
+    from app.schemas.event import VehicleEventCreate
+
+    delivered = datetime(2026, 10, 3, tzinfo=timezone.utc)
+    existing = SimpleNamespace(source_time_seconds=4.0, source_frame_index=100, detected_at=delivered)
+    later = VehicleEventCreate(
+        camera_id=1, session_id=9, tracking_id=77,
+        vehicle_type="motorcycle", direction="in", confidence=0.9,
+        source_time_seconds=14.0, source_frame_index=102,
+        detected_at=delivered + timedelta(seconds=0.1),
+    )
+    retry = later.model_copy(update={"source_time_seconds": 4.08, "source_frame_index": 400})
+    assert _same_track_delivery_retry(later, existing) is False
+    assert _same_track_delivery_retry(retry, existing) is True
+
+
+def test_v0553_delivery_retry_uses_frames_before_delivery_clock_fallback() -> None:
+    from datetime import datetime, timedelta, timezone
+    from types import SimpleNamespace
+    from app.api.routes import _same_track_delivery_retry
+    from app.schemas.event import VehicleEventCreate
+
+    delivered = datetime(2026, 10, 3, tzinfo=timezone.utc)
+    existing = SimpleNamespace(source_time_seconds=None, source_frame_index=100, detected_at=delivered)
+    later = VehicleEventCreate(
+        camera_id=1, session_id=9, tracking_id=77,
+        vehicle_type="motorcycle", direction="in", confidence=0.9,
+        source_frame_index=400, detected_at=delivered + timedelta(seconds=0.1),
+    )
+    retry = later.model_copy(update={"source_frame_index": 102, "detected_at": delivered + timedelta(seconds=10)})
+    assert _same_track_delivery_retry(later, existing) is False
+    assert _same_track_delivery_retry(retry, existing) is True
+    legacy = SimpleNamespace(source_time_seconds=None, source_frame_index=None, detected_at=delivered)
+    assert _same_track_delivery_retry(later.model_copy(update={"source_frame_index": None}), legacy) is True
+
+
+def test_v0553_cycle_guard_preserves_low_fps_passages_with_source_seconds() -> None:
+    from types import SimpleNamespace
+    from app.api.routes import _same_track_cycle_duplicate_reason
+    from app.schemas.event import VehicleEventCreate
+
+    existing = SimpleNamespace(
+        source_frame_index=100, source_time_seconds=4.0,
+        crossing_x=0.5, crossing_y=0.5, direction="in", crossing_method="direct",
+    )
+    passage = VehicleEventCreate(
+        camera_id=1, session_id=9, tracking_id=77,
+        vehicle_type="motorcycle", direction="out", confidence=0.9,
+        source_frame_index=160, source_time_seconds=10.0,
+        crossing_x=0.5, crossing_y=0.5, crossing_method="rescued",
+    )
+    assert _same_track_cycle_duplicate_reason(passage, existing) is None
+    assert _same_track_cycle_duplicate_reason(passage.model_copy(update={"direction": "in"}), existing) is None
+    # When the source clock is unavailable, the historical frame guard remains.
+    assert _same_track_cycle_duplicate_reason(passage.model_copy(update={"source_time_seconds": None}), existing) == "same-track-direction-flip"
+
+
+def test_v0553_same_track_neighbor_uses_source_order_not_delivery_id() -> None:
+    from types import SimpleNamespace
+    from app.api.routes import _same_track_source_neighbor, _same_track_cycle_duplicate_reason
+    from app.schemas.event import VehicleEventCreate
+
+    earlier = SimpleNamespace(
+        id=1, source_time_seconds=10.0, source_frame_index=251,
+        crossing_x=0.5, crossing_y=0.5, direction="in", crossing_method="direct",
+    )
+    later = SimpleNamespace(
+        id=2, source_time_seconds=30.0, source_frame_index=751,
+        crossing_x=0.5, crossing_y=0.5, direction="out", crossing_method="direct",
+    )
+    payload = VehicleEventCreate(
+        camera_id=1, session_id=9, tracking_id=77,
+        vehicle_type="motorcycle", direction="in", confidence=0.9,
+        source_time_seconds=10.4, source_frame_index=751,
+        crossing_x=0.5, crossing_y=0.5, crossing_method="direct",
+    )
+    assert _same_track_source_neighbor(payload, [later, earlier]) is earlier
+    assert _same_track_cycle_duplicate_reason(payload, earlier) == "same-track-repeat-jitter"
+    assert _same_track_source_neighbor(payload.model_copy(update={"source_time_seconds": None}), [later, earlier]) is later
+    assert _same_track_source_neighbor(payload.model_copy(update={"source_time_seconds": None, "source_frame_index": None}), [later, earlier]) is later
+    assert _same_track_source_neighbor(payload, []) is None
+
+
+def test_v0553_late_same_track_retry_preserves_completed_in_out_in_cycle() -> None:
+    from sqlalchemy import func, select
+    from app.models.all_models import CountingSession, VehicleCount, VehicleEvent
+
+    with _dedup_event_database() as db:
+        first, _ = _submit_dedup_event(db)
+        reverse, response = _submit_dedup_event(db, direction="out", source_time_seconds=16.0, source_frame_index=401)
+        assert response.headers["X-TrafficAI-Deduplicated"] == "0"
+        second_in, response = _submit_dedup_event(db, source_time_seconds=22.0, source_frame_index=551)
+        assert response.headers["X-TrafficAI-Deduplicated"] == "0"
+        retried, response = _submit_dedup_event(db)
+        assert retried.id == first.id
+        assert response.headers["X-TrafficAI-Dedup-Reason"] == "same-track-delivery-retry"
+        assert len({first.id, reverse.id, second_in.id}) == 3
+        assert db.scalar(select(func.count()).select_from(VehicleEvent)) == 3
+        assert db.get(CountingSession, 1).total_vehicles == 3
+        assert db.scalar(select(func.sum(VehicleCount.count))) == 3
+
+
+def test_v0553_low_fps_cycle_does_not_merge_passages_delivered_together() -> None:
+    from datetime import datetime, timedelta, timezone
+    from sqlalchemy import func, select
+    from app.models.all_models import CountingSession, VehicleEvent
+
+    delivered = datetime(2026, 10, 3, tzinfo=timezone.utc)
+    with _dedup_event_database() as db:
+        first, _ = _submit_dedup_event(db, source_frame_index=101, detected_at=delivered)
+        reverse, response = _submit_dedup_event(
+            db, direction="out", source_time_seconds=16.0,
+            source_frame_index=161, detected_at=delivered + timedelta(seconds=0.1),
+        )
+        assert response.headers["X-TrafficAI-Deduplicated"] == "0"
+        second_in, response = _submit_dedup_event(
+            db, source_time_seconds=22.0, source_frame_index=221,
+            detected_at=delivered + timedelta(seconds=0.2),
+        )
+        assert response.headers["X-TrafficAI-Deduplicated"] == "0"
+        assert len({first.id, reverse.id, second_in.id}) == 3
+        assert db.scalar(select(func.count()).select_from(VehicleEvent)) == 3
+        assert db.get(CountingSession, 1).total_vehicles == 3
+
+
+def test_v0553_deferred_same_track_jitter_finds_adjacent_source_passage() -> None:
+    from sqlalchemy import func, select
+    from app.models.all_models import CountingSession, VehicleEvent
+
+    with _dedup_event_database() as db:
+        first, _ = _submit_dedup_event(db)
+        later, _ = _submit_dedup_event(db, direction="out", source_time_seconds=30.0, source_frame_index=751)
+        rejected, response = _submit_dedup_event(db, source_time_seconds=10.4, source_frame_index=261)
+        assert rejected.id == first.id
+        assert rejected.id != later.id
+        assert response.headers["X-TrafficAI-Dedup-Reason"] == "same-track-repeat-jitter"
+        assert db.scalar(select(func.count()).select_from(VehicleEvent)) == 2
+        assert db.get(CountingSession, 1).total_vehicles == 2

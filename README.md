@@ -1,128 +1,125 @@
-# Traffic AI V0.5.52 — Observed Path, Clean Frame và Release tự động
+# Traffic AI V0.5.53 — Candidate Eligibility và Passage Evidence
 
-Nâng cấp từ full source V0.5.51. Đơn vị đếm tiếp tục là **lượt cắt vạch**: cùng một phương tiện quay lại và cắt vạch lần nữa được tính thêm một lượt.
+Nâng cấp trực tiếp từ full source V0.5.52. Đơn vị đếm là **lượt cắt vạch**: cùng một phương tiện quay lại và cắt vạch lần nữa được tính thêm một lượt.
 
-## Benchmark đầu vào
+## Benchmark đầu vào V0.5.52
 
-Hai screenshot V0.5.51, session 155 / benchmark 34, ghi nhận:
+Hai screenshot mới ghi nhận session 156 / benchmark 35:
 
-| Chỉ số | V0.5.51 |
+| Chỉ số | V0.5.52 |
 |---|---:|
 | Ground truth | 149 |
-| AI đếm | 156 |
+| AI đếm | 154 |
 | Khớp | 136 |
 | Lọt không đếm | 13 |
-| Đếm dư | 20 |
+| Đếm dư | 18 |
 | Recall | 91.3% |
-| Precision | 87.2% |
-| F1 | 89.2% |
+| Precision | 88.3% |
+| F1 | 89.8% |
 | Class đúng | 98.5% |
 
-Lọt gồm 5 anchor span, 3 gần vạch chưa span, 1 center-only và 4 cooldown. Hai lỗi loại được báo là bicycle → motorcycle ở 04:49.450 và car → truck ở 10:41.981. Worker đề xuất 243 event, backend loại trùng 87; tổng cuối là 156.
+Worker đề xuất 237 event, backend gộp 83, Human Guard loại 37. Lọt gồm anchor span 5, gần vạch chưa span 3, center-only 1 và cooldown 4. Dư gồm rescue 6, direct 4, gần GT đã khớp/cùng điểm cắt 6 và interpolation 2.
 
-Đã đọc hai screenshot và giải nén 242 snapshot trong `camera_1(20261002-141243).rar`, từ frame 3 tới 23454. Clip hoàn chỉnh chưa tải được vào môi trường đóng gói. Các con số này là **đầu vào V0.5.51**; chưa có kết quả replay V0.5.52.
+Đã đọc hai screenshot và giải nén 236 snapshot JPG trong `camera_1(20261003-035459).rar`, kích thước 1440 × 811, từ frame 3 tới 23454. Tại 04:49.450, ảnh cho thấy người áo xanh dắt xe đạp có giỏ cạnh xe máy đỏ đứng yên; model gán motorcycle. Tại 10:41.981 là van kín trắng/xanh: GT car, model truck. Snapshot không đủ để kết luận taxonomy van hoặc kiểm chứng toàn bộ quỹ đạo của 13 lượt lọt.
 
-## Thay đổi V0.5.52
+Clip hoàn chỉnh chưa tải được vào môi trường đóng gói. Các số trên là **đầu vào V0.5.52**; chưa có kết quả replay V0.5.53.
 
-### Quỹ đạo thực và finite segment
+## Thay đổi V0.5.53
 
-Primary Gate, Verified Anchor Span, Heavy Center và Two-Wheel Center cùng sử dụng đoạn giao vạch giữa hai sample liền kề đã quan sát. Các sample trong dead band cũng được xét để tìm đoạn cắt thật. Không dùng đường nối hai điểm ổn định ở xa để suy ra crossing khi xe thực tế vòng quanh đầu vạch.
+### Anchor Span chỉ commit sau khi gate chính nhận
 
-Crossing phải giao đoạn vạch hữu hạn. Các guard Road Zone, jump, cooldown, xác nhận hậu-vạch và lineage đang có tiếp tục áp dụng. Quan sát trùng hoặc cũ không tăng số lần xác nhận. Khi nối ID, history giữ một sample cho mỗi source frame và tính lại streak theo history thực.
+Immediate, post-confirm và lost-finalize cung cấp proposal cho worker. Worker dùng `commit=False`, chỉ ghi passage và rescue telemetry khi gate chính chấp nhận đúng proposal. Gate chính loại không làm mất clock/hướng của passage trước hoặc tiêu thụ sớm bằng chứng hậu-vạch.
 
-### Center candidate và rollback
+Human Guard rollback phục hồi passage trước và hoàn tác rescue telemetry của proposal bị loại. Candidate không được chọn không tính như rescue. History của lượt đã chấp nhận được cắt khỏi phía tiếp cận cũ, tránh đề xuất lại cùng span khi cấu hình history dài. Khi nối alias, metadata crossing đi cùng passage đã chấp nhận mới nhất, không lấy max từ geometry của lượt khác.
 
-Worker lấy center candidate bằng `commit=False`, chỉ ghi passage sau khi Primary Gate chấp nhận. Candidate bị gate chính loại không làm mất lượt cắt vạch sau đó. Center rescuer giữ passage mới nhất, hỗ trợ chu kỳ IN → OUT → IN.
+### Bằng chứng giao vạch và clock nguồn
 
-Nếu Human Guard loại hoặc pending hết hạn, Primary Gate, Anchor Span, Heavy Center và Two-Wheel Center được phục hồi về passage trước đó. Clock, hướng, rescue counter của center và telemetry liên quan được khôi phục cùng nhau; gọi rollback lặp không trừ thêm lượt hợp lệ.
+Đoạn cắt vạch thực không bị một lần chạm zero-distance rồi quay lại cùng phía ghi đè. Chạm vạch ngoài đầu đoạn hữu hạn sau crossing cũng không xóa crossing thật. Timecode lấy từ bracket chứng minh đổi phía; các guard finite segment, Road Zone, jump và normal motion được giữ.
 
-### Model đọc frame sạch
+Verified override không được ghi passage ở frame cũ hoặc cùng frame với passage đã chấp nhận. Override hợp lệ ở source frame mới tiếp tục dùng điều kiện geometry đang có.
 
-Frame dùng cho detector, class refiner, Human/Rider Guard và Bicycle Context được tách khỏi frame dùng vẽ preview/snapshot. Chữ, bounding box và vạch overlay không lọt vào crop model, kể cả khi track trước đó đã được vẽ trong cùng frame.
+### Bicycle Context dành ngân sách cho đoạn vạch thật
 
-### Bicycle Context theo đúng source frame
+Pre-scan chỉ đưa vào hàng đợi track trên Road Zone, đủ điều kiện confidence và nằm trong bán kính hiện có quanh **đoạn vạch hữu hạn**. Khoảng cách tới đường thẳng kéo dài không còn làm track ở ngoài đầu vạch chiếm slot scan.
 
-Evidence domain/general tại crossing được ghi trước quyết định cross-frame. Mỗi track/source frame chỉ chạy context scan một lần. Evidence đã tiêu thụ cho passage được xóa; lượt pre-scan muộn trong cùng frame không gieo lại evidence đã dùng.
+Context, class refiner và Human Guard không dùng frame cũ để ghi đè cache/override/evidence mới. Frame trùng không tạo thêm lượt inference hoặc thêm strike. Sau mỗi crossing được chấp nhận, kể cả class đã là bicycle, không còn slot context hoặc lost-finalize, trail được tiêu thụ; pre-scan xếp hàng từ trước trong cùng frame không gieo lại evidence cho lượt kế tiếp.
 
-Collection floor tôn trọng cấu hình XFRAME 0.08 thay vì chặn cứng ở 0.10. Điều kiện chấp nhận bicycle vẫn giữ đủ hai nguồn, hai frame, so sánh motorcycle aggregate và motor veto. Bản này không hạ ngưỡng chấp nhận toàn cục và chưa xác nhận sửa được hai lỗi loại trong benchmark nếu chưa replay.
+### Giữ bằng chứng phản đối motorcycle
 
-### npm và quy trình phát hành
+Motor veto xét cả observation chỉ có motorcycle và mọi frame/nguồn đã match target, trước khi lọc bicycle confidence hoặc chọn source-best. Nhánh absolute/temporal rescue trong worker dùng cùng veto với near-margin và cross-frame.
 
-- Đồng bộ **npm 12.2.0** tại `packageManager`, frontend Dockerfile, lệnh kiểm tra và cả ba workflow GitHub Actions. Đây là bản stable mới nhất được kiểm tra ngày 03/10/2026: [npm releases](https://github.com/npm/cli/releases/tag/v12.2.0).
-- Node.js tiếp tục dùng 26.10.0 trong Docker/CI và `.node-version`.
-- Khai báo NumPy 2.4.6 trong test dependencies cho regression kiểm tra pixel; test CI vẫn tách khỏi stack inference.
-- Publish kiểm thử source sau chuẩn hóa line endings, đối chiếu VERSION/package version, rồi commit/push/tag. Không sửa metadata phiên bản sau khi đã test.
-- Chạy lại publish được khi source sạch và tag trỏ đúng HEAD. Không di chuyển hoặc ghi đè tag đã phát hành; thay đổi source mới phải tăng VERSION.
-- Chờ đúng Release workflow theo tag, SHA và sự kiện push. Nếu workflow không xuất hiện hoặc không hoàn tất, GitHub CLI tạo/bổ sung Release trực tiếp từ tag đã kiểm thử.
-- ZIP, TAR.GZ, README và SHA256 lấy đúng byte của tag. Fallback bổ sung đủ asset cho Release tạo dở và hoàn tất draft.
-- Manual dispatch nhận tag bắt buộc, checkout đúng tag và xác minh version/commit trước khi test, đóng gói.
+Cross-frame cần bicycle thắng trên ít nhất hai source frame. Frame chỉ có bằng chứng thua không chứng minh temporal support. Frame bicycle thắng yếu hơn source-best vẫn được giữ để xét diversity. Giữ nguyên hai nguồn, hai frame, motor veto và các ngưỡng chấp nhận.
 
-## Version / database
+Truck Semantic Lock giữ đúng family, không đọc/refresh lock từ source frame cũ và không đưa confidence đã hết hạn sang lock mới. Không ép class theo hai timestamp trong benchmark.
 
-| Thành phần | Phiên bản |
+### Backend xử lý đúng lượt cũ và thứ tự gửi
+
+Retry cùng ID/hướng được đối chiếu với các passage của track trong session, thay vì chỉ event có database ID mới nhất. Retry của lượt IN cũ sau một chu kỳ IN → OUT → IN được trả lại event đã lưu, không tăng tổng.
+
+Ưu tiên source seconds, rồi source frame, rồi thời gian nhận khi không còn clock nguồn để so. Fixed frame windows không ghi đè thời gian video ở FPS thấp; hai lượt thật gửi gần nhau không bị coi là retry chỉ vì wall clock gần nhau. Khi kiểm tra jitter, chọn passage lân cận theo nguồn thay vì thứ tự database.
+
+Benchmark audit ưu tiên candidate gần điểm cắt, tránh cáo buộc xe ở làn khác chỉ vì timestamp gần hơn hoặc crossing direct/direct ngược hướng. Diagnostic thêm `near_matched_ai_event_id`; không đổi scoring, GT hay ngưỡng dedup.
+
+## Version, môi trường và database
+
+| Thành phần | Giá trị |
 |---|---|
-| VERSION, Frontend, Backend, AI Service | 0.5.52 |
-| Alembic head | `0066_observed_path_v0552` |
-| Parent | `0065_span_shadow_v0551` |
-| schema_version | 0.5.52 |
+| VERSION / Frontend / Backend / AI Service | 0.5.53 |
+| Alembic head | `0067_candidate_evidence_v0553` |
+| Parent | `0066_observed_path_v0552` |
+| schema_version | 0.5.53 |
+| npm trong Docker / CI / packageManager | 12.2.0 |
+| Node.js trong Docker / CI | 26.10.0 |
 
-Migration chỉ cập nhật schema version, không xóa dữ liệu hay GT. Dashboard Camera Preview / Vehicle Count và Ground Truth / Benchmark Report tiếp tục dùng bố cục 50/50 với vùng cuộn riêng cho danh sách lỗi.
+Migration chỉ cập nhật schema version, không xóa GT/dữ liệu. Giữ các guard V0.5.52, frame sạch cho model, backend semantic shadow và bố cục Camera Preview / Vehicle Count, GT / Report 50/50. Không hạ ngưỡng chấp nhận toàn cục.
 
-## Kiểm tra và chạy trên Windows
+## Đầy đủ lệnh test, start và tự động publish
 
-Giải nén full source vào thư mục dự án; giữ `.env`, video, model weights và dữ liệu đang dùng. Cần Docker Desktop chạy trước khi gọi bộ kiểm tra.
+Giải nén full source vào thư mục dự án; giữ `.env`, video, model weights và dữ liệu đang dùng. Cần Docker Desktop chạy; cần Git/GitHub CLI cho publish và checkout nhánh `main`.
 
 ```powershell
 cd D:\LienThongDH\DoAn\traffic-ai
+
 Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+
+# Kiểm tra
 .\scripts\test.ps1
+
+# Khởi động
 .\scripts\start.ps1
+
+# Tự test, commit, push, tạo tag và GitHub Release
+.\scripts\publish.ps1
 ```
 
-Mở **https://traffic-ai.test:8443**, nhấn `Ctrl + F5`, chạy lại đúng clip với cùng vạch và Road Zone. Tạo benchmark cho session mới, sao chép GT 149 từ benchmark tương thích rồi bấm **Đối chiếu lại**.
+Mở **https://traffic-ai.test:8443**, nhấn `Ctrl + F5`. Chạy lại đúng clip, cùng vạch/Road Zone; tạo benchmark cho session mới, sao chép GT 149 từ benchmark tương thích và bấm **Đối chiếu lại**.
 
-Để cập nhật npm trên Windows khi dùng frontend ngoài Docker, dùng Node.js 26.10.0 trở lên rồi chạy:
-
-```powershell
-npm install -g npm@latest
-npm --version
-```
-
-Docker/CI cài bản pin 12.2.0 của bản source này để giữ môi trường phát hành nhất quán.
-
-## Tự đẩy GitHub và tạo Release
-
-Cần Git, GitHub CLI và Docker Desktop. Nếu chưa đăng nhập GitHub CLI, chạy một lần:
+Nếu chưa đăng nhập GitHub CLI, chạy một lần:
 
 ```powershell
 gh auth login
 gh auth setup-git
 ```
 
-Nếu chưa cấu hình tác giả commit, đặt `git config --global user.name` và `git config --global user.email` bằng thông tin của bạn. Repository mặc định là `TamNhien/traffic-ai`, nhánh `main`; checkout đúng nhánh trước khi publish.
+Nếu chưa cấu hình Git author, đặt `git config --global user.name` và `git config --global user.email` bằng thông tin của bạn.
 
-Lệnh phát hành:
+Publish tự đọc VERSION để tạo tag **v0.5.53**, mặc định repository `TamNhien/traffic-ai`. Script kiểm thử source đã chuẩn hóa, commit/push/tag, chờ đúng Actions run theo tag/SHA/push và tạo Release có ZIP, TAR.GZ, README, SHA256SUMS. Fallback CLI bổ sung đủ asset từ tag và hoàn tất Release tạo dở.
 
-```powershell
-cd D:\LienThongDH\DoAn\traffic-ai
-Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
-.\scripts\publish.ps1
-```
+Nếu bị gián đoạn, xử lý lỗi mạng/quyền truy cập rồi chạy lại `publish.ps1` khi source không đổi. Thay đổi source sau tag đã có cần tăng version; script không di chuyển hoặc ghi đè tag. `-NoWait` chỉ đẩy source/tag rồi trả về khi Release còn đang chờ.
 
-Script tự đọc `VERSION`, chạy test, khởi tạo/kiểm tra repository, commit/push source, đẩy tag **v0.5.52** và tạo GitHub Release kèm ZIP, TAR.GZ, README, SHA256SUMS. Nếu bị gián đoạn, xử lý lỗi mạng/quyền truy cập rồi chạy lại cùng lệnh với source không đổi. Nếu tag đã phát hành nhưng source có thay đổi, cần tăng version trước lượt phát hành tiếp theo.
-
-Đổi repository đích nếu cần:
+Đổi repository đích hoặc chạy lại workflow của tag đã có:
 
 ```powershell
 .\scripts\publish.ps1 -Owner TEN_GITHUB -Repository TEN_REPO
+
+gh workflow run release.yml --repo TamNhien/traffic-ai -f tag=v0.5.53
 ```
 
-Script kiểm tra cả origin push URL để tránh đẩy sang repository khác. `-NoWait` chỉ đẩy source/tag rồi trả về; Release vẫn đang chờ Actions.
-
-Để chủ động chạy lại workflow cho tag đã có trên GitHub:
+Khi dùng npm ngoài Docker trên Windows, Node.js cần 26.10.0 trở lên:
 
 ```powershell
-gh workflow run release.yml --repo TamNhien/traffic-ai -f tag=v0.5.52
+npm install -g npm@latest
+npm --version
 ```
 
-Chi tiết kiểm tra đã thực hiện và các giới hạn của môi trường đóng gói nằm trong `VERIFICATION.md`.
+Chi tiết kiểm tra thực hiện và giới hạn môi trường đóng gói có trong `VERIFICATION.md`.

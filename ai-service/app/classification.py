@@ -294,6 +294,26 @@ def select_contextual_two_wheel_refinement(
     return best
 
 
+def contextual_motorcycle_veto(
+    observations: list[tuple[str, float, float]],
+    *,
+    motorcycle_veto: float = 0.10,
+) -> bool:
+    """Reject context rescue when any target-matched source favors motorcycle.
+
+    A motor-only observation is evidence too. Filtering by bicycle confidence
+    before this check, or choosing a source's most favorable bicycle frame,
+    would discard the very contradiction that the veto is meant to protect.
+    """
+    margin = max(0.0, float(motorcycle_veto))
+    for _source, bicycle_conf, motorcycle_conf in observations:
+        bike = max(0.0, min(1.0, float(bicycle_conf)))
+        moto = max(0.0, min(1.0, float(motorcycle_conf)))
+        if moto - bike > margin:
+            return True
+    return False
+
+
 def contextual_bicycle_competitive_decision(
     observations: list[tuple[str, float, float]],
     *,
@@ -375,6 +395,9 @@ def contextual_bicycle_near_margin_decision(
     if float(detector_confidence) > float(max_motorcycle_confidence):
         return None
 
+    if contextual_motorcycle_veto(observations, motorcycle_veto=max_motorcycle_veto):
+        return None
+
     best: dict[str, tuple[float, float]] = {}
     for source, bicycle_conf, motorcycle_conf in observations:
         bike = max(0.0, min(1.0, float(bicycle_conf)))
@@ -427,6 +450,9 @@ def contextual_bicycle_cross_frame_decision(
     """V0.5.41 cross-frame bicycle decision with audit reason codes.
 
     Evidence may come from the two refiners on *different* pre-crossing frames.
+    Both frame diversity and source diversity require bicycle-winning evidence;
+    a losing extra frame cannot qualify otherwise same-frame evidence. Every
+    target-matched motor lead remains eligible to veto before source selection.
     The function is deliberately pure so benchmark traces can explain why a
     decision was accepted/rejected without re-running either model.
     """
@@ -436,6 +462,13 @@ def contextual_bicycle_cross_frame_decision(
     }
     if float(detector_confidence) > float(max_motorcycle_confidence):
         audit["reason"] = "primary_motorcycle_too_strong"
+        return None, audit
+
+    if contextual_motorcycle_veto(
+        [(source, bike, moto) for _frame, source, bike, moto in observations],
+        motorcycle_veto=motorcycle_veto,
+    ):
+        audit["reason"] = "motorcycle_source_veto"
         return None, audit
 
     usable = []
@@ -470,6 +503,16 @@ def contextual_bicycle_cross_frame_decision(
     winners = [(frame, bike, moto) for frame, bike, moto in best.values() if bike >= moto + float(min_source_win)]
     if len(winners) < max(2, int(min_sources)):
         audit["reason"] = "source_win_missing"
+        return None, audit
+    winning_frames = {
+        frame for frame, _source, bike, moto in usable
+        if bike >= moto + float(min_source_win)
+    }
+    audit["usable_frames"] = audit["frames"]
+    audit["frames"] = len(winning_frames)
+    audit["winning_frames"] = sorted(winning_frames)
+    if len(winning_frames) < max(2, int(min_frames)):
+        audit["reason"] = "insufficient_frames"
         return None, audit
     strongest = max(bike for _frame, bike, _moto in winners)
     audit["strongest_bicycle"] = round(strongest, 4)
@@ -796,6 +839,14 @@ class TruckSemanticLock:
         refiner_hits: int = 0,
         refiner_confidence: float = 0.0,
     ) -> tuple[str, float] | None:
+        # The caller can refresh all tracked classes. A cached truck identity
+        # must never escape its four-wheel family merely because observe used
+        # a literal "truck" label for the final resolution.
+        if vehicle_family(stable_label) != "four-wheel":
+            return None
+        previous = self._locks.get(int(track_id))
+        if previous is not None and int(frame_index) < previous[1]:
+            return None
         strong_primary = (
             str(stable_label) == "truck"
             and int(hits) >= self.primary_hits
@@ -807,11 +858,10 @@ class TruckSemanticLock:
         )
         if strong_primary or strong_refiner:
             confidence = max(float(certainty) if strong_primary else 0.0, float(refiner_confidence))
-            previous = self._locks.get(int(track_id))
-            if previous is not None:
+            if previous is not None and int(frame_index) - previous[1] <= self.ttl_frames:
                 confidence = max(confidence, previous[0])
             self._locks[int(track_id)] = (confidence, int(frame_index))
-        return self.resolve(track_id, frame_index, "truck")
+        return self.resolve(track_id, frame_index, stable_label)
 
     def resolve(self, track_id: int, frame_index: int, primary_label: str) -> tuple[str, float] | None:
         if vehicle_family(primary_label) != "four-wheel":
@@ -820,6 +870,8 @@ class TruckSemanticLock:
         if entry is None:
             return None
         confidence, observed_frame = entry
+        if int(frame_index) < int(observed_frame):
+            return None
         if int(frame_index) - int(observed_frame) > self.ttl_frames:
             self._locks.pop(int(track_id), None)
             return None

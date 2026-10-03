@@ -85,6 +85,7 @@ def _false_positive_diagnostics(
         near_matched_time_delta = None
         near_matched_spatial_distance = None
         near_matched_crossing_method = None
+        near_matched_ai_event_id = None
 
         if event.source_time_seconds <= 0.50:
             reason = "startup_artifact"
@@ -115,10 +116,27 @@ def _false_positive_diagnostics(
                 other for other in matched_events
                 if abs(other.source_time_seconds - event.source_time_seconds) <= duplicate_window
                 and _vehicle_family(other.vehicle_type) == _vehicle_family(event.vehicle_type)
+                and other.direction == event.direction
             ]
             if near_matched:
-                nearest = min(near_matched, key=lambda other: abs(other.source_time_seconds - event.source_time_seconds))
+                # A temporally closer vehicle in another lane must not hide a
+                # matched event at this actual crossing point. Prefer a spatial
+                # candidate inside the existing audit radius; no scoring changes.
+                def candidate_key(other: TimedCrossing) -> tuple[int, float]:
+                    if (
+                        event.crossing_x is not None and event.crossing_y is not None
+                        and other.crossing_x is not None and other.crossing_y is not None
+                    ):
+                        dx = event.crossing_x - other.crossing_x
+                        dy = event.crossing_y - other.crossing_y
+                        spatial_priority = 0 if (dx * dx + dy * dy) ** 0.5 <= 0.045 else 2
+                    else:
+                        spatial_priority = 1
+                    return spatial_priority, abs(other.source_time_seconds - event.source_time_seconds)
+
+                nearest = min(near_matched, key=candidate_key)
                 dt = abs(nearest.source_time_seconds - event.source_time_seconds)
+                near_matched_ai_event_id = nearest.id
                 near_matched_time_delta = round(dt, 3)
                 near_matched_crossing_method = nearest.crossing_method
                 spatial_distance = None
@@ -167,6 +185,7 @@ def _false_positive_diagnostics(
             "near_matched_time_delta": near_matched_time_delta,
             "near_matched_spatial_distance": near_matched_spatial_distance,
             "near_matched_crossing_method": near_matched_crossing_method,
+            "near_matched_ai_event_id": near_matched_ai_event_id,
         })
 
     dominant = reason_counts.most_common(1)[0][0] if reason_counts else None

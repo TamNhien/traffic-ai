@@ -528,3 +528,117 @@ def test_v0543_xframe_priority_keeps_budget_and_deterministic_ties():
     selected = prioritize_bicycle_xframe_candidates(candidates, 2)
     assert [item[2] for item in selected] == [7, 8]
     assert prioritize_bicycle_xframe_candidates(candidates, 0) == []
+
+
+def test_v0553_context_motor_veto_keeps_motor_only_observations() -> None:
+    from app.classification import contextual_motorcycle_veto
+
+    assert contextual_motorcycle_veto([("general", 0.0, 0.44)]) is True
+    assert contextual_motorcycle_veto(
+        [("domain", 0.50, 0.625)], motorcycle_veto=0.125,
+    ) is False
+
+
+def test_v0553_near_margin_veto_cannot_hide_behind_source_best() -> None:
+    from app.classification import contextual_bicycle_near_margin_decision
+
+    assert contextual_bicycle_near_margin_decision(
+        [
+            ("domain", 0.45, 0.10),
+            ("general", 0.40, 0.10),
+            ("general", 0.0, 0.60),
+        ],
+        detector_confidence=0.48,
+    ) is None
+
+
+def test_v0553_xframe_losing_extra_frame_does_not_prove_temporal_support() -> None:
+    from app.classification import contextual_bicycle_cross_frame_decision
+
+    decision, audit = contextual_bicycle_cross_frame_decision(
+        [
+            (100, "domain", 0.24, 0.05),
+            (100, "general", 0.23, 0.04),
+            # A tied frame is usable, but supplies no bicycle-winning evidence.
+            (104, "domain", 0.08, 0.08),
+        ],
+        detector_confidence=0.48,
+    )
+    assert decision is None
+    assert audit["reason"] == "insufficient_frames"
+    assert audit["frames"] == 1
+    assert audit["usable_frames"] == 2
+
+
+def test_v0553_xframe_winning_second_frame_survives_best_source_selection() -> None:
+    from app.classification import contextual_bicycle_cross_frame_decision
+
+    decision, audit = contextual_bicycle_cross_frame_decision(
+        [
+            (100, "domain", 0.24, 0.05),
+            (100, "general", 0.23, 0.04),
+            # This real temporal win survives even when source-best is frame100.
+            (104, "domain", 0.09, 0.06),
+        ],
+        detector_confidence=0.48,
+    )
+    assert decision is not None and decision[0] == "bicycle"
+    assert audit["winning_frames"] == [100, 104]
+
+
+def test_v0553_xframe_motor_veto_precedes_best_frame_selection() -> None:
+    from app.classification import contextual_bicycle_cross_frame_decision
+
+    decision, audit = contextual_bicycle_cross_frame_decision(
+        [
+            (100, "domain", 0.24, 0.05),
+            (104, "general", 0.23, 0.04),
+            # A new motor-only result must not vanish below the bicycle floor.
+            (106, "general", 0.0, 0.60),
+        ],
+        detector_confidence=0.48,
+    )
+    assert decision is None
+    assert audit["reason"] == "motorcycle_source_veto"
+
+
+def test_v0553_truck_observe_respects_family_for_existing_lock() -> None:
+    from app.classification import TruckSemanticLock
+
+    lock = TruckSemanticLock()
+    assert lock.observe(7, 100, stable_label="truck", certainty=0.93, hits=6) is not None
+    assert lock.observe(7, 110, stable_label="motorcycle", certainty=0.95, hits=8) is None
+    assert lock.resolve(7, 110, "motorcycle") is None
+    assert lock.resolve(7, 110, "car") == ("truck", 0.93)
+
+
+def test_v0553_truck_refiner_evidence_cannot_create_two_wheel_lock() -> None:
+    from app.classification import TruckSemanticLock
+
+    lock = TruckSemanticLock()
+    assert lock.observe(
+        9, 100, stable_label="bicycle", certainty=0.95, hits=8,
+        refiner_hits=5, refiner_confidence=0.95,
+    ) is None
+    assert lock.active_count(100) == 0
+
+
+def test_v0553_truck_lock_cannot_resolve_or_refresh_before_source_frame() -> None:
+    from app.classification import TruckSemanticLock
+
+    lock = TruckSemanticLock(ttl_frames=30)
+    assert lock.observe(7, 200, stable_label="truck", certainty=0.90, hits=6) == ("truck", 0.90)
+    assert lock.resolve(7, 199, "car") is None
+    assert lock.observe(7, 190, stable_label="truck", certainty=0.99, hits=6) is None
+    # The old callback cannot replace the newer lock or regress its clock.
+    assert lock.resolve(7, 230, "car") == ("truck", 0.90)
+    assert lock.resolve(7, 231, "car") is None
+
+
+def test_v0553_truck_expired_confidence_does_not_inflate_new_lock() -> None:
+    from app.classification import TruckSemanticLock
+
+    lock = TruckSemanticLock(ttl_frames=30)
+    assert lock.observe(7, 100, stable_label="truck", certainty=0.99, hits=6) == ("truck", 0.99)
+    assert lock.observe(7, 200, stable_label="truck", certainty=0.82, hits=6) == ("truck", 0.82)
+    assert lock.resolve(7, 210, "car") == ("truck", 0.82)

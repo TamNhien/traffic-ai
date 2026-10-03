@@ -15,6 +15,7 @@ def _worker() -> PipelineWorker:
     worker._bicycle_context_last_observation = {}
     worker._bicycle_context_xframe_trail = {}
     worker._bicycle_context_xframe_last_consumed = {}
+    worker._bicycle_context_xframe_last_scan = {}
     worker._bicycle_xframe_audit_this_frame = []
     worker._bicycle_context_rescue_tracks = set()
     worker._class_refine_overrides = {}
@@ -50,6 +51,8 @@ def _worker() -> PipelineWorker:
         "bicycle_context_near_margin_fused_margin": .02,
         "bicycle_context_xframe_enabled": True,
         "bicycle_context_xframe_history": 18,
+        "bicycle_context_xframe_interval": 4,
+        "bicycle_context_xframe_gate_distance_ratio": .070,
         "bicycle_context_xframe_max_motor_conf": .52,
         "bicycle_context_xframe_min_source_conf": .08,
         "bicycle_context_xframe_min_frames": 2,
@@ -201,3 +204,175 @@ def test_v0552_context_collection_honors_configured_cross_frame_floor() -> None:
     assert worker._context_two_wheel_from_model(*args) == (.09, 0.0)
     worker.bicycle_context_xframe_enabled = False
     assert worker._context_two_wheel_from_model(*args) == (0.0, 0.0)
+
+
+def _prescan_candidate(worker, track_id, anchor, *, track_on_road=True):
+    return worker._bicycle_xframe_scan_candidate(
+        track_id, 100, "motorcycle", .30, anchor,
+        (100, 500), (900, 500), 1000, 1000, (anchor[0] - 10, anchor[1] - 10, anchor[0] + 10, anchor[1] + 10),
+        track_on_road=track_on_road,
+    )
+
+
+def test_v0553_infinite_line_extension_cannot_starve_finite_gate_prescan() -> None:
+    from app.classification import prioritize_bicycle_xframe_candidates
+
+    worker = _worker()
+    extension = _prescan_candidate(worker, 1, (1200, 500))
+    crossing = _prescan_candidate(worker, 2, (500, 550))
+
+    # The extension has zero signed distance to the infinite line, but it is
+    # 300 px beyond the visible gate and would previously win the only slot.
+    assert extension is None
+    assert crossing is not None
+    selected = prioritize_bicycle_xframe_candidates([crossing], 1)
+    assert selected[0][2] == 2
+    assert selected[0][0] == .05
+
+
+def test_v0553_outside_road_candidate_cannot_consume_prescan_budget() -> None:
+    worker = _worker()
+    assert _prescan_candidate(worker, 1, (500, 500), track_on_road=False) is None
+    assert _prescan_candidate(worker, 2, (500, 510)) is not None
+
+
+def test_v0553_endpoint_prescan_keeps_configured_radius_and_budget() -> None:
+    from app.classification import prioritize_bicycle_xframe_candidates
+
+    worker = _worker()
+    near = _prescan_candidate(worker, 1, (940, 530))
+    far = _prescan_candidate(worker, 2, (960, 560))
+    interior = _prescan_candidate(worker, 3, (500, 540))
+    assert near is not None and near[0] == .05
+    assert far is None
+    assert prioritize_bicycle_xframe_candidates([near, interior], 1) == [interior]
+
+
+def test_v0553_degenerate_gate_and_consumed_frame_are_ineligible_for_prescan() -> None:
+    worker = _worker()
+    assert worker._bicycle_xframe_scan_candidate(
+        7, 100, "motorcycle", .30, (500, 500), (500, 500), (500, 500),
+        1000, 1000, (490, 490, 510, 510), track_on_road=True,
+    ) is None
+    worker._bicycle_context_xframe_last_consumed[7] = 100
+    assert _prescan_candidate(worker, 7, (500, 500)) is None
+
+
+def test_v0553_delayed_context_call_cannot_regress_cache_or_erase_newer_trail() -> None:
+    worker = _worker()
+    calls = []
+    worker._context_two_wheel_from_model = lambda *args: calls.append(args[-1]) or (.16, .01)
+    assert worker._scan_bicycle_xframe_context(7, 104, object(), object(), "cpu", False) is True
+    before = list(worker._bicycle_context_xframe_trail[7])
+
+    assert worker._observe_bicycle_context(7, 100, object(), object(), "cpu", False) == []
+    worker._record_bicycle_xframe_observations(7, 100, [("domain", .9, 0)])
+    assert worker._scan_bicycle_xframe_context(7, 100, object(), object(), "cpu", False) is False
+    assert worker._refine_bicycle_context(7, 100, object(), object(), "cpu", False, .3) is None
+
+    assert worker._bicycle_context_xframe_trail[7] == before
+    assert worker._bicycle_context_last_observation[7][0] == 104
+    assert len(calls) == 2
+    assert worker.state.bicycle_context_checks == 0
+
+
+def test_v0553_duplicate_prescan_cannot_increment_evidence_or_scan_telemetry() -> None:
+    worker = _worker()
+    calls = []
+    worker._context_two_wheel_from_model = lambda *args: calls.append(args[-1]) or (.16, .01)
+    assert worker._scan_bicycle_xframe_context(7, 104, object(), object(), "cpu", False) is True
+    assert worker._scan_bicycle_xframe_context(7, 104, object(), object(), "cpu", False) is False
+    assert len(calls) == 2
+    assert worker.state.bicycle_context_xframe_scans == 1
+    assert len(worker._bicycle_context_xframe_trail[7]) == 2
+
+
+def test_v0553_old_context_cannot_reseed_consumed_passage() -> None:
+    worker = _worker()
+    worker._bicycle_context_xframe_last_consumed[7] = 104
+    worker._record_bicycle_xframe_observations(7, 100, [("domain", .9, 0)])
+    worker._record_bicycle_xframe_observations(7, 104, [("general", .9, 0)])
+    assert 7 not in worker._bicycle_context_xframe_trail
+    assert worker._scan_bicycle_xframe_context(7, 100, object(), object(), "cpu", False) is False
+
+
+def test_v0553_absolute_bicycle_rescue_cannot_bypass_target_motorcycle_veto() -> None:
+    worker = _worker()
+    worker._context_two_wheel_from_model = lambda *_args: (.80, .99)
+
+    assert worker._refine_bicycle_context(7, 104, object(), object(), "cpu", False, .30) is None
+    assert worker.state.bicycle_context_rescues == 0
+    assert worker.state.bicycle_context_weak_motor_rescues == 0
+    assert 7 not in worker._class_refine_overrides
+    assert worker._bicycle_context_xframe_last_consumed[7] == 104
+    assert 7 not in worker._bicycle_context_xframe_trail
+
+
+def test_v0553_motor_only_source_vetoes_other_source_absolute_bicycle_vote() -> None:
+    worker = _worker()
+    worker._context_two_wheel_from_model = lambda *args: (
+        (.95, .01) if args[-1] is worker._refiner_model else (0, .80)
+    )
+
+    assert worker._refine_bicycle_context(7, 104, object(), object(), "cpu", False, .30) is None
+    assert worker.state.bicycle_context_rescues == 0
+    assert worker._bicycle_context_last_observation[7][1][1] == ("general", 0, .80)
+
+
+def test_v0553_delayed_class_refiner_cannot_replace_newer_source_observation() -> None:
+    worker = _worker()
+    worker._class_refine_last_observation = {7: (104, ("bicycle", .95))}
+
+    assert worker._observe_class_refiner(
+        7, 100, object(), object(), "motorcycle", "cpu", False, force=True,
+    ) == (None, False)
+    assert worker._class_refine_last_observation[7] == (104, ("bicycle", .95))
+
+
+def test_v0553_cached_class_override_cannot_apply_to_older_source_frame() -> None:
+    worker = _worker()
+    worker._truck_semantic_lock = SimpleNamespace(resolve=lambda *_args: None)
+    worker._class_refine_overrides[7] = ("bicycle", .95, 104)
+
+    assert worker._class_override_for(7, 100, "motorcycle") is None
+    assert worker._class_refine_overrides[7] == ("bicycle", .95, 104)
+
+
+def test_v0553_delayed_class_refinement_cannot_replace_newer_override() -> None:
+    worker = _worker()
+    worker._class_refine_overrides[7] = ("bicycle", .95, 104)
+
+    assert worker._remember_class_refinement(
+        7, 100, "motorcycle", "motorcycle", .95, 10, "motorcycle", ("motorcycle", .99),
+    ) is None
+    assert worker._class_refine_overrides[7] == ("bicycle", .95, 104)
+
+
+def test_v0553_budget_skipped_crossing_consumes_context_before_late_scan() -> None:
+    worker = _worker()
+    worker._bicycle_context_xframe_trail[7] = [(100, "domain", .19, .01)]
+    calls = []
+    worker._context_two_wheel_from_model = lambda *_args: calls.append(1) or (.16, .01)
+
+    # Geometry accepted this track while another crossing spent the one-frame
+    # context slot. A prescan queued before geometry must not reseed it later.
+    worker._consume_bicycle_context_passage(7, 104)
+    assert worker._scan_bicycle_xframe_context(7, 104, object(), object(), "cpu", False) is False
+
+    assert 7 not in worker._bicycle_context_xframe_trail
+    assert calls == []
+    assert worker.state.bicycle_context_xframe_scans == 0
+
+
+def test_v0553_return_crossing_requires_fresh_context_after_direct_bicycle_event() -> None:
+    worker = _worker()
+    worker._bicycle_context_xframe_trail[7] = [(100, "domain", .19, .01)]
+    worker._consume_bicycle_context_passage(7, 104)
+    worker._context_two_wheel_from_model = lambda *args: (
+        (.16, .01) if args[-1] is worker._general_refiner_model else None
+    )
+
+    assert worker._refine_bicycle_context(7, 108, object(), object(), "cpu", False, .51) is None
+    audit = worker._bicycle_xframe_audit_this_frame[-1]
+    assert audit["context_frames"] == [108]
+    assert audit["reason"] == "insufficient_frames"

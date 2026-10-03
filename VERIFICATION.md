@@ -1,59 +1,73 @@
-# Kiểm tra Traffic AI V0.5.52
+# Kiểm tra Traffic AI V0.5.53
 
 ## Kết quả đã thực hiện
 
-- **236 test functions offline đạt, 0 lỗi**: 202 AI và 34 backend.
-- AI gồm 91 counting tests; 17 test chạy method worker thực trích từ AST, gồm 8 test Bicycle Context/frame và 6 Human Guard transaction tests. Các model response trong regression context được thay bằng fixture; không chạy inference thực.
-- Backend gồm 13 benchmarking tests thuần và 21 helper/schema/geometry tests. Helper và Enum lấy từ source thực, schema dùng Pydantic thực; không kiểm thử HTTP endpoint/ORM qua harness này.
-- 17 integration tests bị loại khỏi harness offline một cách tường minh; vẫn giữ nguyên trong full source để chạy với pytest trên môi trường dự án.
-- Harness chỉ hỗ trợ phần pytest cần cho các tests đã chọn (`approx`, `raises`, temporary path và monkeypatch). Kết quả offline không phải kết quả chạy toàn bộ pytest.
-- Python 3.12.14: compileall và AST parse 119 file Python thành công.
-- **198 static checks đạt**: PipelineState 126 fields, worker payload/backend schema, pipeline start/finish contract, version/package/npm/Node, migration và các contract source V0.5.51/V0.5.52.
-- 39 lời gọi constructor/method gate và 92 lời gọi method nội bộ được kiểm tra khớp signature.
-- 66 migration có revision duy nhất, không vượt 32 ký tự, parent đầy đủ và một head `0066_observed_path_v0552`, parent `0065_span_shadow_v0551`.
-- Contract V0.5.52 trong test.ps1 được gọi. Các regex literal của contract mới đã đối chiếu với source bằng Python; chưa chạy PowerShell.
-- Bốn gate cùng dùng helper quỹ đạo thực; center proposal/commit/metadata khớp worker. Pending Human Guard giữ đủ rollback snapshot của anchor/heavy/two-wheel và membership rescue trước đó. Heavy track set và two-wheel UI counter được phục hồi khi loại event.
-- Bảy vị trí gọi inference phụ dùng frame sạch; detector cũng đọc frame sạch, preview vẽ trên bản copy độc lập.
-- Source text UTF-8: 176 file đọc được; giữ 3 image assets. Backend entrypoint đạt kiểm tra cú pháp Bash.
-- Toàn bộ 177 file của full source V0.5.51 được giữ trong bản mới. Bổ sung test_worker_context.py và migration 0066; ZIP có 179 file, không chứa cache, model weights hay snapshot đầu vào.
+- **279 test functions offline đạt, 0 lỗi**: 238 AI và 41 backend.
+- AI gồm 102 counting, 56 classification, 22 worker context và 8 guard transaction tests, cùng các test thuần hiện có. 33 test sử dụng method worker thực trích từ AST để tránh import HTTP transport chưa cài; geometry/classification/human_guard dependencies lấy từ source thực.
+- Backend gồm 16 benchmarking tests thuần và 25 helper/schema/geometry tests. Route helpers/Enums trích từ source thực, validation sử dụng Pydantic thực. Không thay bằng endpoint hay ORM giả.
+- **20 integration tests bị loại tường minh** khỏi harness offline; vẫn giữ trong full source để chạy với pytest trên môi trường dự án. Ba ORM regression mới của V0.5.53 nằm trong nhóm chưa chạy.
+- Harness chỉ cung cấp các phần pytest cần dùng (`approx`, `raises`, temporary path, monkeypatch). Model output trong các regression worker được cung cấp bằng fixture; không chạy inference thực. 279 là số test functions đã thực thi qua harness, không phải kết quả toàn bộ pytest.
+- Python 3.12.14: compileall và AST parse **120 file Python** thành công.
+- **228 static source checks đạt**: PipelineState 126 fields, payload worker/start/finish, backend/AI schema, version/package/Node/npm, gate và contract V0.5.51/V0.5.52/V0.5.53.
+- 40 lời gọi constructor/method gate, 106 lời gọi self/cls và 353 lời gọi trực tiếp resolve được trong source khớp signature. Scope không gồm mọi dynamic/framework-generated call; static audit không thay thế execution.
+- 67 migration có revision duy nhất, không vượt 32 ký tự, parent đầy đủ và một head `0067_candidate_evidence_v0553`, parent `0066_observed_path_v0552`.
+- Contract V0.5.53 được gọi trong test.ps1. Các regex source predicate của V0.5.52/V0.5.53 đối chiếu bằng Python và đạt; chưa chạy PowerShell parser/runtime. Một regex mới không khớp lời gọi motor veto nhiều dòng đã được sửa trước khi đóng gói.
+- Cả bốn gate và continuous approach fallback dùng helper directed observed crossing. Anchor proposal/update/lost/ack/rollback signatures khớp worker; finite-gate context queue, cache clock và unconditional evidence consumption có regression.
+- 177 text files giải mã UTF-8 thành công, giữ 3 image assets; backend entrypoint đạt bash -n.
+- Full source có 180 file, giữ đầy đủ 179 file của V0.5.52 và thêm migration 0067. Không đóng gói cache, video, model weights hoặc snapshot đầu vào.
 
-## Kiểm tra quy trình Release
+## Regression V0.5.53
 
-**30 kiểm tra đạt**, được tách rõ theo phạm vi: 13 kiểm tra thực thi, 3 kiểm tra cú pháp Bash, 12 kiểm tra static YAML/publisher và 2 fixture mô phỏng bằng Python.
+Thêm **46 test functions**:
 
-Đã thực thi các bước Bash Verify VERSION và Build release artifacts lấy trực tiếp từ release.yml trong Git repository cô lập. Đúng tag/version/HEAD đạt; sai tag/version/HEAD bị chặn. ZIP, TAR.GZ và README chứa byte từ tag dù working tree có README khác. Ba SHA256 khớp SHA256SUMS.
+| Nhóm | Test mới | Phạm vi |
+|---|---:|---|
+| Counting | 11 | Proposal/commit, handoff bị loại, lost retry, rollback telemetry, history đã tiêu thụ, zero touch, source clock, alias metadata |
+| Classification | 9 | Motor-only/veto theo frame, winning-frame diversity, truck family/source clock/expiry |
+| Worker context | 14 | Finite gate/Road Zone budget, frame trùng/cũ, cache/override, veto và tiêu thụ passage |
+| Human Guard transaction | 2 | Frame cũ không thêm strike, rollback cập nhật span/override telemetry |
+| Backend helper/ORM | 7 | Source-clock precedence, source neighbor, retry cũ sau IN→OUT→IN và FPS thấp |
+| Benchmark | 3 | Candidate cùng điểm cắt, xe làn khác, direct/direct ngược hướng |
 
-Đã dùng bare repository local để kiểm tra annotated tag/peeled commit, phân biệt tag chưa tồn tại với lỗi lookup và fetch giữ đúng tag object khi retry. Fixture chọn workflow loại sai tag/SHA/event và giữ run phù hợp mới nhất; fixture push URL đối chiếu repository đích. Hai fixture này là mô phỏng, không thực thi PowerShell.
+43 regression mới chạy qua harness; 3 ORM regression chưa chạy. Các test cũ được giữ và các thuật toán thuần đã chạy lại sau thay đổi cuối cùng.
 
-Đã parse ba workflow YAML, kiểm tra bash -n cho ba bước Bash của release.yml. Publish đọc VERSION, chuẩn hóa rồi test trước commit/push, chờ đúng tag/commit/push, tạo artifact từ tag và bổ sung Release assets tạo dở theo kiểm tra source. Không đẩy source, tạo tag remote hay tạo GitHub Release thật trong phiên đóng gói.
+Đã tái hiện những lỗi trước/sau bằng code thực từ ZIP V0.5.52, gồm post-confirm chốt quá sớm, cùng span được đề xuất lại, zero-distance touch làm đổi crossing time/point, delivery clock ghi đè source clock và chẩn đoán nhầm lane/opposite direct crossing. Không dùng timestamp GT để ép class hoặc tự tạo kết quả benchmark mới.
 
-## Regression V0.5.52
+## Release verifier
 
-Thêm 19 tests: 9 counting, 2 guard transaction và 8 worker context/frame. Nội dung kiểm tra endpoint detour, dead-band crossing thật, duplicate/stale frame, alias merge, center IN → OUT → IN, proposal bị gate chính loại, rollback passage/counter/telemetry, pixel independence, evidence crossing-frame được xét trước quyết định, scan trùng frame và evidence đã tiêu thụ.
+**30 kiểm tra đạt**: 13 thực thi, 3 cú pháp Bash, 12 static YAML/publisher và 2 fixture mô phỏng Python.
 
-Các regression V0.5.51 về continuous approach, finite segment/Road Zone, Enum, passage merge và source-time ordering được giữ. Các HTTP/SQLite ORM tests V0.5.51 chưa chạy trong harness offline.
+Đã thực thi các bước Bash Verify VERSION và Build release artifacts lấy trực tiếp từ release.yml trong Git repository cô lập. Đúng tag/version/HEAD đạt; sai tag/version/HEAD bị chặn. ZIP, TAR.GZ và README lấy đúng byte từ tag dù README working tree khác; ba SHA256 khớp SHA256SUMS.
 
-## Giới hạn môi trường đóng gói
+Bare repository local được dùng để kiểm tra annotated tag/peeled commit, tag chưa tồn tại khác lỗi lookup, fetch giữ đúng tag object khi retry và checkout tag khi main đã tiến. Hai fixture mô phỏng chọn đúng tag/SHA/event và kiểm tra push URL; đây không phải execution PowerShell.
 
-Chưa thực hiện toàn bộ pytest với pinned dependencies, PowerShell parser/runtime, Docker build, frontend npm build/audit, migration PostgreSQL hay replay YOLO trên clip hoàn chỉnh. Máy không có pwsh/Docker và thiếu các dependency integration; truy cập npm registry bằng shell trả E403.
+Ba workflow YAML parse được và các bước Bash release đạt bash -n. Source publisher vẫn đọc VERSION, test source đã chuẩn hóa trước commit/push, giữ tag bất biến, chọn đúng run và bổ sung asset/draft từ tagged bytes. Không push source, tạo tag remote hay tạo GitHub Release thật trong phiên đóng gói.
 
-npm 12.2.0 được xác minh từ trang phát hành chính thức và đã pin tại packageManager, Docker, test.ps1 và ba workflow. npm 12.2.0 chưa được cài/chạy trong môi trường đóng gói. Pixel regression dùng NumPy 2.3.5 có sẵn; requirements-test khai báo NumPy 2.4.6 cho Python 3.14 CI nhưng pinned environment đó chưa được cài/kiểm thử ở đây.
+## Bằng chứng hình ảnh và giới hạn
 
-Hai screenshot V0.5.51 được đọc và RAR giải nén 242 snapshot. Clip chưa tải được; không xác nhận F1/lọt/dư hay hai lỗi class của V0.5.52 bằng snapshot. Mốc đầu vào: GT149 / AI156 / khớp136 / lọt13 / dư20.
+Đã đọc hai screenshot V0.5.52 và giải nén an toàn **236 JPG**, tổng 81.219.008 byte, kích thước 1440 × 811, frame 3–23454. Đã xem các ảnh/crop đại diện, đặc biệt vùng xe đạp, van và hai lượt lọt đầu tiên.
 
-## Chạy kiểm tra đầy đủ và phát hành trên máy dự án
+Ảnh 04:49 cho thấy xe đạp có giỏ đang được dắt cạnh xe máy đứng yên, có khả năng context chứa vật thể lân cận nhưng chưa chứng minh bằng model run. Van trắng/xanh ở 10:41 có GT car/model truck; không tự đổi GT hoặc taxonomy từ ảnh. Một số mốc lọt không có snapshot gần đủ để chứng minh trajectory/identity.
+
+Mốc đầu vào **V0.5.52: GT149 / AI154 / khớp136 / lọt13 / dư18 / F1 89.8%**. Chưa có replay V0.5.53.
+
+Chưa thực hiện toàn bộ pytest với pinned dependencies, PowerShell parser/runtime, Docker/frontend npm build/audit, HTTP/ORM integration, migration PostgreSQL, model inference hay replay clip đầy đủ. Môi trường không có pytest/FastAPI/SQLAlchemy/httpx2/OpenCV/Torch/Ultralytics/pwsh/Docker. Python thực là 3.12.14, NumPy 2.3.5, Pydantic 2.13.5; NumPy 2.4.6 của requirements-test chưa được cài/chạy ở đây. npm 12.2.0/Node 26.10.0 giữ nguyên pin Docker/CI; môi trường npm/frontend đó chưa được build trong phiên.
+
+## Đầy đủ lệnh trên máy dự án
 
 ```powershell
 cd D:\LienThongDH\DoAn\traffic-ai
+
 Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+
+# Kiểm tra
 .\scripts\test.ps1
+
+# Khởi động
 .\scripts\start.ps1
-```
 
-Chạy lại clip với cùng vạch/Road Zone, tạo benchmark từ GT 149 tương thích và bấm Đối chiếu lại. Lệnh publish mặc định chạy bộ kiểm tra đầy đủ trước khi commit/push/tag/Release:
-
-```powershell
+# Tự test, commit, push, tạo tag và GitHub Release
 .\scripts\publish.ps1
 ```
 
-Hướng dẫn đăng nhập GitHub CLI và retry phát hành có trong README.md.
+Mở https://traffic-ai.test:8443, Ctrl + F5, replay đúng clip/cùng vạch/Road Zone rồi tạo benchmark session mới từ GT 149 tương thích. Publish tự đọc VERSION để phát hành v0.5.53; README có hướng dẫn auth GitHub CLI và retry.

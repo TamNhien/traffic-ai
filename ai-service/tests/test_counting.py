@@ -3,6 +3,220 @@ import pytest
 from app.counting import CountingLine, LineCrossingCounter, RoadZone
 
 
+def test_v0553_observed_bracket_ignores_later_same_side_touch_source_time() -> None:
+    from app.counting import _GateSample, crossing_frame_between, observed_gate_crossing
+
+    samples = [
+        _GateSample(1, (500, 470), -30.0, -1),
+        _GateSample(2, (500, 497), -3.0, 0),
+        _GateSample(3, (500, 503), 3.0, 0),
+        _GateSample(4, (505, 500), 0.0, 0),
+        _GateSample(5, (510, 530), 30.0, 1),
+    ]
+    bracket = observed_gate_crossing(samples, samples[0], samples[-1], (100, 500), (800, 500))
+    assert bracket is not None
+    left, right, point = bracket
+    assert point == (500.0, 500.0)
+    assert crossing_frame_between(left, right, point) == pytest.approx(2.5)
+
+
+def test_v0553_observed_bracket_outside_touch_cannot_erase_real_finite_crossing() -> None:
+    from app.counting import _GateSample, observed_gate_crossing
+
+    samples = [
+        _GateSample(1, (805, 470), -30.0, -1),
+        _GateSample(2, (760, 497), -3.0, 0),
+        _GateSample(3, (760, 503), 3.0, 0),
+        _GateSample(4, (805, 500), 0.0, 0),
+        _GateSample(5, (805, 530), 30.0, 1),
+    ]
+    bracket = observed_gate_crossing(samples, samples[0], samples[-1], (100, 500), (800, 500))
+    assert bracket == (samples[1], samples[2], (760.0, 500.0))
+    # A genuine later side change outside the endpoint remains authoritative;
+    # selecting the older interior intersection would accept an endpoint detour.
+    samples[3] = _GateSample(4, (805, 497), -3.0, 0)
+    assert observed_gate_crossing(samples, samples[0], samples[-1], (100, 500), (800, 500)) is None
+
+
+def test_v0553_anchor_immediate_proposal_waits_for_primary_and_can_post_confirm() -> None:
+    from app.counting import VerifiedAnchorSpanRescuer
+
+    line = CountingLine(0.1, 0.5, 0.9, 0.5)
+    counter = LineCrossingCounter(line, crossing_cooldown_frames=60)
+    span = VerifiedAnchorSpanRescuer(line)
+    assert counter.register_external_crossing(5701, "out", 10, (500.0, 500.0))
+    span.mark_counted(5701, "out", 10, commit_candidate=False)
+    before = span.capture_passage_state(5701)
+    assert span.update(5701, (500, 430), 1000, 1000, 30, commit=False) is None
+    candidate = span.update(5701, (500, 570), 1000, 1000, 31, commit=False)
+    assert candidate == ("in", (500.0, 500.0))
+    assert span.capture_passage_state(5701) == before
+    assert span.verified_anchor_span_rescues == 0
+    assert not span.override_qualified_for(5701)
+    accepted = counter.register_external_crossing(5701, candidate[0], 31, candidate[1])
+    assert not accepted
+    span.note_immediate_handoff_result(5701, accepted)
+    assert span.immediate_handoff_rejections == 1
+    confirmed = span.update(5701, (500, 585), 1000, 1000, 32, commit=False)
+    assert confirmed == candidate
+    assert span.override_qualified_for(5701)
+    assert span.capture_passage_state(5701) == before
+    assert span.post_confirm_closures == 0
+    assert counter.register_external_crossing(5701, confirmed[0], 32, confirmed[1], verified_anchor_span=True)
+    span.consume_override_qualification(5701)
+    span.mark_counted(5701, "in", 32)
+    assert span.capture_passage_state(5701)[:2] == (frozenset({"in"}), 32)
+    assert span.verified_anchor_span_rescues == span.post_confirm_closures == 1
+    span.mark_counted(5701, "in", 32)
+    assert span.verified_anchor_span_rescues == span.post_confirm_closures == 1
+    span.restore_passage_state(5701, before)
+    assert span.verified_anchor_span_rescues == span.post_confirm_closures == 0
+
+
+def test_v0553_anchor_post_confirm_handoff_can_retry_without_spending_passage() -> None:
+    from app.counting import VerifiedAnchorSpanRescuer
+
+    span = VerifiedAnchorSpanRescuer(CountingLine(), immediate_min_normal_ratio=0.95)
+    before = span.capture_passage_state(5702)
+    assert span.update(5702, (450, 460), 1000, 1000, 20, commit=False) is None
+    assert span.update(5702, (500, 540), 1000, 1000, 21, commit=False) is None
+    candidate = span.update(5702, (520, 550), 1000, 1000, 22, commit=False)
+    assert candidate is not None and candidate[0] == "in"
+    crossing_frame = span.crossing_frame_for(5702)
+    assert span.capture_passage_state(5702) == before
+    assert span.verified_anchor_span_rescues == span.post_confirm_closures == 0
+    retry = span.update(5702, (530, 565), 1000, 1000, 23, commit=False)
+    assert retry == candidate
+    assert span.crossing_frame_for(5702) == crossing_frame
+    span.mark_counted(5702, "in", 23)
+    assert span.post_confirm_closures == 1
+    assert span.crossing_frame_for(5702) == crossing_frame
+
+
+def test_v0553_anchor_lost_proposal_is_retryable_until_primary_accepts() -> None:
+    from app.counting import VerifiedAnchorSpanRescuer
+
+    span = VerifiedAnchorSpanRescuer(CountingLine(), immediate_min_normal_ratio=0.95)
+    before = span.capture_passage_state(5703)
+    assert span.update(5703, (450, 460), 1000, 1000, 20, commit=False) is None
+    assert span.update(5703, (500, 540), 1000, 1000, 21, commit=False) is None
+    candidate = span.finalize_lost(5703, 22, commit=False)
+    assert candidate is not None and candidate[0] == "in"
+    assert span.override_qualified_for(5703)
+    assert span.capture_passage_state(5703) == before
+    assert span.verified_anchor_span_rescues == span.lost_track_finalizations == 0
+    assert span.finalize_lost(5703, 23, commit=False) == candidate
+    span.mark_counted(5703, "in", 21)
+    assert span.lost_track_finalizations == span.verified_anchor_span_rescues == 1
+    assert span.finalize_lost(5703, 24, commit=False) is None
+
+
+def test_v0553_anchor_guard_rollback_restores_committed_rescue_telemetry_once() -> None:
+    from app.counting import VerifiedAnchorSpanRescuer
+
+    for lost in (False, True):
+        span = VerifiedAnchorSpanRescuer(CountingLine(), immediate_min_normal_ratio=0.95)
+        span.mark_counted(5704, "out", 10, commit_candidate=False)
+        before = span.capture_passage_state(5704)
+        assert span.update(5704, (450, 460), 1000, 1000, 20, commit=False) is None
+        assert span.update(5704, (500, 540), 1000, 1000, 21, commit=False) is None
+        candidate = span.finalize_lost(5704, 22, commit=False) if lost else span.update(
+            5704, (520, 550), 1000, 1000, 22, commit=False,
+        )
+        assert candidate is not None
+        span.mark_counted(5704, "in", 22)
+        assert span.verified_anchor_span_rescues == 1
+        assert span.lost_track_finalizations == int(lost)
+        assert span.post_confirm_closures == int(not lost)
+        span.restore_passage_state(5704, before)
+        assert span.capture_passage_state(5704) == before
+        assert span.verified_anchor_span_rescues == span.lost_track_finalizations == span.post_confirm_closures == 0
+        span.restore_passage_state(5704, before)
+        assert span.verified_anchor_span_rescues == 0
+        assert span.finalize_lost(5704, 23, commit=False) is None
+        assert span.update(5704, (530, 565), 1000, 1000, 23, commit=False) is None
+
+
+def test_v0553_anchor_candidate_unused_by_primary_does_not_count_as_rescue() -> None:
+    from app.counting import VerifiedAnchorSpanRescuer
+
+    span = VerifiedAnchorSpanRescuer(CountingLine())
+    assert span.update(5705, (500, 465), 1000, 1000, 1, commit=False) is None
+    assert span.update(5705, (500, 535), 1000, 1000, 2, commit=False) is not None
+    span.mark_counted(5705, "in", 2, commit_candidate=False)
+    assert span.verified_anchor_span_rescues == span.immediate_override_qualifications == 0
+    assert span.capture_passage_state(5705)[:2] == (frozenset({"in"}), 2)
+    assert span.update(5705, (500, 545), 1000, 1000, 3, commit=False) is None
+
+
+def test_v0553_anchor_accepted_passage_discards_opposite_tail_of_long_history() -> None:
+    from app.counting import VerifiedAnchorSpanRescuer
+
+    span = VerifiedAnchorSpanRescuer(CountingLine(), history_gap_frames=90)
+    assert span.update(5706, (500, 465), 1000, 1000, 1, commit=False) is None
+    assert span.update(5706, (500, 535), 1000, 1000, 2, commit=False) is not None
+    span.mark_counted(5706, "in", 2)
+    for frame in range(3, 35):
+        assert span.update(5706, (500, 550), 1000, 1000, frame, commit=False) is None
+    assert span.verified_anchor_span_rescues == 1
+    assert span.post_confirm_closures == 0
+
+
+def test_v0553_primary_sync_discards_anchor_history_older_than_accepted_frame() -> None:
+    from app.counting import VerifiedAnchorSpanRescuer
+
+    span = VerifiedAnchorSpanRescuer(CountingLine(), history_gap_frames=90)
+    assert span.update(5707, (500, 465), 1000, 1000, 10, commit=False) is None
+    # The primary gate accepted frame11, so the secondary update was skipped in
+    # that frame. Its last sample is pre-crossing and cannot seed a new passage.
+    span.mark_counted(5707, "in", 11, commit_candidate=False)
+    for frame in range(12, 40):
+        assert span.update(5707, (500, 550), 1000, 1000, frame, commit=False) is None
+    assert span.verified_anchor_span_rescues == 0
+
+
+def test_v0553_verified_external_override_cannot_rewind_accepted_source_clock() -> None:
+    counter = LineCrossingCounter(CountingLine(), crossing_cooldown_frames=60)
+    assert counter.register_external_crossing(5708, "in", 30, (500, 500), mode="direct")
+    for frame in (29, 30):
+        for direction in ("in", "out"):
+            assert not counter.register_external_crossing(
+                5708, direction, frame, (510, 500), verified_anchor_span=True,
+            )
+            assert counter.external_rejection_reason_for(5708) == "stale-source-frame"
+            assert counter._tracks[5708].last_count_frame == 30
+            assert counter.crossing_point_for(5708) == (500, 500)
+    assert counter.total_crossings == 1
+    assert counter.verified_same_direction_overrides == counter.verified_cooldown_overrides == 0
+    # Stronger measured evidence for a genuinely later passage can still use
+    # the existing override even before the ordinary cooldown expires.
+    assert counter.register_external_crossing(
+        5708, "out", 31, (510, 500), verified_anchor_span=True,
+    )
+    assert counter.total_crossings == 2
+    assert counter.verified_cooldown_overrides == 1
+
+
+def test_v0553_anchor_alias_merge_keeps_geometry_of_latest_accepted_passage() -> None:
+    from app.counting import VerifiedAnchorSpanRescuer
+
+    span = VerifiedAnchorSpanRescuer(CountingLine(), immediate_min_normal_ratio=0.95)
+    assert span.update(5709, (450, 460), 1000, 1000, 10, commit=False) is None
+    assert span.update(5709, (500, 540), 1000, 1000, 11, commit=False) is None
+    # Confirmation can arrive later than a crossing issued by another alias;
+    # source geometry must stay attached to the chosen accepted passage clock.
+    assert span.update(5709, (510, 550), 1000, 1000, 16, commit=False) is not None
+    span.mark_counted(5709, "in", 16)
+    source_frame = span.crossing_frame_for(5709)
+    assert span.update(5710, (500, 535), 1000, 1000, 13, commit=False) is None
+    assert span.update(5710, (500, 465), 1000, 1000, 14, commit=False) is not None
+    span.mark_counted(5710, "out", 14)
+    assert span.crossing_frame_for(5710) > source_frame
+    span.merge_track(5709, 5710)
+    assert span.capture_passage_state(5710)[:2] == (frozenset({"in"}), 16)
+    assert span.crossing_frame_for(5710) == source_frame
+
+
 def test_v0552_primary_confirmation_ignores_repeated_and_older_source_frames() -> None:
     counter = LineCrossingCounter(
         CountingLine(0.1, 0.5, 0.9, 0.5), side_confirm_samples=2,
