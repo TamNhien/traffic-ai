@@ -3,6 +3,113 @@ import pytest
 from app.counting import CountingLine, LineCrossingCounter, RoadZone
 
 
+def test_v0557_merged_pending_cannot_borrow_old_same_direction_passage_clock() -> None:
+    from app.counting import VerifiedAnchorSpanRescuer
+
+    gate = VerifiedAnchorSpanRescuer(CountingLine(),immediate_min_normal_ratio=.95)
+    gate.mark_counted(1,'in',1)
+    assert gate.update(1,(450.,460.),1000,1000,30) is None
+    assert gate.update(1,(500.,540.),1000,1000,34) is None
+    gate.mark_counted(2,'in',33)
+    primary = LineCrossingCounter(CountingLine(),crossing_cooldown_frames=60)
+    assert primary.register_external_crossing(2,'in',33,(500.,500.),crossing_frame=31.)
+    gate.merge_track(1,2)
+    candidate = gate.update(2,(510.,565.),1000,1000,35,commit=False)
+    if candidate is not None:
+        primary.register_external_crossing(2,candidate[0],35,candidate[1],crossing_frame=gate.crossing_frame_for(2),verified_anchor_span=gate.override_qualified_for(2))
+    assert candidate is None
+    assert primary.in_count == 1
+    assert not gate.override_qualified_for(2)
+    assert gate.finalize_lost(2,36,commit=False) is None
+
+
+def test_v0557_merged_recent_same_direction_pending_cannot_finalize_on_disappearance() -> None:
+    from app.counting import VerifiedAnchorSpanRescuer
+
+    gate = VerifiedAnchorSpanRescuer(CountingLine(),immediate_min_normal_ratio=.95)
+    gate.mark_counted(3,'in',1)
+    gate.update(3,(450.,460.),1000,1000,30)
+    gate.update(3,(500.,540.),1000,1000,34)
+    gate.mark_counted(4,'in',33)
+    gate.merge_track(3,4)
+    assert gate.finalize_lost(4,35,commit=False) is None
+    assert not gate.override_qualified_for(4)
+
+
+def test_v0557_merged_pending_recomputes_aged_same_direction_eligibility() -> None:
+    from app.counting import VerifiedAnchorSpanRescuer
+
+    gate = VerifiedAnchorSpanRescuer(CountingLine(),immediate_min_normal_ratio=.95)
+    gate.update(5,(450.,460.),1000,1000,30)
+    gate.update(5,(500.,540.),1000,1000,34)
+    gate.mark_counted(6,'in',15)
+    gate.merge_track(5,6)
+    assert gate.update(6,(510.,565.),1000,1000,35) == ('in',(475.,500.))
+    assert gate.same_direction_overrides == 1
+    assert gate.override_qualified_for(6)
+
+
+def test_v0557_merged_opposite_latest_passage_preserves_ordinary_return() -> None:
+    from app.counting import VerifiedAnchorSpanRescuer
+
+    gate = VerifiedAnchorSpanRescuer(CountingLine(),immediate_min_normal_ratio=.95)
+    gate.mark_counted(7,'in',1)
+    gate.update(7,(450.,460.),1000,1000,30)
+    gate.update(7,(500.,540.),1000,1000,34)
+    gate.mark_counted(8,'out',20)
+    gate.merge_track(7,8)
+    assert gate.update(8,(510.,565.),1000,1000,35) == ('in',(475.,500.))
+    assert gate.same_direction_overrides == 0
+    assert gate.post_confirm_closures == 1
+
+
+def test_v0557_cancelled_merged_pending_still_allows_later_verified_passage() -> None:
+    from app.counting import VerifiedAnchorSpanRescuer
+
+    gate = VerifiedAnchorSpanRescuer(CountingLine(),immediate_min_normal_ratio=.95)
+    gate.mark_counted(9,'in',1)
+    gate.update(9,(450.,460.),1000,1000,30)
+    gate.update(9,(500.,540.),1000,1000,34)
+    gate.mark_counted(10,'in',33)
+    gate.merge_track(9,10)
+    assert gate.update(10,(510.,565.),1000,1000,35) is None
+    assert gate.update(10,(450.,460.),1000,1000,50) is None
+    assert gate.update(10,(500.,540.),1000,1000,54) is None
+    assert gate.update(10,(510.,565.),1000,1000,55) == ('in',(475.,500.))
+    assert gate.same_direction_overrides == 1
+
+
+def test_v0557_aged_same_direction_pending_keeps_existing_post_confirm_rule() -> None:
+    from app.counting import VerifiedAnchorSpanRescuer
+
+    gate = VerifiedAnchorSpanRescuer(CountingLine(),immediate_min_normal_ratio=.95)
+    gate.mark_counted(11,'in',1)
+    gate.update(11,(450.,460.),1000,1000,30)
+    gate.update(11,(500.,540.),1000,1000,34)
+    gate.mark_counted(12,'in',15)
+    gate.merge_track(11,12)
+    assert gate.update(12,(510.,565.),1000,1000,35) == ('in',(475.,500.))
+    assert gate.same_direction_overrides == 1
+
+
+def test_v0557_invalid_geometric_clock_cannot_synthesize_timestamp_rewind() -> None:
+    from app.counting import select_event_crossing_frame
+
+    for geometric in (float('nan'),float('inf'),float('-inf'),'bad',None):
+        for mode in ('direct','interpolated','rescued'):
+            assert select_event_crossing_frame(100.,geometric,mode) == (100.,False,False)
+
+
+def test_v0557_finite_geometric_clock_keeps_existing_correction_and_limits() -> None:
+    from app.counting import select_event_crossing_frame
+
+    assert select_event_crossing_frame(100.,95.,'direct') == (100.,False,False)
+    assert select_event_crossing_frame(100.,95.,'interpolated') == (95.,True,False)
+    assert select_event_crossing_frame(100.,80.,'interpolated') == (94.,True,True)
+    assert select_event_crossing_frame(100.,95.,'rescued') == (95.,True,False)
+    assert select_event_crossing_frame(100.,70.,'rescued') == (82.,True,True)
+
+
 def test_v0556_anchor_merged_inner_endpoint_detour_invalidates_pending() -> None:
     from app.counting import VerifiedAnchorSpanRescuer
 

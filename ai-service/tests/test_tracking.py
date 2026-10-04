@@ -1,6 +1,117 @@
 from app.tracking import TrackContinuityResolver, motion_leading_anchor
 
 
+def _anchor_velocity(resolver: TrackContinuityResolver, canonical: int):
+    # Differential runs against the delivered .56 ZIP exercise its actual
+    # velocity-based anchor behavior before the dedicated heading API existed.
+    getter = getattr(resolver, 'anchor_velocity_for', resolver.velocity_for)
+    return getter(canonical)
+
+
+def test_v0557_decelerating_upward_track_cannot_invent_opposite_crossing() -> None:
+    from app.counting import CountingLine, LineCrossingCounter
+
+    resolver = TrackContinuityResolver()
+    gate = LineCrossingCounter(
+        CountingLine(), side_confirm_samples=2, crossing_cooldown_frames=60,
+        passage_rearm_min_frames=16, fast_confirm_distance_ratio=.018,
+        adaptive_cooldown=True, cooldown_release_ratio=.055,
+        rescue_min_normal_ratio=.28, rescue_max_jump_ratio=.26,
+        rescue_min_side_distance_ratio=.010, rescue_strict_gap_frames=18,
+        rescue_strict_min_normal_ratio=.40, rescue_strict_max_jump_ratio=.20,
+        rescue_strict_min_side_distance_ratio=.014, bracket_confirm=True,
+        late_geometry_confirm=True,
+    )
+    directions = []
+    for index in range(25):
+        cy = 540.0 if index == 0 else 528.0 - (index - 1) * .2
+        canonical, _ = resolver.resolve(1, (500.,cy), 'motorcycle',100+index,1000,1000)
+        anchor = motion_leading_anchor((460.,cy-80.,540.,cy+80.),_anchor_velocity(resolver,canonical))
+        direction = gate.update(canonical,anchor,1000,1000,100+index)
+        if direction:
+            directions.append(direction)
+    assert resolver.velocity_for(1)[1] < 0
+    assert abs(resolver.velocity_for(1)[1]) < .75
+    assert directions == ['out']
+    assert gate.in_count == 0
+
+
+def test_v0557_unestablished_heading_preserves_stationary_startup_blend() -> None:
+    resolver = TrackContinuityResolver()
+    for frame, point in [(10,(500.,500.)),(11,(500.,499.)),(12,(500.,498.))]:
+        canonical, _ = resolver.resolve(2,point,'motorcycle',frame,1000,1000)
+        assert _anchor_velocity(resolver,canonical) == resolver.velocity_for(canonical)
+        for inset in (0.,.16,.45):
+            assert motion_leading_anchor((450.,point[1]-80.,550.,point[1]+80.),_anchor_velocity(resolver,canonical),inset) == motion_leading_anchor((450.,point[1]-80.,550.,point[1]+80.),resolver.velocity_for(canonical),inset)
+
+
+def test_v0557_reliable_reversal_updates_heading_and_keeps_inset_cardinal_geometry() -> None:
+    resolver = TrackContinuityResolver()
+    for frame, point in [(10,(500.,550.)),(11,(500.,530.)),(12,(500.,529.8)),(13,(500.,529.6))]:
+        resolver.resolve(3,point,'truck',frame,1000,1000)
+    resolver.resolve(3,(500.,550.),'truck',14,1000,1000)
+    velocity = _anchor_velocity(resolver,3)
+    assert velocity[1] >= 1.5
+    assert motion_leading_anchor((450.,470.,550.,630.),velocity,.16) == (500.,604.4)
+    resolver.resolve(3,(500.,500.),'truck',15,1000,1000)
+    assert _anchor_velocity(resolver,3)[1] <= -1.5
+    assert motion_leading_anchor((450.,420.,550.,580.),_anchor_velocity(resolver,3),.16) == (500.,445.6)
+
+
+def test_v0557_slow_stitched_id_keeps_established_leading_heading() -> None:
+    resolver = TrackContinuityResolver(max_gap_frames=20)
+    for index,cy in enumerate([550.,538.,537.8,537.6,537.4,537.2]):
+        resolver.resolve(4,(500.,cy),'motorcycle',100+index,1000,1000)
+    canonical, stitched = resolver.resolve(44,(500.,537.),'motorcycle',106,1000,1000)
+    assert stitched and canonical == 4
+    assert abs(resolver.velocity_for(canonical)[1]) < 1.5
+    assert motion_leading_anchor((460.,457.,540.,617.),_anchor_velocity(resolver,canonical))[1] == 457.
+
+
+def test_v0557_alias_fusion_moves_newer_heading_without_leaking_displaced_identity() -> None:
+    resolver = TrackContinuityResolver()
+    resolver.resolve(5,(100.,500.),'motorcycle',100,1000,1000)
+    resolver.resolve(55,(500.,500.),'motorcycle',100,1000,1000,{5})
+    resolver.resolve(55,(500.,488.),'motorcycle',101,1000,1000,{5})
+    assert resolver.alias_raw_id(55,5) == 55
+    assert motion_leading_anchor((50.,420.,150.,580.),_anchor_velocity(resolver,5))[1] == 420.
+    assert _anchor_velocity(resolver,55) == (0.,0.)
+    resolver.resolve(5,(100.,500.),'motorcycle',102,1000,1000)
+    assert resolver.velocity_for(5) == (0.,0.)
+    assert motion_leading_anchor((50.,420.,150.,580.),_anchor_velocity(resolver,5))[1] == 420.
+
+
+def test_v0557_alias_fusion_retains_newer_target_heading_and_target_frame_tie() -> None:
+    for target_frame in (101,103):
+        resolver = TrackContinuityResolver()
+        resolver.resolve(6,(100.,500.),'motorcycle',100,1000,1000)
+        resolver.resolve(66,(500.,500.),'motorcycle',100,1000,1000,{6})
+        resolver.resolve(66,(500.,488.),'motorcycle',101,1000,1000,{6})
+        resolver.resolve(6,(112.,500.),'motorcycle',target_frame,1000,1000,{66})
+        resolver.alias_raw_id(66,6)
+        assert motion_leading_anchor((62.,420.,162.,580.),_anchor_velocity(resolver,6)) == (162.,500.)
+
+
+def test_v0557_reused_raw_id_expires_before_refreshing_motion_state() -> None:
+    resolver = TrackContinuityResolver(max_gap_frames=10)
+    resolver.resolve(7,(500.,550.),'motorcycle',10,1000,1000)
+    resolver.resolve(7,(500.,538.),'motorcycle',11,1000,1000)
+    resolver.resolve(7,(500.,538.),'motorcycle',92,1000,1000)
+    assert resolver.velocity_for(7) == (0.,0.)
+    assert _anchor_velocity(resolver,7) == (0.,0.)
+    assert motion_leading_anchor((460.,458.,540.,618.),_anchor_velocity(resolver,7)) == (500.,618.)
+    assert resolver.lineage_size(7) == 1
+
+
+def test_v0557_active_identity_retains_heading_within_existing_expiry() -> None:
+    resolver = TrackContinuityResolver(max_gap_frames=10)
+    resolver.resolve(8,(500.,550.),'motorcycle',10,1000,1000)
+    resolver.resolve(8,(500.,538.),'motorcycle',11,1000,1000)
+    resolver.resolve(8,(500.,538.),'motorcycle',90,1000,1000)
+    assert resolver.velocity_for(8)[1] < 0
+    assert motion_leading_anchor((460.,458.,540.,618.),_anchor_velocity(resolver,8)) == (500.,458.)
+
+
 def test_v0556_tiny_heading_change_cannot_jump_between_box_edges() -> None:
     from math import dist
 

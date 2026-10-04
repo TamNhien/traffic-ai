@@ -812,7 +812,16 @@ class RefineEvidenceAccumulator:
     def four_wheel_support(
         self, track_id: int, frame_index: int, label: str,
     ) -> tuple[int, float, float]:
-        """Return repeated four-wheel evidence that beats its alternatives.
+        """Return repeated four-wheel evidence that beats its alternatives."""
+        hits, fused, strongest, _source_frame = self.four_wheel_support_snapshot(
+            track_id, frame_index, label,
+        )
+        return hits, fused, strongest
+
+    def four_wheel_support_snapshot(
+        self, track_id: int, frame_index: int, label: str,
+    ) -> tuple[int, float, float, int | None]:
+        """Return four-wheel support and its latest winning source frame.
 
         A target-matched truck opinion from one refiner can coexist with a
         stronger car or bus opinion from another. Count a source frame only
@@ -823,7 +832,7 @@ class RefineEvidenceAccumulator:
         """
         selected_label = str(label)
         if selected_label not in HEAVY_CLASSES:
-            return 0, 0.0, 0.0
+            return 0, 0.0, 0.0, None
         current = int(frame_index)
         by_frame: dict[int, dict[str, float]] = {}
         for observed_frame, observed_label, confidence, _source in self._samples.get(int(track_id), ()):
@@ -834,21 +843,21 @@ class RefineEvidenceAccumulator:
             frame[observed_label] = max(frame.get(observed_label, 0.0), float(confidence))
 
         competing_labels = HEAVY_CLASSES - {selected_label}
-        winning: list[float] = []
+        winning: dict[int, float] = {}
         for observed_frame, frame in by_frame.items():
             confidence = frame.get(selected_label, 0.0)
             competing_confidence = max((frame.get(other, 0.0) for other in competing_labels), default=0.0)
             if confidence > competing_confidence:
-                winning.append(confidence * (0.992 ** (current - observed_frame)))
+                winning[observed_frame] = confidence * (0.992 ** (current - observed_frame))
         if not winning:
-            return 0, 0.0, 0.0
+            return 0, 0.0, 0.0, None
         miss_probability = 1.0
-        for confidence in winning:
+        for confidence in winning.values():
             miss_probability *= max(0.0, 1.0 - confidence)
         fused = 1.0 - miss_probability
         if any(fused <= self.support(track_id, current, other)[1] for other in competing_labels):
-            return 0, 0.0, 0.0
-        return len(winning), fused, max(winning)
+            return 0, 0.0, 0.0, None
+        return len(winning), fused, max(winning.values()), max(winning)
 
     def consume_through(self, track_id: int, frame_index: int) -> None:
         """Consume completed-passage evidence while preserving newer samples."""
@@ -969,6 +978,7 @@ class TruckSemanticLock:
         hits: int,
         refiner_hits: int = 0,
         refiner_confidence: float = 0.0,
+        refiner_frame_index: int | None = None,
     ) -> tuple[str, float] | None:
         # The caller can refresh all tracked classes. A cached truck identity
         # must never escape its four-wheel family merely because observe used
@@ -983,15 +993,25 @@ class TruckSemanticLock:
             and int(hits) >= self.primary_hits
             and float(certainty) >= self.primary_certainty
         )
+        refiner_source_frame = int(frame_index) if refiner_frame_index is None else int(refiner_frame_index)
         strong_refiner = (
             int(refiner_hits) >= self.min_refiner_hits
             and float(refiner_confidence) >= self.min_refiner_confidence
+            and refiner_source_frame <= int(frame_index)
         )
         if strong_primary or strong_refiner:
-            confidence = max(float(certainty) if strong_primary else 0.0, float(refiner_confidence))
-            if previous is not None and int(frame_index) - previous[1] <= self.ttl_frames:
-                confidence = max(confidence, previous[0])
-            self._locks[int(track_id)] = (confidence, int(frame_index))
+            # Reading eligible refiner history is not another truck observation.
+            # A qualified primary truck is new evidence on the current frame;
+            # refiner-only refreshes retain their actual winning source clock.
+            observed_frame = int(frame_index) if strong_primary else refiner_source_frame
+            if previous is None or observed_frame >= previous[1]:
+                confidence = max(
+                    float(certainty) if strong_primary else 0.0,
+                    float(refiner_confidence) if strong_refiner else 0.0,
+                )
+                if previous is not None and int(frame_index) - previous[1] <= self.ttl_frames:
+                    confidence = max(confidence, previous[0])
+                self._locks[int(track_id)] = (confidence, observed_frame)
         return self.resolve(track_id, frame_index, stable_label)
 
     def resolve(self, track_id: int, frame_index: int, primary_label: str) -> tuple[str, float] | None:

@@ -535,3 +535,199 @@ def test_v0556_pending_guard_trace_keeps_visible_geometry_without_committing() -
     assert worker.state.total_count == 0
     assert worker._event_dispatcher.payloads == []
     assert 77 in worker._pending_guard_crossings
+
+
+def test_v0557_neutral_verifier_cannot_commit_confirmed_pedestrian_crossing() -> None:
+    """Execute the real crossing authorization branch without inference/HTTP."""
+    import ast
+    from pathlib import Path
+    from app.human_guard import HumanGuardDecision, HumanGuardTrackPolicy
+
+    worker = _worker()
+    worker._human_guard_policy = HumanGuardTrackPolicy(required_strikes=2)
+    worker._human_guard_policy.observe(77, HumanGuardDecision(reject=True), frame_index=100)
+    worker._human_guard_policy.observe(77, HumanGuardDecision(reject=True), frame_index=101)
+    worker._human_guard_last_check = {}
+    worker._human_guard_last_observation = {}
+    worker._human_rider_tracks_seen = set()
+    worker._verify_human_candidate = lambda *_args, **_kwargs: HumanGuardDecision(reject=False)
+    worker._draw_detection = lambda *_args: None
+    source_path = Path(__file__).resolve().parents[1] / "app/worker.py"
+    module = ast.parse(source_path.read_text(encoding="utf-8"))
+    cls = next(node for node in module.body if isinstance(node, ast.ClassDef) and node.name == "PipelineWorker")
+    run = next(node for node in cls.body if isinstance(node, ast.FunctionDef) and node.name == "run")
+    crossing = next(
+        node for node in ast.walk(run) if isinstance(node, ast.If)
+        and isinstance(node.test, ast.Name) and node.test.id == "direction"
+    )
+    guard = next(
+        node for node in crossing.body if isinstance(node, ast.If)
+        and isinstance(node.test, ast.Compare)
+        and isinstance(node.test.left, ast.Name) and node.test.left.id == "event_label"
+        and isinstance(node.test.ops[0], ast.In)
+    )
+    record = next(
+        node for node in crossing.body if isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Attribute)
+        and node.value.func.attr == "_record_committed_crossing"
+    )
+    append = next(
+        node for node in crossing.body if isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Attribute)
+        and isinstance(node.value.func.value, ast.Name)
+        and node.value.func.value.id == "pending_crossing_events"
+    )
+    loop = ast.For(
+        target=ast.Name(id="_crossing", ctx=ast.Store()),
+        iter=ast.List(elts=[ast.Constant(value=77)], ctx=ast.Load()),
+        body=[guard, record, append], orelse=[],
+    )
+    code = compile(ast.fix_missing_locations(ast.Module(body=[loop], type_ignores=[])), str(source_path), "exec")
+    counter = _Counter()
+    env = {
+        "self": worker, "counter": counter, "track_id": 77, "frame_index": 102,
+        "event_label": "motorcycle", "event_confidence": .82, "direction": "in",
+        "analysis_frame": object(), "rect": (40, 45, 60, 65), "frame": object(),
+        "device": "cpu", "use_half": False, "velocity": (0, 2), "cv2": object(),
+        "anchor": (50, 65), "class_certainty": .9, "raw_track_id": 77,
+        "context_trace": {}, "span_passage_state": None, "heavy_passage_state": None,
+        "two_wheel_passage_state": None, "heavy_rescue_was_recorded": False,
+        "gate_trace_track": {}, "TWO_WHEEL_LABELS": {"bicycle", "motorcycle"},
+        "pending_crossing_events": [], "crossing_method": "direct",
+        "event_frame_index": 102, "source_time_seconds": 4.04, "crossing_x": .5, "crossing_y": .5,
+    }
+
+    exec(code, env)
+
+    assert counter.revoked == [(77, "in")]
+    assert worker._human_guard_policy.status(77) == "rejected"
+    assert env["gate_trace_track"]["human_guard_status"] == "rejected"
+    assert worker.state.total_count == 0
+    assert env["pending_crossing_events"] == []
+    assert worker._event_dispatcher.payloads == []
+
+
+def _capture_crossing_trace_counter(worker):
+    """Capture actual per-frame initialization and evaluate the actual trace field."""
+    import ast
+    from pathlib import Path
+
+    source_path = Path(__file__).resolve().parents[1] / "app/worker.py"
+    module = ast.parse(source_path.read_text(encoding="utf-8"))
+    cls = next(node for node in module.body if isinstance(node, ast.ClassDef) and node.name == "PipelineWorker")
+    run = next(node for node in cls.body if isinstance(node, ast.FunctionDef) and node.name == "run")
+    trace = next(
+        node for node in ast.walk(run) if isinstance(node, ast.Dict)
+        and any(isinstance(key, ast.Constant) and key.value == "crossing_events" for key in node.keys)
+    )
+    expression = next(
+        value for key, value in zip(trace.keys, trace.values)
+        if isinstance(key, ast.Constant) and key.value == "crossing_events"
+    )
+    track_loop = next(
+        node for node in ast.walk(run) if isinstance(node, ast.For)
+        and isinstance(node.target, ast.Name) and node.target.id == "item_index"
+    )
+    captured_names = {
+        node.id for node in ast.walk(expression) if isinstance(node, ast.Name)
+    } - {"self", "len", "max", "pending_crossing_events"}
+    capture = [
+        node for node in ast.walk(run) if isinstance(node, ast.Assign)
+        and node.lineno < track_loop.lineno
+        and any(isinstance(target, ast.Name) and target.id in captured_names for target in node.targets)
+    ]
+    env = {"self": worker}
+    exec(compile(ast.fix_missing_locations(ast.Module(
+        body=sorted(capture, key=lambda node: node.lineno), type_ignores=[],
+    )), str(source_path), "exec"), env)
+    code = compile(ast.Expression(body=expression), str(source_path), "eval")
+
+    def count(events):
+        env["pending_crossing_events"] = events
+        return eval(code, env)
+
+    return count
+
+
+def test_v0557_trace_counts_deferred_and_ordinary_commits_once_per_frame() -> None:
+    worker = _worker()
+    pending = _pending()
+    pending.observed_frame_index = 522
+    worker._pending_guard_crossings[pending.track_id] = pending
+    count_this_frame = _capture_crossing_trace_counter(worker)
+    ordinary_events = []
+    for track_id in (78, 79):
+        worker._record_committed_crossing("motorcycle", "out", "direct")
+        ordinary_events.append((track_id, "motorcycle", "out"))
+
+    worker._commit_guard_crossing(object(), pending)
+
+    assert worker.state.total_count == 3
+    assert len(worker._event_dispatcher.payloads) == 1
+    assert worker._event_dispatcher.payloads[0]["source_frame_index"] == 519
+    assert worker._event_dispatcher.payloads[0]["source_time_seconds"] == 20.72
+    assert worker._event_dispatcher.payloads[0]["snapshot_path"] == "frame_522.jpg"
+    assert count_this_frame(ordinary_events) == 3
+    # A subsequent ordinary frame must not count the prior deferred event again.
+    count_next_frame = _capture_crossing_trace_counter(worker)
+    worker._record_committed_crossing("motorcycle", "out", "direct")
+    assert count_next_frame([(80, "motorcycle", "out")]) == 1
+
+
+def _snapshot_saver_from_source():
+    import ast
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    source_path = Path(__file__).resolve().parents[1] / "app/worker.py"
+    module = ast.parse(source_path.read_text(encoding="utf-8"))
+    cls = next(node for node in module.body if isinstance(node, ast.ClassDef) and node.name == "PipelineWorker")
+    save = next(node for node in cls.body if isinstance(node, ast.FunctionDef) and node.name == "_save_crossing_snapshot")
+    env = {"Path": Path, "datetime": datetime, "timezone": timezone}
+    exec(compile(ast.Module(body=[save], type_ignores=[]), str(source_path), "exec"), env)
+    return env["_save_crossing_snapshot"]
+
+
+def test_v0557_snapshot_filename_distinguishes_sessions_on_same_camera(tmp_path) -> None:
+    """Verify real naming/path logic; the writer only stands in for JPEG encoding."""
+    from pathlib import Path
+
+    save = _snapshot_saver_from_source()
+    worker = _worker()
+    worker.snapshot_root = tmp_path
+    written = []
+
+    def write(path, _frame, _options):
+        written.append(Path(path))
+        Path(path).write_bytes(b"snapshot writer placeholder")
+        return True
+
+    writer = SimpleNamespace(imwrite=write, IMWRITE_JPEG_QUALITY=1)
+    first = save(worker, writer, object(), 522)
+    worker.payload.session_id = 3
+    second = save(worker, writer, object(), 522)
+
+    assert first is not None and second is not None
+    assert Path(first).parent == Path(second).parent == Path("camera_1")
+    assert "session_2_" in Path(first).name
+    assert "session_3_" in Path(second).name
+    assert first != second
+    assert (tmp_path / first).is_file() and (tmp_path / second).is_file()
+    assert written == [tmp_path / first, tmp_path / second]
+
+
+def test_v0557_failed_snapshot_writer_does_not_return_nonexistent_event_path(tmp_path) -> None:
+    save = _snapshot_saver_from_source()
+    worker = _worker()
+    worker.snapshot_root = tmp_path
+    calls = []
+    writer = SimpleNamespace(
+        imwrite=lambda path, _frame, _options: calls.append(path) or False,
+        IMWRITE_JPEG_QUALITY=1,
+    )
+
+    snapshot = save(worker, writer, object(), 522)
+
+    assert len(calls) == 1
+    assert snapshot is None
+    assert list(tmp_path.rglob("*.jpg")) == []

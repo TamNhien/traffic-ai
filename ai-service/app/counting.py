@@ -240,7 +240,7 @@ def select_event_crossing_frame(
         geometric = float(geometric_frame)
     except (TypeError, ValueError):
         return observed, False, False
-    if geometric < 1.0 or geometric > observed + 0.25:
+    if not isfinite(geometric) or geometric < 1.0 or geometric > observed + 0.25:
         return observed, False, False
 
     shift = observed - geometric
@@ -1100,6 +1100,21 @@ class VerifiedAnchorSpanRescuer:
                 if item is not None and item.end.frame_index > dst.last_count_frame
             ]
             dst.pending = max(valid_pending, key=lambda item: item.end.frame_index, default=None)
+            if dst.pending is not None:
+                # Eligibility was admitted against the source alias's passage
+                # clock. Canonical fusion can supply a newer accepted passage,
+                # so reapply the same direction/age contract before retaining
+                # its post-confirm or lost-track override qualification.
+                dst.pending.same_direction_candidate = dst.pending.direction in dst.counted_directions
+                if (
+                    dst.pending.same_direction_candidate
+                    and dst.pending.end.frame_index - dst.last_count_frame < self.same_direction_min_frames
+                ):
+                    rejected_end = dst.pending.end.frame_index
+                    dst.pending = None
+                    dst.history = deque([
+                        item for item in dst.history if item.frame_index >= rejected_end
+                    ], maxlen=64)
             if self._revalidate_merged_pending_span(dst):
                 self._review_pending_history(dst)
         # Qualification describes a particular candidate transaction; aliases

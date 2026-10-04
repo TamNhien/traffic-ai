@@ -269,7 +269,11 @@ class HumanGuardTrackPolicy:
             return "pending"
         self.strikes.pop(tid, None)
         self.last_strike_frame.pop(tid, None)
-        return "keep"
+        # A neutral observation clears an unconfirmed strike, but does not
+        # release a confirmed pedestrian or erase supported rider ownership.
+        # The worker authorizes crossing commits from this return value, so it
+        # must agree with the persistent status used by the overlay and trace.
+        return self.status(tid)
 
 
 def normalized_distance(a: tuple[float, float], b: tuple[float, float], width: int, height: int) -> float:

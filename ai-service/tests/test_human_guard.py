@@ -144,3 +144,61 @@ def test_hard_person_evidence_still_needs_distinct_frames() -> None:
     assert policy.observe(22, decision, frame_index=200) == "pending"
     assert policy.is_rejected(22) is False
     assert policy.observe(22, decision, frame_index=201) == "rejected"
+
+
+def test_v0557_neutral_observation_does_not_release_confirmed_pedestrian() -> None:
+    from app.human_guard import HumanGuardDecision
+
+    policy = HumanGuardTrackPolicy(required_strikes=2)
+    pedestrian = HumanGuardDecision(reject=True)
+    assert policy.observe(77, pedestrian, frame_index=100) == "pending"
+    assert policy.observe(77, pedestrian, frame_index=101) == "rejected"
+
+    action = policy.observe(77, HumanGuardDecision(reject=False), frame_index=102)
+
+    assert action == policy.status(77) == "rejected"
+    assert policy.is_rejected(77) is True
+
+
+def test_v0557_neutral_observation_keeps_supported_rider_action_consistent() -> None:
+    from app.human_guard import HumanGuardDecision
+
+    policy = HumanGuardTrackPolicy(required_strikes=2)
+    assert policy.observe(
+        77, HumanGuardDecision(reject=False, rider_supported=True), frame_index=100,
+    ) == "rider"
+
+    action = policy.observe(77, HumanGuardDecision(reject=False), frame_index=101)
+
+    assert action == policy.status(77) == "rider"
+    assert policy.is_rider(77) is True
+
+
+def test_v0557_neutral_observation_still_clears_unconfirmed_strike() -> None:
+    from app.human_guard import HumanGuardDecision
+
+    policy = HumanGuardTrackPolicy(required_strikes=2)
+    assert policy.observe(77, HumanGuardDecision(reject=True), frame_index=100) == "pending"
+
+    action = policy.observe(77, HumanGuardDecision(reject=False), frame_index=101)
+
+    assert action == policy.status(77) == "keep"
+    assert policy.observe(77, HumanGuardDecision(reject=True), frame_index=102) == "pending"
+
+
+def test_v0557_rider_evidence_releases_rejection_after_neutral_observation() -> None:
+    from app.human_guard import HumanGuardDecision
+
+    policy = HumanGuardTrackPolicy(required_strikes=2)
+    pedestrian = HumanGuardDecision(reject=True)
+    policy.observe(77, pedestrian, frame_index=100)
+    policy.observe(77, pedestrian, frame_index=101)
+    policy.observe(77, HumanGuardDecision(reject=False), frame_index=102)
+
+    action = policy.observe(
+        77, HumanGuardDecision(reject=False, rider_supported=True), frame_index=103,
+    )
+
+    assert action == "released"
+    assert policy.status(77) == "rider"
+    assert policy.is_rejected(77) is False

@@ -1,46 +1,48 @@
-# Kiểm tra Traffic AI V0.5.56
+# Kiểm tra Traffic AI V0.5.57
 
 ## Kết quả đã thực hiện
 
-- **413 test functions offline đạt, 0 lỗi**: 350 AI và 63 backend.
-- AI: 134 counting, 91 classification, 46 worker context, 18 guard, 17 tracking và các test thuần hiện có. 67 worker assertions chạy method/source section thực trích từ AST. Backend: 25 benchmarking và 38 helper/schema/geometry tests.
-- **33 test HTTP/ORM chưa chạy trong môi trường tích hợp**: 3 AI và 30 backend. Ba kiểm tra endpoint/transport mới giữ trong full source; isolated review chạy helper transport trích AST với fixture, không phải HTTP/ORM thật.
-- **35 regression/control mới**: 32 chạy offline, 3 thuộc nhóm integration trên. Counting8, classification10, guard5, tracking4, benchmarking4, backend helper1 và endpoint/transport3.
-- **424 static source checks đạt**: PipelineState, payload/schema/version/cache/Node/npm, migration lineage, pending proof revalidation, competitive evidence, trace/export liên kết và release probe.
-- **123 Python files** parse/compile thành công. 40 gate calls, 121 internal calls và 390 direct calls resolve được trong source khớp signature; không bao phủ mọi dynamic/framework-generated call.
-- 70 migration có revision duy nhất, <=32 ký tự, parent đầy đủ, không cycle, chung lineage/head `0070_benchmark_evidence_v0556`, parent `0069_refine_admission_v0555`.
-- Contract V0.5.56 được khai báo/gọi trong test.ps1; source predicates được đối chiếu bằng Python. Chưa chạy PowerShell parser/runtime.
-- JSX parse đạt bằng Babel bundle có sẵn của Playwright, Node thực v24.19.0; mẫu JSX sai bị từ chối. Chưa kiểm chứng React imports/Vite bundle hoặc CSS/layout bằng browser.
-- Backend entrypoint đạt bash -n. 17 script PowerShell đúng UTF-8 no-BOM/CRLF; source/config dùng LF. 180 text files giải mã UTF-8 đạt, giữ 3 image assets.
-- Full source **183 file**, giữ toàn bộ 182 đường dẫn của ZIP V0.5.55 và thêm migration0070. Cache, model weights, video và snapshot đầu vào không nằm trong ZIP source.
+- **459 test functions offline đạt, 0 lỗi**: 396 AI và 63 backend.
+- AI gồm 142 counting, 95 classification, 57 worker context, 22 guard transaction, 25 tracking, 15 Human Guard, 15 benchmark-trace và các test thuần đã có. Backend 25 benchmarking và 38 helper/schema/geometry.
+- **33 test HTTP/ORM integration chưa chạy**: 3 AI và 30 backend; giữ đầy đủ trong source.
+- **46 regression/control Python mới** đều chạy offline: 8 counting,8 tracking,4 classification,11 worker context,4 Human Guard,4 guard transaction,7 trace-scope.
+- **455 static source checks đạt**: PipelineState, event/start/finish payload, source clock/signatures, version/cache/Node/npm, migration lineage, heading lifetime, merged eligibility, consensus certificate, diagnostic provenance, frontend/release contract.
+- **124 Python files** parse/compile thành công; 40 gate calls, 125 internal methods và 392 direct calls resolve được trong source khớp signature. Không bao phủ mọi dynamic/framework-generated call.
+- **71 migrations** revision duy nhất,<=32 ký tự, parent đầy đủ, không cycle, head duy nhất `0071_anchor_lifecycle_v0557`, parent `0070_benchmark_evidence_v0556`.
+- Contract V0.5.57 được khai báo/gọi trong test.ps1, source predicates đối chiếu bằng Python. Đã sửa predicate Human Guard để cho phép comment giữa hai lệnh. Chưa chạy PowerShell parser/runtime.
+- **11 frontend timing assertions đạt** với handler thực trích AST; cùng 11 case đều thất bại trên source từ ZIP .56. Bao phủ late detail/reconcile/list, same-ID reload, A→B→A, wrong camera, delayed JSON, stale error và busy cleanup. Không phải browser/React runtime hoặc HTTP integration.
+- JSX parse đạt bằng Babel bundle Playwright, Node thực 24.19.0; mẫu JSX sai bị từ chối. Chưa chạy Vite/React import resolution hoặc kiểm tra layout trong browser.
+- Backend entrypoint đạt bash -n. 17 script PowerShell UTF-8 no-BOM/CRLF; source/config LF. Full source 184 file gồm 181 text UTF-8 và 3 binary assets; giữ toàn bộ 183 đường dẫn của ZIP .56, chỉ thêm migration 0071.
 
-Harness chạy test functions của source thực với các phần pytest tối thiểu (`approx`, `raises`, temporary path, monkeypatch). Worker/route helpers trích AST vì HTTP/ORM transport chưa cài; dependencies geometry/classification/human_guard, Pydantic và NumPy lấy từ source/môi trường thực. Model output trong regression là fixture. Các con số offline không thay thế toàn bộ pytest, HTTP integration hoặc model inference.
+Harness chạy test functions source thực với phần pytest tối thiểu (`approx`, `raises`, temporary path, monkeypatch). Worker/route methods trích AST vì không có HTTP/ORM dependencies; classification/counting/Human Guard, Pydantic và NumPy dùng module thực. Model opinions trong regression là fixture, không chạy model inference. Các số offline không thay thế full pytest trong Docker.
 
-## Đối chiếu source V0.5.55
+## Đối chiếu source V0.5.56
 
-- Counting: cả8 regression mới thất bại trên module thực từ immutable ZIP .55; .56 đạt cả8. Bao phủ alias observation bên trong proof, Road Zone/finite/path/normal/approach, endpoint replacement, cập nhật crossing clock và finalize-lost limit.
-- Classification: 6 trong10 kiểm tra mới phát hiện frame/source thua hoặc hòa vẫn được mượn làm bicycle consensus trên .55;4 control đạt. .56 đạt cả10, bộ classification tổng91.
-- Guard:3 trong5 regression mới thất bại trên .55 — returning track tại/sau deadline hồi sinh pending và pending trace thiếu geometry;2 source-clock/expiry control đạt. .56 đạt cả5.
-- Tracking:3 counterexample thất bại trên .55 — heading sát đường phân chia ngang/dọc nhảy cạnh, chuỗi đi đều đảo phía vạch, tốc độ sát cutoff nhảy chiều cao bbox. .56 đạt; positive control cắt vạch thật đạt trên cả hai phiên bản.
-- Export:4 pure ZIP tests kiểm tra dựng lại scoring từ marks/events, giữ nguyên byte trace, trạng thái thiếu evidence, streamed cap và URL redaction. Metadata helper phân biệt benchmark snapshot với camera hiện tại. Read-only review chạy thêm transport fixture và fallback timeout/service-unavailable từ source thực trích AST; đây không phải thực thi HTTP endpoint.
+- Gate/tracking:16case mới đều đạt .57;10case thất bại bằng AssertionError trên module thực .56. Bao phủ giảm tốc vẫn đi lên nhưng phát IN giả sau OUT, identity expiry, alias heading ownership, pending passage clock sau merge và NaN timestamp correction; positive control giữ crossing thật, startup và reversal đủ chuyển động.
+- Class/refiner:15case mới đều đạt .57; trên .56 có5 AssertionError regression,4 trường hợp thiếu API/signature mới và6control đạt. Fused bicycle consensus .827744 đủ điều kiện trước đây tăng counter nhưng event vẫn motorcycle; certificate nay chỉ dùng đúng track/frame/tuple. Truck lock không được gia hạn bởi truy vấn history, primary truck refresh giữ clock hiện tại.
+- Human Guard/transaction/snapshot:8case mới đều đạt .57;6case thất bại trên .56,2control đạt. Confirmed rejected+neutral không authorize crossing; trace2ordinary+1deferred=3, frame sau không tính lại; event giữ source519/20.72s và snapshot observation522. Session tên ảnh khác nhau; cv2.imwrite(False) trảNone. Snapshot regression dùng writer fixture, không kiểm chứng JPEG encoding thực.
+- Trace scope:7case mới đều đạt .57, .56 thiếu field provenance nên các assertion đó thất bại. So sánh36case trên hai module cho thấy reason/counter/audit cũ giống nhau sau khi bỏ metadata mới; không đổi thứ tự reason hoặc scoring.
+- Frontend:11case timing dùng actual handlers .57/.56 với controlled fetch/state. .57 chặn response stale; .56 bị overwrite hoặc cleanup sai. Đây là kiểm tra logic async source, không phải network/browser end-to-end.
 
-Ngưỡng gate, Road Zone, consensus và dedup toàn cục giữ nguyên. Vị trí anchor hướng chéo thay đổi cần được replay; fixes không chứng minh van tại10:41 đã đổi thành car hay người dắt xe đạp tại04:49 được phát hiện.
+Giữ ngưỡng gate, Road Zone, matching, consensus one-shot/aggregate và dedup toàn cục. Các sửa đổi không dùng timestamp GT để ép class hoặc tự tạo benchmark mới.
 
 ## Release verifier
 
-**38 kiểm tra đạt**:17 execution Git/workflow artifact cục bộ,16 static YAML/publisher/bootstrap,3 cú pháp Bash,2 fixture Python mô phỏng.
+**38 kiểm tra đạt**:17 execution Git/workflow artifact cục bộ,16 static YAML/publisher/bootstrap,3 Bash syntax,2 fixture Python mô phỏng.
 
-Bash Verify VERSION và Build release artifacts lấy trực tiếp từ release.yml chạy trong Git repository cô lập: đúng tag/version/HEAD đạt; sai tag/version/HEAD bị chặn. ZIP, TAR.GZ và README lấy byte từ tag, SHA256 khớp SHA256SUMS. Local bare Git kiểm tra annotated/peeled tag, absent khác unreachable, retry giữ tag object và checkout tag khi main đã tiến.
+Bash Verify VERSION/Build release artifacts lấy trực tiếp từ release.yml, chạy trong Git repository cô lập. Tag/version/HEAD đúng đạt; sai bị chặn. ZIP/TAR.GZ/README lấy byte từ tag, hash khớp SHA256SUMS. Local bare Git kiểm tra annotated/peeled tag, absent khác unreachable, immutable retry và tag checkout khi main đã tiến.
 
-Probe local `show-ref` trên tag chưa tồn tại trả1; repository lỗi trả128. Source publish dùng quiet probe scoped rồi xử lý exit code; verifier thực thi native Git và kiểm tra source predicates, chưa chạy PowerShell. Chọn đúng tag/SHA/event và push URL được kiểm tra bằng fixture mô phỏng Python.
-
-Không push source, tạo tag remote hay GitHub Release thật trong phiên đóng gói.
+Native Git tag chưa tồn tại trả1, repository lỗi trả128; source publish quiet probe xử lý đúng. Chọn đúng workflow tag/SHA/event và URL dùng fixture Python. **Không push GitHub hoặc tạo Release thật** trong phiên đóng gói; chưa chạy PowerShell publisher.
 
 ## Benchmark và giới hạn
 
-Đầu vào screenshot **V0.5.55: GT149 / AI152 / khớp136 / lọt13 / dư16 / F1 90.4% / class đúng98.5% / 2 lỗi class**, session159/benchmark38. Đã xem222JPG; chuỗi scooter#19086 tại65.84–66.24s cung cấp dấu hiệu điểm bám nhảy cạnh và source hiện thực đúng cơ chế đó. Snapshot không có model scores/JSONL để xác định mọi nguyên nhân lọt/dư. **Chưa replay V0.5.56** và chưa khẳng định cải thiện số đo clip.
+Input screenshot **V0.5.56:GT149 / AI152 / khớp135 / lọt14 / dư17 / F1 89.7% / class đúng98.5% /2lỗi class**, session160/benchmark39. F1 giảm từ90.4% của .55; tổng AI không đổi.
 
-Chưa chạy toàn bộ pytest với pinned dependencies, HTTP/ORM integration, PostgreSQL concurrency/migration, PowerShell parser/runtime, Docker/npm build/audit, inference hay clip replay. Python thực3.12.14, NumPy2.3.5, Pydantic2.13.5; NumPy2.4.6 trong requirements-test chưa được chạy. npm12.2.0/Node26.10.0 pin trong Docker/CI; JSX parser dùng Node24.19.0 hiện có. npm12.2.0 được đối chiếu là latest trên npm CLI releases/npm Docs ngày04/10/2026.
+Đã xem429JPG/11contact sheet; RAR trộn222ảnh cũ .55 giống byte và207ảnh mới .56, không có JSONL/scores. Không dùng chuỗi anchor nhảy cũ làm chứng cứ lỗi .56. Xe đạp289.68s chưa được box cạnh scooter riêng, về292.36s mới có box MC; không xác định AI event ghép GT289.450. Van641.96s vẫn rawtruck; không ép nhãncar. Các chẩn đoán time-window chưa thể gắn nhân quả với xeGT cụ thể. **Chưa replay V0.5.57** hoặc xác nhận cải thiện số đo clip.
+
+Heading đã xác lập được giữ khi chuyển động dưới1.5, nên reversal rất chậm có thể cập nhật anchor muộn. Cần replay cùng clip/geometry để đánh giá tradeoff. Counter trace là frame xử lý/xác nhận; event timecode vẫn là crossing source frame/time gốc.
+
+Chưa chạy full pytest với pinned dependencies, HTTP/ORM, PostgreSQL concurrency/migration, PowerShell parser/runtime, Docker/npm build/audit, inference hoặc replay. Môi trường thực Python3.12.14, NumPy2.3.5, Pydantic2.13.5, Node24.19.0/npm11.9.0. Project giữ NumPy2.4.6 test pin, Node26.10.0/npm12.2.0 Docker/CI pin; không khẳng định đã thực thi bằng các version pin đó.
 
 ## Đầy đủ lệnh trên máy dự án
 
@@ -55,8 +57,8 @@ Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
 # Khởi động
 .\scripts\start.ps1
 
-# Tự test, commit, push, tạo tag và GitHub Release
+# Tự test, commit, push, tạo tag v0.5.57 và GitHub Release
 .\scripts\publish.ps1
 ```
 
-Mở https://traffic-ai.test:8443, Ctrl+F5, replay cùng clip/vạch/Road Zone rồi tạo benchmark session mới từ GT149 tương thích. Bấm **Đối chiếu lại**, sau đó **Tải hồ sơ benchmark**. Publish đọc VERSION để phát hành v0.5.56; README có hướng dẫn đăng nhập GitHub CLI và retry.
+Mở https://traffic-ai.test:8443, Ctrl+F5. Chạy cùng clip/vạch/Road Zone, tạo benchmark session mới và sao chép GT149 tương thích, rồi **Đối chiếu lại → Tải hồ sơ benchmark**. Gửi ZIP hồ sơ cùng screenshot; manifest ghi trace có sẵn/thiếu. ZIP ảnh riêng không thay thế event/trace provenance. README có GitHub CLI login, repository override và retry release.

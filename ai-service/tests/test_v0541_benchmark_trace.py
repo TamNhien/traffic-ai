@@ -1,6 +1,133 @@
 import json
 
 
+def _write_trace_scope_rows(bt, session_id, rows):
+    bt.trace_path(session_id).write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+
+def test_v0557_unidentified_neighbor_span_is_time_window_evidence(monkeypatch, tmp_path):
+    import app.benchmark_trace as bt
+    monkeypatch.setattr(bt, "TRACE_ROOT", tmp_path)
+    rows = [{"source_time_seconds": time, "detections": 2, "tracks": 1, "road_tracks": 1,
+             "gate_tracks": [{"track_id": 5, "label": "motorcycle", "anchor_signed": signed,
+                              "center_signed": signed}]}
+            for time, signed in [(9.9, -0.02), (10.1, 0.02)]]
+    _write_trace_scope_rows(bt, 82, rows)
+    item = bt.diagnose_trace(82, [10.0])["items"][0]
+    # This motorcycle's span does not identify a missed bicycle in the same
+    # time window. Preserve the diagnostic hint, mark its actual provenance.
+    assert item["reason"] == "crossing_anchor_span_reject"
+    assert item["gate_span_audit"]["anchor_span"][0]["track_id"] == 5
+    assert item["diagnosis_scope"] == {
+        "reason": "nearby_time_window", "geometry": "nearby_time_window",
+        "counters": "frame_global", "tracking_id": None,
+    }
+    assert item["gate_span_audit"]["geometry_scope"] == "nearby_time_window"
+
+
+def test_v0557_matched_geometry_filters_neighbor_span_before_reason_selection(monkeypatch, tmp_path):
+    import app.benchmark_trace as bt
+    monkeypatch.setattr(bt, "TRACE_ROOT", tmp_path)
+    rows = [{"source_time_seconds": time, "detections": 2, "tracks": 2, "road_tracks": 2,
+             "gate_tracks": [
+                 {"track_id": 4, "label": "bicycle", "anchor_signed": 0.01, "center_signed": 0.03},
+                 {"track_id": 5, "label": "motorcycle", "anchor_signed": signed, "center_signed": signed},
+             ]} for time, signed in [(9.9, -0.02), (10.1, 0.02)]]
+    _write_trace_scope_rows(bt, 83, rows)
+    item = bt.diagnose_trace(83, [10.0], tracking_ids=[4])["items"][0]
+    assert item["reason"] == "crossing_near_no_span"
+    assert item["gate_span_audit"]["anchor_span"] == []
+    assert [entry["track_id"] for entry in item["gate_span_audit"]["near_no_span"]] == [4]
+    assert item["diagnosis_scope"] == {
+        "reason": "matched_track_geometry", "geometry": "matched_track",
+        "counters": "frame_global", "tracking_id": 4,
+    }
+    assert item["gate_span_audit"]["geometry_scope"] == "matched_track"
+
+
+def test_v0557_frame_global_rejection_reasons_stay_unverified_with_matched_geometry(monkeypatch, tmp_path):
+    import app.benchmark_trace as bt
+    monkeypatch.setattr(bt, "TRACE_ROOT", tmp_path)
+    cases = [
+        ("detector_miss", {"detections": 0}, {}),
+        ("tracker_miss", {"tracks": 0}, {}),
+        ("road_zone_reject", {"road_tracks": 0}, {}),
+        ("road_zone_reject", {}, {"rejected_outside_road": 1}),
+        ("crossing_cooldown_reject", {}, {"rejected_cooldown": 1}),
+        ("crossing_confirmation_reject", {}, {"rejected_unconfirmed_side": 1}),
+    ]
+    for expected_reason, frame_totals, later_counter in cases:
+        rows = [{"source_time_seconds": time, "detections": 2, "tracks": 2, "road_tracks": 2,
+                 "gate_tracks": [{"track_id": 4, "anchor_signed": signed, "center_signed": signed}],
+                 **frame_totals} for time, signed in [(9.9, -0.02), (10.1, 0.02)]]
+        rows[-1].update(later_counter)
+        _write_trace_scope_rows(bt, 84, rows)
+        item = bt.diagnose_trace(84, [10.0], tracking_ids=[4])["items"][0]
+        assert item["reason"] == expected_reason
+        assert item["gate_span_audit"]["anchor_span"][0]["track_id"] == 4
+        assert item["diagnosis_scope"]["geometry"] == "matched_track"
+        assert item["diagnosis_scope"]["reason"] == "nearby_time_window"
+        assert item["diagnosis_scope"]["counters"] == "frame_global"
+
+
+def test_v0557_unknown_requested_track_has_no_matched_geometry(monkeypatch, tmp_path):
+    import app.benchmark_trace as bt
+    monkeypatch.setattr(bt, "TRACE_ROOT", tmp_path)
+    rows = [{"source_time_seconds": time, "detections": 1, "tracks": 1, "road_tracks": 1,
+             "gate_tracks": [{"track_id": 5, "anchor_signed": signed, "center_signed": signed}]}
+            for time, signed in [(9.9, -0.02), (10.1, 0.02)]]
+    _write_trace_scope_rows(bt, 85, rows)
+    item = bt.diagnose_trace(85, [10.0], tracking_ids=[99])["items"][0]
+    assert item["reason"] == "crossing_gate_miss"
+    assert item["gate_span_audit"]["anchor_span"] == []
+    assert item["diagnosis_scope"] == {
+        "reason": "nearby_time_window", "geometry": "no_track_evidence",
+        "counters": "frame_global", "tracking_id": 99,
+    }
+
+
+def test_v0557_empty_window_does_not_claim_requested_track_evidence(monkeypatch, tmp_path):
+    import app.benchmark_trace as bt
+    monkeypatch.setattr(bt, "TRACE_ROOT", tmp_path)
+    assert bt.diagnose_trace(86, [10.0], tracking_ids=[4])["available"] is False
+    bt.trace_path(86).write_text("", encoding="utf-8")
+    item = bt.diagnose_trace(86, [10.0], tracking_ids=[4])["items"][0]
+    assert item["reason"] == "no_trace_window"
+    assert item["diagnosis_scope"] == {
+        "reason": "no_trace_window", "geometry": "no_track_evidence",
+        "counters": "no_trace_window", "tracking_id": 4,
+    }
+    assert item["gate_span_audit"]["geometry_scope"] == "no_track_evidence"
+
+
+def test_v0557_audit_only_geometry_does_not_invent_frame_counter_evidence(monkeypatch, tmp_path):
+    import app.benchmark_trace as bt
+    monkeypatch.setattr(bt, "TRACE_ROOT", tmp_path)
+    rows = [{"source_time_seconds": time, "audit_only": True,
+             "gate_tracks": [{"track_id": 4, "anchor_signed": signed, "center_signed": signed}]}
+            for time, signed in [(9.9, -0.02), (10.1, 0.02)]]
+    _write_trace_scope_rows(bt, 87, rows)
+    item = bt.diagnose_trace(87, [10.0], tracking_ids=[4])["items"][0]
+    assert item["reason"] == "no_trace_window"
+    assert item["gate_span_audit"]["anchor_span"][0]["track_id"] == 4
+    assert item["diagnosis_scope"]["geometry"] == "matched_track"
+    assert item["diagnosis_scope"]["reason"] == "no_trace_window"
+    assert item["diagnosis_scope"]["counters"] == "no_trace_window"
+
+
+def test_v0557_far_matched_track_does_not_turn_missing_gate_into_proven_failure(monkeypatch, tmp_path):
+    import app.benchmark_trace as bt
+    monkeypatch.setattr(bt, "TRACE_ROOT", tmp_path)
+    _write_trace_scope_rows(bt, 88, [{"source_time_seconds": 10.0,
+        "detections": 1, "tracks": 1, "road_tracks": 1,
+        "gate_tracks": [{"track_id": 4, "anchor_signed": 0.2, "center_signed": 0.3}]}])
+    item = bt.diagnose_trace(88, [10.0], tracking_ids=[4])["items"][0]
+    assert item["reason"] == "crossing_gate_miss"
+    assert item["diagnosis_scope"]["geometry"] == "matched_track"
+    assert item["diagnosis_scope"]["reason"] == "nearby_time_window"
+    assert item["diagnosis_scope"]["counters"] == "frame_global"
+
+
 def test_v0541_gate_span_audit_splits_anchor_center_and_near(monkeypatch, tmp_path):
     import app.benchmark_trace as bt
     monkeypatch.setattr(bt, "TRACE_ROOT", tmp_path)

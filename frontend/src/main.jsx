@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './styles.css'
 
-const APP_VERSION = '0.5.56'
+const APP_VERSION = '0.5.57'
 const vehicleLabels = {
   motorcycle: 'Xe máy', bicycle: 'Xe đạp', car: 'Ô tô', bus: 'Xe buýt', truck: 'Xe tải', other: 'Khác'
 }
@@ -36,11 +36,22 @@ const signedSeconds = value => {
   return `${number >= 0 ? '+' : ''}${number.toFixed(3)}s`
 }
 
+const missedAuditReason = item => {
+  const diagnosis = item?.diagnosis || {}
+  if (!diagnosis.reason) return 'GT có · AI không có'
+  const label = missReasonLabels[diagnosis.reason] || diagnosis.reason
+  return diagnosis.diagnosis_scope?.reason === 'matched_track_geometry'
+    ? label : `Dấu hiệu quanh timecode: ${label}`
+}
+
 const missedAuditDetail = item => {
   const diagnosis = item?.diagnosis || {}
   const parts = []
+  if (diagnosis.reason && diagnosis.diagnosis_scope?.reason !== 'matched_track_geometry') {
+    parts.push('Chưa gắn bằng chứng này với phương tiện GT')
+  }
   if (diagnosis.max_det != null || diagnosis.max_track != null || diagnosis.max_road != null) {
-    parts.push(`DET ${diagnosis.max_det ?? 0} · track ${diagnosis.max_track ?? 0} · road ${diagnosis.max_road ?? 0}`)
+    parts.push(`Toàn khung hình · DET ${diagnosis.max_det ?? 0} · track ${diagnosis.max_track ?? 0} · road ${diagnosis.max_road ?? 0}`)
   }
   const review = item?.review_candidate
   if (review) {
@@ -490,6 +501,14 @@ function GroundTruthBenchmark({ selectedCameraId, sessions }) {
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
   const videoRef = useRef(null)
+  const benchmarkSelectionRef = useRef(null)
+  const detailRequestRef = useRef(0)
+  const benchmarkListRequestRef = useRef(0)
+  if (benchmarkSelectionRef.current?.cameraId !== selectedCameraId ||
+      benchmarkSelectionRef.current?.benchmarkId !== selectedBenchmarkId) {
+    // A new object also invalidates an old request after A -> B -> A.
+    benchmarkSelectionRef.current = {cameraId:selectedCameraId, benchmarkId:selectedBenchmarkId}
+  }
 
   const cameraSessions = useMemo(
     () => sessions.filter(item => Number(item.camera_id) === Number(selectedCameraId) && ['completed','stopped'].includes(String(item.status))),
@@ -503,17 +522,26 @@ function GroundTruthBenchmark({ selectedCameraId, sessions }) {
   }
 
   const loadBenchmarks = async () => {
+    const cameraId = selectedCameraId
+    const requestId = ++benchmarkListRequestRef.current
+    const isCurrent = () => requestId === benchmarkListRequestRef.current &&
+      cameraId === benchmarkSelectionRef.current?.cameraId
     if (!selectedCameraId) { setBenchmarks([]); setSelectedBenchmarkId(null); return }
     try {
       const response = await fetch(`/api/benchmarks?camera_id=${selectedCameraId}&limit=50`, {cache:'no-store'})
       if (!response.ok) throw new Error('Không tải được benchmark')
       const rows = await response.json()
+      if (!isCurrent()) return
       setBenchmarks(rows)
       setSelectedBenchmarkId(prev => rows.some(row => row.id === Number(prev)) ? prev : (rows[0]?.id || null))
-    } catch (err) { setError(err.message) }
+    } catch (err) { if (isCurrent()) setError(err.message) }
   }
 
   const loadDetail = async benchmarkId => {
+    const selection = benchmarkSelectionRef.current
+    if (Number(benchmarkId) !== Number(selection?.benchmarkId)) return
+    const requestId = ++detailRequestRef.current
+    const isCurrent = () => selection === benchmarkSelectionRef.current && requestId === detailRequestRef.current
     if (!benchmarkId) { setDetail(null); setReport(null); return }
     try {
       const [detailRes, reportRes] = await Promise.all([
@@ -522,10 +550,12 @@ function GroundTruthBenchmark({ selectedCameraId, sessions }) {
       ])
       if (!detailRes.ok) throw new Error('Không tải được ground truth')
       const data = await detailRes.json()
+      const nextReport = reportRes.ok ? await reportRes.json() : null
+      if (!isCurrent() || Number(data.camera_id) !== Number(selection.cameraId)) return
       setDetail(data)
       setTolerance(Number(data.tolerance_seconds || 0.75))
-      setReport(reportRes.ok ? await reportRes.json() : null)
-    } catch (err) { setError(err.message) }
+      setReport(nextReport)
+    } catch (err) { if (isCurrent()) setError(err.message) }
   }
 
   useEffect(() => {
@@ -535,7 +565,15 @@ function GroundTruthBenchmark({ selectedCameraId, sessions }) {
     loadBenchmarks()
   }, [selectedCameraId, cameraSessions[0]?.id])
 
-  useEffect(() => { setReconcileStatus(''); loadDetail(selectedBenchmarkId) }, [selectedBenchmarkId])
+  useEffect(() => {
+    setDetail(null); setReport(null); setReconcileStatus(''); setReconciling(false)
+    loadDetail(selectedBenchmarkId)
+  }, [selectedBenchmarkId, selectedCameraId])
+
+  useEffect(() => () => {
+    detailRequestRef.current += 1
+    benchmarkListRequestRef.current += 1
+  }, [])
 
   const compatibleCloneSource = (() => {
     if (!detail || (detail.marks?.length || 0) > 0) return null
@@ -672,19 +710,29 @@ function GroundTruthBenchmark({ selectedCameraId, sessions }) {
 
   const reconcileBenchmark = async () => {
     if (!detail || reconciling) return
+    const selection = benchmarkSelectionRef.current
+    const benchmarkId = detail.id
+    if (Number(benchmarkId) !== Number(selection?.benchmarkId)) return
+    const requestId = ++detailRequestRef.current
+    const isCurrent = () => selection === benchmarkSelectionRef.current && requestId === detailRequestRef.current
     const before = report ? `${report.matched}/${report.missed}/${report.false_positives}` : ''
     setReconciling(true); setError(''); setReconcileStatus('Đang đối chiếu lại GT ↔ AI từ dữ liệu gốc...')
     try {
-      const response = await fetch(`/api/benchmarks/${detail.id}/reconcile`, {method:'POST', cache:'no-store'})
+      const response = await fetch(`/api/benchmarks/${benchmarkId}/reconcile`, {method:'POST', cache:'no-store'})
       const body = await readBody(response)
       if (!response.ok) throw new Error(body.detail || 'Không đối chiếu lại được benchmark')
+      if (!isCurrent()) return
       setReport(body)
       const after = `${body.matched}/${body.missed}/${body.false_positives}`
       const stamp = new Date(body.reconciled_at || Date.now()).toLocaleTimeString('vi-VN')
       setReconcileStatus(before === after
         ? `Đã đối chiếu lại lúc ${stamp}. Kết quả không đổi: khớp ${body.matched}, lọt ${body.missed}, dư ${body.false_positives}.`
         : `Đã đối chiếu lại lúc ${stamp}. Kết quả mới: khớp ${body.matched}, lọt ${body.missed}, dư ${body.false_positives}.`)
-    } catch (err) { setError(err.message); setReconcileStatus('') } finally { setReconciling(false) }
+    } catch (err) {
+      if (isCurrent()) { setError(err.message); setReconcileStatus('') }
+    } finally {
+      if (selection === benchmarkSelectionRef.current) setReconciling(false)
+    }
   }
 
   useEffect(() => {
@@ -750,13 +798,13 @@ function GroundTruthBenchmark({ selectedCameraId, sessions }) {
         <div className="benchmark-metrics"><div><span>Ground truth</span><strong>{report.ground_truth_total}</strong></div><div><span>AI đếm</span><strong>{report.ai_total}</strong></div><div><span>Khớp</span><strong>{report.matched}</strong></div><div className={report.missed ? 'metric-bad' : ''}><span>Lọt không đếm</span><strong>{report.missed}</strong></div><div className={report.false_positives ? 'metric-warn' : ''}><span>Đếm dư</span><strong>{report.false_positives}</strong></div><div><span>Sai số tổng</span><strong>{report.count_error > 0 ? '+' : ''}{report.count_error}</strong></div></div>
         <div className="benchmark-scores"><span>Counting Recall <strong>{(Number(report.counting_recall || 0)*100).toFixed(1)}%</strong></span><span>Precision <strong>{(Number(report.counting_precision || 0)*100).toFixed(1)}%</strong></span><span>F1 <strong>{(Number(report.counting_f1 || 0)*100).toFixed(1)}%</strong></span><span>Class đúng <strong>{report.class_accuracy == null ? '—' : `${(report.class_accuracy*100).toFixed(1)}%`}</strong></span><span title="GT lọt và AI dư gần nhau ngoài cửa sổ chấm điểm; chỉ phục vụ review, không đổi Recall/Precision">Review gần <strong>{report.unmatched_review_links ?? 0}</strong></span></div>
         {report.integrity && <div className={`source-status ${report.integrity.ok ? 'ok' : 'warn'}`}><strong>{report.integrity.ok ? '✓ Benchmark Integrity OK' : '⚠ Benchmark Integrity cần chú ý'}</strong><span>Worker đề xuất {report.integrity.worker_total} · DB lưu {report.integrity.persisted_events} · event có timecode {report.integrity.timed_events} · backend gộp {report.integrity.dedup_suppressed_events} · Human Guard loại {report.integrity.human_guard_rejections}{report.integrity.missing_timecode ? ` · thiếu timecode ${report.integrity.missing_timecode}` : ''}.</span></div>}
-        {report.dominant_miss_reason && <div className="source-status bad"><strong>Nguyên nhân lọt nổi bật: {missReasonLabels[report.dominant_miss_reason] || report.dominant_miss_reason}</strong><span>{Object.entries(report.miss_reason_counts || {}).map(([reason,count])=>`${missReasonLabels[reason] || reason}: ${count}`).join(' · ')}</span></div>}
+        {report.dominant_miss_reason && <div className="source-status bad"><strong>Dấu hiệu quanh thời điểm lọt nổi bật: {missReasonLabels[report.dominant_miss_reason] || report.dominant_miss_reason}</strong><span>{Object.entries(report.miss_reason_counts || {}).map(([reason,count])=>`${missReasonLabels[reason] || reason}: ${count}`).join(' · ')}</span></div>}
         {report.dominant_false_positive_reason && <div className="source-status warn"><strong>Nguyên nhân đếm dư nghi ngờ: {falsePositiveReasonLabels[report.dominant_false_positive_reason] || report.dominant_false_positive_reason}</strong><span>{Object.entries(report.false_positive_reason_counts || {}).map(([reason,count])=>`${falsePositiveReasonLabels[reason] || reason}: ${count}`).join(' · ')}</span></div>}
         {report.legacy_ai_events_without_source_time > 0 && <div className="source-status bad"><strong>⚠ Phiên cũ thiếu timecode</strong><span>{report.legacy_ai_events_without_source_time} event được tạo trước V0.5.19 nên không thể ghép chính xác. Hãy chạy lại clip một lần trên V0.5.19 rồi benchmark session mới.</span></div>}
         <h3 className="benchmark-subhead">Sai loại phương tiện ({report.class_mismatch_items?.length || 0})</h3>
         <div className="benchmark-diff-list">{report.class_mismatch_items?.length ? report.class_mismatch_items.map(item=><div key={`c-${item.ground_truth_id}-${item.ai_event_id}`} className="diff-row false-positive class-audit-row"><button className="time-link" onClick={()=>seekTo(item.time)}><strong>{formatVideoTime(item.time)}</strong></button><span>{String(item.direction).toUpperCase()} · GT {vehicleLabels[item.ground_truth_vehicle_type] || item.ground_truth_vehicle_type}</span><em>AI → {vehicleLabels[item.ai_vehicle_type] || item.ai_vehicle_type}</em><select className="gt-class-edit" value={item.ground_truth_vehicle_type} disabled={busy} title="Sửa class GT tại timecode này" onChange={e=>updateMarkVehicle(item.ground_truth_id,e.target.value)}>{Object.entries(vehicleLabels).map(([key,label])=><option key={key} value={key}>{label}</option>)}</select><BicycleContextAudit item={item} /></div>) : <div className="empty">Không có event đã khớp thời gian nhưng sai loại xe.</div>}</div>
         <h3 className="benchmark-subhead">Lọt không đếm ({report.missed_items?.length || 0})</h3>
-        <div className="benchmark-diff-list benchmark-audit-list">{report.missed_items?.length ? report.missed_items.map(item=>{const detail=missedAuditDetail(item);return <button key={`m-${item.ground_truth_id}`} className="diff-row audit-diff-row missed" onClick={()=>seekTo(item.time)}><strong className="diff-time">{formatVideoTime(item.time)}</strong><span className="diff-meta">{String(item.direction).toUpperCase()} · {vehicleLabels[item.vehicle_type] || item.vehicle_type}</span><em className="diff-reason">{item.diagnosis?.reason ? (missReasonLabels[item.diagnosis.reason] || item.diagnosis.reason) : 'GT có · AI không có'}</em>{detail && <small className="diff-detail">{detail}</small>}</button>}) : <div className="empty">Chưa có xe lọt trong cửa sổ ghép hiện tại.</div>}</div>
+        <div className="benchmark-diff-list benchmark-audit-list">{report.missed_items?.length ? report.missed_items.map(item=>{const detail=missedAuditDetail(item);return <button key={`m-${item.ground_truth_id}`} className="diff-row audit-diff-row missed" onClick={()=>seekTo(item.time)}><strong className="diff-time">{formatVideoTime(item.time)}</strong><span className="diff-meta">{String(item.direction).toUpperCase()} · {vehicleLabels[item.vehicle_type] || item.vehicle_type}</span><em className="diff-reason">{missedAuditReason(item)}</em>{detail && <small className="diff-detail">{detail}</small>}</button>}) : <div className="empty">Chưa có xe lọt trong cửa sổ ghép hiện tại.</div>}</div>
         <h3 className="benchmark-subhead">AI đếm dư ({report.false_positive_items?.length || 0})</h3>
         <div className="benchmark-diff-list benchmark-audit-list">{report.false_positive_items?.length ? report.false_positive_items.map(item=>{const detail=falsePositiveAuditDetail(item);return <button key={`f-${item.ai_event_id}`} className="diff-row audit-diff-row false-positive" onClick={()=>seekTo(item.time)}><strong className="diff-time">{formatVideoTime(item.time)}</strong><span className="diff-meta">{String(item.direction).toUpperCase()} · {vehicleLabels[item.vehicle_type] || item.vehicle_type}</span><em className="diff-reason">{item.reason ? (falsePositiveReasonLabels[item.reason] || item.reason) : 'AI có · GT không có'}</em>{detail && <small className="diff-detail">{detail}</small>}{(item.near_matched_time_delta != null || item.near_matched_spatial_distance != null || item.near_matched_crossing_method) && <small className="diff-tech">{item.near_matched_time_delta != null ? `Δt ${Number(item.near_matched_time_delta).toFixed(3)}s` : ''}{item.near_matched_spatial_distance != null ? ` · Δxy ${Number(item.near_matched_spatial_distance).toFixed(4)}` : ''}{item.near_matched_crossing_method ? ` · ${item.near_matched_crossing_method}→${item.crossing_method || '?'}` : ''}</small>}</button>}) : <div className="empty">Chưa có lượt đếm dư trong cửa sổ ghép hiện tại.</div>}</div>
         <h3 className="benchmark-subhead">Theo loại phương tiện</h3>

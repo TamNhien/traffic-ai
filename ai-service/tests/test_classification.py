@@ -1066,3 +1066,57 @@ def test_v0556_bicycle_consensus_preserves_aggregate_policy_without_new_veto() -
     # policy is preserved; the crossing-context per-frame veto is separate.
     result = _v0556_bicycle_consensus(evidence)
     assert result is not None and result[0] == "bicycle" and result[1] >= 0.78
+
+
+def test_v0557_four_wheel_support_clock_excludes_losing_tied_future_and_expired_frames() -> None:
+    from app.classification import RefineEvidenceAccumulator
+
+    evidence = RefineEvidenceAccumulator(history_frames=40)
+    for frame in (90, 100):
+        evidence.update(7, frame, "truck", .70, "domain")
+    evidence.update(7, 105, "truck", .10, "domain")
+    evidence.update(7, 105, "car", .11, "general")
+    evidence.update(7, 106, "truck", .10, "domain")
+    evidence.update(7, 106, "bus", .10, "general")
+    evidence.update(7, 111, "truck", .99, "domain")
+    evidence.update(7, 20, "truck", .99, "domain")
+    hits, fused, strongest, source_frame = evidence.four_wheel_support_snapshot(7, 110, "truck")
+    assert hits == 2 and fused > strongest > 0.0 and source_frame == 100
+    assert evidence.four_wheel_support(7, 110, "truck") == (hits, fused, strongest)
+    assert evidence.four_wheel_support_snapshot(7, 110, "bicycle") == (0, 0.0, 0.0, None)
+
+
+def test_v0557_old_refiner_clock_cannot_replace_newer_primary_truck_lock() -> None:
+    from app.classification import TruckSemanticLock
+
+    lock = TruckSemanticLock(ttl_frames=30)
+    assert lock.observe(7, 200, stable_label="truck", certainty=.90, hits=6) == ("truck", .90)
+    assert lock.observe(
+        7, 210, stable_label="car", certainty=.99, hits=20,
+        refiner_hits=2, refiner_confidence=.99, refiner_frame_index=195,
+    ) == ("truck", .90)
+    assert lock.resolve(7, 230, "car") == ("truck", .90)
+    assert lock.resolve(7, 231, "car") is None
+
+
+def test_v0557_future_refiner_clock_cannot_create_current_truck_lock() -> None:
+    from app.classification import TruckSemanticLock
+
+    lock = TruckSemanticLock(ttl_frames=30)
+    assert lock.observe(
+        7, 100, stable_label="car", certainty=.99, hits=20,
+        refiner_hits=2, refiner_confidence=.99, refiner_frame_index=101,
+    ) is None
+    assert lock.active_count(100) == 0
+
+
+def test_v0557_future_refiner_score_cannot_inflate_valid_primary_truck_confidence() -> None:
+    from app.classification import TruckSemanticLock
+
+    lock = TruckSemanticLock(ttl_frames=30)
+    assert lock.observe(
+        7, 100, stable_label="truck", certainty=.90, hits=6,
+        refiner_hits=2, refiner_confidence=.99, refiner_frame_index=101,
+    ) == ("truck", .90)
+    assert lock.resolve(7, 130, "car") == ("truck", .90)
+    assert lock.resolve(7, 131, "car") is None

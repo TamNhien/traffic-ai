@@ -87,8 +87,33 @@ def _gate_span_audit(rows: list[dict], tracking_id: int | None = None, context_u
             near.append(summary)
     return {
         "anchor_span": anchor_span, "center_only_span": center_only, "near_no_span": near,
+        # A gate observation belongs to a known benchmark track only when the
+        # caller supplied its identity and that identity was present here. A
+        # nearby vehicle's geometry cannot identify an otherwise missed GT row.
+        "geometry_scope": ("matched_track" if tracking_id is not None else "nearby_time_window")
+        if tracks else "no_track_evidence",
         "bicycle_xframe_audit": xframe_audits[-8:],
         "bicycle_context_audit": list(context_audits.values())[-8:],
+    }
+
+
+def _diagnosis_scope(reason: str, gate_audit: dict, tracking_id: int | None) -> dict:
+    geometry_scope = gate_audit["geometry_scope"]
+    # Detection, rejection, and event counters are frame totals. Supplying a
+    # matched ID filters geometry/audits; it does not make those totals belong
+    # to that individual vehicle or prove why its crossing was missed.
+    reason_scope = "nearby_time_window"
+    if reason == "no_trace_window":
+        reason_scope = "no_trace_window"
+    elif geometry_scope == "matched_track" and reason in {
+        "crossing_anchor_span_reject", "crossing_center_only_span", "crossing_near_no_span",
+    }:
+        reason_scope = "matched_track_geometry"
+    return {
+        "reason": reason_scope,
+        "geometry": geometry_scope,
+        "counters": "no_trace_window" if reason == "no_trace_window" else "frame_global",
+        "tracking_id": tracking_id,
     }
 
 
@@ -119,6 +144,7 @@ def diagnose_trace(session_id: int, times: Iterable[float], window_seconds: floa
         nearby = [row for row in nearby if not row.get("audit_only")]
         if not nearby:
             result.append({"time": target, "reason": "no_trace_window", "max_det": 0, "max_track": 0, "max_road": 0,
+                           "diagnosis_scope": _diagnosis_scope("no_trace_window", gate_audit, tracking_id),
                            "gate_span_audit": gate_audit,
                            "bicycle_xframe_audit": gate_audit["bicycle_xframe_audit"],
                            "bicycle_context_audit": gate_audit["bicycle_context_audit"]})
@@ -153,6 +179,7 @@ def diagnose_trace(session_id: int, times: Iterable[float], window_seconds: floa
         result.append({
             "time": target,
             "reason": reason,
+            "diagnosis_scope": _diagnosis_scope(reason, gate_audit, tracking_id),
             "max_det": max_det,
             "max_track": max_track,
             "max_road": max_road,

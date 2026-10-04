@@ -108,6 +108,7 @@ class PipelineWorker(threading.Thread):
         self._general_refiner_model = None
         self._class_refine_last_check: dict[int, int] = {}
         self._class_refine_last_observation: dict[int, tuple[int, tuple[str, float] | None]] = {}
+        self._class_refine_consensus_proof: dict[int, tuple[int, tuple[str, float]]] = {}
         self._class_refine_overrides: dict[int, tuple[str, float, int]] = {}
         self._bicycle_class_rescue_tracks: set[int] = set()
         self._bicycle_context_rescue_tracks: set[int] = set()
@@ -635,7 +636,7 @@ class PipelineWorker(threading.Thread):
         certainty: float,
         hits: int,
     ) -> tuple[str, float] | None:
-        truck_hits, truck_fused, _strongest = self._refine_consensus.four_wheel_support(
+        truck_hits, truck_fused, _strongest, truck_source_frame = self._refine_consensus.four_wheel_support_snapshot(
             track_id, frame_index, "truck"
         )
         locked = self._truck_semantic_lock.observe(
@@ -646,6 +647,7 @@ class PipelineWorker(threading.Thread):
             hits=hits,
             refiner_hits=truck_hits,
             refiner_confidence=truck_fused,
+            refiner_frame_index=truck_source_frame,
         )
         if locked is not None:
             self._truck_tracks_seen.add(int(track_id))
@@ -700,6 +702,7 @@ class PipelineWorker(threading.Thread):
         for mapping in (
             self._class_refine_last_check,
             self._class_refine_last_observation,
+            self._class_refine_consensus_proof,
             self._class_refine_overrides,
         ):
             self._move_track_key(mapping, source, target)
@@ -764,9 +767,15 @@ class PipelineWorker(threading.Thread):
             return None
         if refined is None:
             return self._class_override_for(track_id, frame_index, base_display_label)
-        resolved_label, resolved_conf = self._class_policy.final_label(
-            current_label, stable_label, certainty, hits, refined
-        )
+        proof = self._class_refine_consensus_proof.get(int(track_id))
+        if proof == (int(frame_index), refined):
+            # A validated multi-frame consensus has already passed its own
+            # competitive thresholds. Its fused score is not a one-shot score.
+            resolved_label, resolved_conf = refined
+        else:
+            resolved_label, resolved_conf = self._class_policy.final_label(
+                current_label, stable_label, certainty, hits, refined
+            )
         if vehicle_family(resolved_label) != vehicle_family(base_display_label):
             return self._class_override_for(track_id, frame_index, base_display_label)
 
@@ -934,6 +943,7 @@ class PipelineWorker(threading.Thread):
             return None, False
 
         self._class_refine_last_check[tid] = frame_idx
+        self._class_refine_consensus_proof.pop(tid, None)
         self.state.class_refine_checks += 1
         observations: list[tuple[str, float]] = []
         did_infer = False
@@ -981,6 +991,7 @@ class PipelineWorker(threading.Thread):
             bicycle_single_source_strong=self.bicycle_consensus_single_source_strong,
         )
         if consensus is not None:
+            self._class_refine_consensus_proof[tid] = (frame_idx, consensus)
             if consensus[0] != str(target_label) and tid not in self._class_consensus_rescue_tracks:
                 self._class_consensus_rescue_tracks.add(tid)
                 self.state.class_consensus_rescues += 1
@@ -1297,6 +1308,7 @@ class PipelineWorker(threading.Thread):
                 crossing_class_refine_track_ids: set[int] = set()
                 gate_trace_tracks = []
                 self._bicycle_xframe_audit_this_frame = []
+                frame_start_deferred_commits = self.state.human_guard_deferred_commits
                 # Expire a provisional passage before any returning detection
                 # can commit it. The observed-frame deadline applies equally to
                 # visible and missing tracks, and keeps the crossing source time.
@@ -1369,7 +1381,9 @@ class PipelineWorker(threading.Thread):
                         velocity = self._continuity.velocity_for(track_id)
                         family_hint = vehicle_family(current_label)
                         anchor_inset = self.heavy_anchor_inset_ratio if family_hint == "four-wheel" else 0.0
-                        anchor = motion_leading_anchor(rect, velocity, inset_ratio=anchor_inset)
+                        anchor = motion_leading_anchor(
+                            rect, self._continuity.anchor_velocity_for(track_id), inset_ratio=anchor_inset
+                        )
                         if anchor_inset > 0.0 and int(track_id) not in self._heavy_anchor_tracks:
                             self._heavy_anchor_tracks.add(int(track_id))
                             self.state.heavy_anchor_tracks = len(self._heavy_anchor_tracks)
@@ -1892,7 +1906,9 @@ class PipelineWorker(threading.Thread):
                         "road_tracks": self.state.road_tracks_current_frame,
                         "untracked": self.state.untracked_detections,
                         "total_count": self.state.total_count,
-                        "crossing_events": len(pending_crossing_events),
+                        "crossing_events": len(pending_crossing_events) + (
+                            self.state.human_guard_deferred_commits - frame_start_deferred_commits
+                        ),
                         "rejected_outside_road": counter.rejected_outside_road,
                         "rejected_outside_segment": counter.rejected_outside_segment,
                         "rejected_unconfirmed_side": counter.rejected_unconfirmed_side,
@@ -2657,8 +2673,9 @@ class PipelineWorker(threading.Thread):
             folder = self.snapshot_root / f"camera_{self.payload.camera_id}"
             folder.mkdir(parents=True, exist_ok=True)
             stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-            path = folder / f"{stamp}_frame_{frame_index}.jpg"
-            cv2.imwrite(str(path), frame, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
+            path = folder / f"session_{self.payload.session_id}_{stamp}_frame_{frame_index}.jpg"
+            if not cv2.imwrite(str(path), frame, [int(cv2.IMWRITE_JPEG_QUALITY), 82]):
+                return None
             return str(path.relative_to(self.snapshot_root)).replace("\\", "/")
         except Exception:
             return None

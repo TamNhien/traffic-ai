@@ -79,6 +79,10 @@ class TrackContinuityResolver:
         )
         self._raw_to_canonical: dict[int, int] = {}
         self._states: dict[int, _IdentityState] = {}
+        # A reliable heading belongs to the canonical identity, separately from
+        # its measured velocity. Deceleration must not move a previously leading
+        # contact point back through the box to the stationary bottom fallback.
+        self._anchor_velocities: dict[int, tuple[int, Point]] = {}
         # V0.5.49 Precision Recovery Closure 9.5: remember every raw ByteTrack
         # ID that has contributed to one canonical identity.  The crossing gate
         # uses only the *size* of this lineage as a risk signal for long-gap
@@ -97,6 +101,9 @@ class TrackContinuityResolver:
         frame_height: int,
         claimed_canonical_ids: set[int] | None = None,
     ) -> tuple[int, bool]:
+        # Expire the previous identity before an arriving raw ID can refresh it.
+        # Otherwise a reused ID after a long silence revives stale motion state.
+        self._cleanup(frame_index)
         raw_id = int(raw_id)
         claimed = claimed_canonical_ids or set()
         canonical = self._raw_to_canonical.get(raw_id)
@@ -176,6 +183,13 @@ class TrackContinuityResolver:
                 if mapped == displaced:
                     self._raw_to_canonical[candidate_raw] = canonical_id
                     self._canonical_raw_ids[canonical_id].add(candidate_raw)
+            displaced_heading = self._anchor_velocities.pop(displaced, None)
+            target_heading = self._anchor_velocities.get(canonical_id)
+            if (
+                canonical_id in self._states and displaced_heading is not None
+                and (target_heading is None or displaced_heading[0] > target_heading[0])
+            ):
+                self._anchor_velocities[canonical_id] = displaced_heading
             self._states.pop(displaced, None)
         return displaced
 
@@ -190,6 +204,18 @@ class TrackContinuityResolver:
         state = self._states.get(int(canonical_id))
         return state.velocity if state is not None else (0.0, 0.0)
 
+    def anchor_velocity_for(self, canonical_id: int) -> Point:
+        """Keep an established leading heading when measured motion slows.
+
+        The existing full-heading boundary is L1 speed 1.5. Motion below that
+        boundary retains the latest reliable heading; an identity without one
+        keeps the original stationary/startup blend. Stitch prediction and the
+        Human Guard continue to use ``velocity_for`` and its actual velocity.
+        A reversal updates the heading once it supplies reliable motion again.
+        """
+        heading = self._anchor_velocities.get(int(canonical_id))
+        return heading[1] if heading is not None else self.velocity_for(canonical_id)
+
     def _update_state(self, canonical: int, raw_id: int, point: Point, label: str, frame_index: int) -> None:
         previous = self._states.get(canonical)
         velocity = (0.0, 0.0)
@@ -201,6 +227,8 @@ class TrackContinuityResolver:
                 previous.velocity[1] * 0.45 + observed[1] * 0.55,
             )
         self._states[canonical] = _IdentityState(point, frame_index, str(label), raw_id, velocity)
+        if abs(velocity[0]) + abs(velocity[1]) >= 1.5:
+            self._anchor_velocities[canonical] = (int(frame_index), velocity)
 
     def _cleanup(self, frame_index: int) -> None:
         expiry = max(self.max_gap_frames, self.heavy_max_gap_frames) * 8
@@ -210,6 +238,7 @@ class TrackContinuityResolver:
         for cid in stale:
             self._states.pop(cid, None)
             self._canonical_raw_ids.pop(cid, None)
+            self._anchor_velocities.pop(cid, None)
         for raw_id, cid in list(self._raw_to_canonical.items()):
             if cid in stale:
                 self._raw_to_canonical.pop(raw_id, None)
