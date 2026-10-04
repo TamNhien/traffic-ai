@@ -277,3 +277,117 @@ def test_v0554_duplicate_audit_exact_tie_is_independent_of_candidate_order() -> 
         diagnostics, _, _ = _false_positive_diagnostics([extra], candidates, matched, 0.75)
         assert diagnostics[0]["near_matched_ai_event_id"] == 611
         assert diagnostics[0]["near_matched_spatial_distance"] == 0.005
+
+
+def test_v0556_diagnostics_export_reproduces_scoring_without_mutating_sources() -> None:
+    import copy
+    from datetime import datetime, timezone
+    from hashlib import sha256
+    from io import BytesIO
+    import json
+    from zipfile import ZipFile
+    from app.benchmarking import build_benchmark_export
+
+    marks = [
+        {"id": 1, "source_time_seconds": 10.0, "direction": "in", "vehicle_type": "bicycle", "note": "Xe đạp đẩy bộ"},
+        {"id": 2, "source_time_seconds": 20.0, "direction": "out", "vehicle_type": "truck"},
+    ]
+    events = [
+        {"id": 11, "source_time_seconds": 10.1, "direction": "in", "vehicle_type": "motorcycle", "tracking_id": 77},
+        {"id": 12, "source_time_seconds": 30.0, "direction": "out", "vehicle_type": "truck", "tracking_id": 88},
+        {"id": 13, "source_time_seconds": None, "direction": "in", "vehicle_type": "motorcycle"},
+    ]
+    report = match_crossings(marks, events[:2], 0.75)
+    report.update({"session_id": 9, "benchmark": {
+        "id": 3, "source_url": "rtsp://admin:secret@cam.local:554/live?token=private#signed",
+        "tolerance_seconds": 0.75,
+    }})
+    original = copy.deepcopy((report, marks, events))
+    stamp = datetime(2026, 10, 4, tzinfo=timezone.utc)
+    archive = build_benchmark_export(
+        report=report, marks=marks, events=events,
+        session={"id": 9, "started_at": stamp, "source_url": r"D:\Videos\clip1.mp4"},
+        config={"current_camera": None}, exported_at=stamp,
+    )
+    with ZipFile(BytesIO(archive)) as zipped:
+        assert zipped.testzip() is None
+        exported_report = json.loads(zipped.read("report.json"))
+        exported_marks = json.loads(zipped.read("ground-truth.json"))
+        exported_events = json.loads(zipped.read("events.json"))
+        recreated = match_crossings(exported_marks, [event for event in exported_events if event["source_time_seconds"] is not None], 0.75)
+        for field in ("matched", "missed", "false_positives", "class_accuracy", "direction_accuracy", "matched_items", "missed_items", "false_positive_items"):
+            assert exported_report[field] == recreated[field]
+        assert len(exported_events) == 3
+        assert exported_marks[0]["note"] == "Xe đạp đẩy bộ"
+        assert exported_report["benchmark"]["source_url"] == "rtsp://cam.local:554/live"
+        assert json.loads(zipped.read("session.json"))["source_url"] == "clip1.mp4"
+        assert json.loads(zipped.read("session.json"))["started_at"] == stamp.isoformat()
+        assert b"secret" not in zipped.read("report.json")
+        assert b"private" not in zipped.read("report.json")
+        manifest = json.loads(zipped.read("manifest.json"))
+        for filename, information in manifest["files"].items():
+            data = zipped.read(filename)
+            assert information == {"bytes": len(data), "sha256": sha256(data).hexdigest()}
+        assert "benchmark-trace.jsonl" not in zipped.namelist()
+    assert (report, marks, events) == original
+
+
+def test_v0556_diagnostics_export_preserves_trace_bytes_and_states_missing_evidence() -> None:
+    from datetime import datetime, timezone
+    from hashlib import sha256
+    from io import BytesIO
+    import json
+    from zipfile import ZipFile
+    from app.benchmarking import build_benchmark_export
+
+    trace = b'{"frame":251,"bicycle":0.52}\n{"frame":252,"motorcycle":0.8}\n'
+    arguments = dict(
+        report={"benchmark": {"id": 3}, "session_id": 9}, marks=[], events=[],
+        session={"id": 9}, config={}, exported_at=datetime(2026, 10, 4, tzinfo=timezone.utc),
+    )
+    with ZipFile(BytesIO(build_benchmark_export(**arguments, trace=trace))) as zipped:
+        assert zipped.read("benchmark-trace.jsonl") == trace
+        manifest = json.loads(zipped.read("manifest.json"))
+        assert manifest["trace"]["available"] is True
+        assert manifest["trace"]["bytes"] == len(trace)
+        assert manifest["files"]["benchmark-trace.jsonl"]["sha256"] == sha256(trace).hexdigest()
+    for reason in ("not_found", "too_large", "timeout", "service_unavailable", "http_error_503"):
+        with ZipFile(BytesIO(build_benchmark_export(**arguments, trace_reason=reason))) as zipped:
+            manifest = json.loads(zipped.read("manifest.json"))
+            assert manifest["trace"]["available"] is False
+            assert manifest["trace"]["reason"] == reason
+            assert manifest["trace"]["bytes"] == 0
+            assert "benchmark-trace.jsonl" not in zipped.namelist()
+    with ZipFile(BytesIO(build_benchmark_export(**arguments, trace=b""))) as zipped:
+        assert json.loads(zipped.read("manifest.json"))["trace"]["reason"] == "empty"
+
+
+def test_v0556_diagnostics_trace_bound_stops_stream_before_later_chunks() -> None:
+    from app.benchmarking import BenchmarkTraceTooLarge, read_benchmark_trace_chunks
+
+    read_chunks = []
+
+    def chunks():
+        for chunk in (b"123", b"456", b"must not be read"):
+            read_chunks.append(chunk)
+            yield chunk
+
+    try:
+        read_benchmark_trace_chunks(chunks(), max_bytes=5)
+    except BenchmarkTraceTooLarge:
+        pass
+    else:
+        raise AssertionError("An oversized trace must be rejected, not silently truncated")
+    assert read_chunks == [b"123", b"456"]
+    assert read_benchmark_trace_chunks((b"12", b"345"), max_bytes=5) == b"12345"
+
+
+def test_v0556_diagnostics_source_identity_redacts_remote_credentials_and_local_directories() -> None:
+    from app.benchmarking import benchmark_source_identity
+
+    assert benchmark_source_identity("rtsp://user:pwd@[2001:db8::1]:554/live?password=secret#fragment") == "rtsp://[2001:db8::1]:554/live"
+    assert benchmark_source_identity("https://media.local/clips/clip1.mp4?sig=private") == "https://media.local/clips/clip1.mp4"
+    assert benchmark_source_identity(r"D:\User\Nhiên\Videos\clip1.mp4") == "clip1.mp4"
+    assert benchmark_source_identity("/data/videos/clip1.mp4") == "clip1.mp4"
+    assert benchmark_source_identity("rtsp://admin:pwd@camera:invalid/live") == "[source omitted]"
+    assert benchmark_source_identity(None) is None

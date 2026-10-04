@@ -943,3 +943,126 @@ def test_v0555_four_wheel_support_collapses_duplicate_sources_to_one_frame() -> 
             evidence.update(7, 100, "truck", 0.70, source)
     assert evidence.four_wheel_support(7, 100, "truck") == (1, 0.70, 0.70)
     assert evidence.minority_consensus(7, 100, "car") is None
+
+
+def _v0556_bicycle_consensus(evidence, frame_index: int = 130):
+    # The active worker defaults require four frames and two winning sources.
+    return evidence.minority_consensus(
+        7, frame_index, "motorcycle", bicycle_confidence=0.78,
+        bicycle_min_hits=4, bicycle_margin=0.16,
+        bicycle_min_strongest=0.45, bicycle_min_sources=2,
+        bicycle_single_source_strong=0.88,
+    )
+
+
+def test_v0556_bicycle_consensus_cannot_borrow_three_losing_frames() -> None:
+    from app.classification import RefineEvidenceAccumulator
+
+    evidence = RefineEvidenceAccumulator()
+    evidence.update(7, 100, "bicycle", 0.90, "domain")
+    for frame in (110, 120, 130):
+        evidence.update(7, frame, "bicycle", 0.25, "general")
+        evidence.update(7, frame, "motorcycle", 0.30, "domain")
+    assert _v0556_bicycle_consensus(evidence) is None
+
+
+def test_v0556_bicycle_consensus_cannot_borrow_three_tied_frames() -> None:
+    from app.classification import RefineEvidenceAccumulator
+
+    evidence = RefineEvidenceAccumulator()
+    evidence.update(7, 100, "bicycle", 0.90, "domain")
+    for frame in (110, 120, 130):
+        evidence.update(7, frame, "bicycle", 0.25, "general")
+        evidence.update(7, frame, "motorcycle", 0.25, "domain")
+    assert _v0556_bicycle_consensus(evidence) is None
+
+
+def test_v0556_bicycle_consensus_tied_source_cannot_supply_diversity() -> None:
+    from app.classification import RefineEvidenceAccumulator
+
+    evidence = RefineEvidenceAccumulator()
+    for frame in (100, 110, 120, 130):
+        evidence.update(7, frame, "bicycle", 0.55, "domain")
+        evidence.update(7, frame, "bicycle", 0.10, "general")
+        evidence.update(7, frame, "motorcycle", 0.10, "general")
+    assert _v0556_bicycle_consensus(evidence) is None
+
+
+def test_v0556_bicycle_consensus_losing_source_cannot_supply_diversity() -> None:
+    from app.classification import RefineEvidenceAccumulator
+
+    evidence = RefineEvidenceAccumulator()
+    for frame in (100, 110, 120, 130):
+        evidence.update(7, frame, "bicycle", 0.55, "domain")
+        evidence.update(7, frame, "bicycle", 0.10, "general")
+        evidence.update(7, frame, "motorcycle", 0.15, "general")
+    assert _v0556_bicycle_consensus(evidence) is None
+
+
+def test_v0556_bicycle_consensus_fusion_excludes_losing_frame_confidence() -> None:
+    from app.classification import RefineEvidenceAccumulator
+
+    evidence = RefineEvidenceAccumulator()
+    for frame, source in ((100, "domain"), (110, "general")):
+        evidence.update(7, frame, "bicycle", 0.36, source)
+    evidence.update(7, 120, "bicycle", 0.20, "domain")
+    evidence.update(7, 120, "motorcycle", 0.21, "general")
+    # Two genuine wins alone remain below the unchanged 0.60 confidence floor.
+    assert evidence.minority_consensus(
+        7, 120, "motorcycle", bicycle_confidence=0.60,
+    ) is None
+
+
+def test_v0556_bicycle_consensus_strong_single_source_cannot_borrow_escape_hits() -> None:
+    from app.classification import RefineEvidenceAccumulator
+
+    evidence = RefineEvidenceAccumulator()
+    evidence.update(7, 136, "bicycle", 0.99, "domain")
+    for frame in (137, 138, 139, 140):
+        evidence.update(7, frame, "bicycle", 0.10, "domain")
+        evidence.update(7, frame, "motorcycle", 0.10, "general")
+    assert _v0556_bicycle_consensus(evidence, 140) is None
+
+
+def test_v0556_bicycle_consensus_retains_repeated_winning_dual_sources() -> None:
+    from app.classification import RefineEvidenceAccumulator
+
+    evidence = RefineEvidenceAccumulator()
+    for frame, source in ((100, "domain"), (110, "general"), (120, "domain"), (130, "general")):
+        evidence.update(7, frame, "bicycle", 0.55, source)
+        evidence.update(7, frame, "motorcycle", 0.10, "general")
+    result = _v0556_bicycle_consensus(evidence)
+    assert result is not None and result[0] == "bicycle" and result[1] >= 0.78
+
+
+def test_v0556_bicycle_consensus_retains_clear_single_source_escape() -> None:
+    from app.classification import RefineEvidenceAccumulator
+
+    evidence = RefineEvidenceAccumulator()
+    for frame in (100, 110, 120, 130, 140):
+        evidence.update(7, frame, "bicycle", 0.90, "domain")
+    result = _v0556_bicycle_consensus(evidence, 140)
+    assert result is not None and result[0] == "bicycle" and result[1] >= 0.78
+
+
+def test_v0556_bicycle_consensus_keeps_aggregate_motorcycle_margin() -> None:
+    from app.classification import RefineEvidenceAccumulator
+
+    evidence = RefineEvidenceAccumulator()
+    for frame, source in ((100, "domain"), (110, "general"), (120, "domain"), (130, "general")):
+        evidence.update(7, frame, "bicycle", 0.55, source)
+    evidence.update(7, 125, "motorcycle", 0.99, "domain")
+    assert _v0556_bicycle_consensus(evidence) is None
+
+
+def test_v0556_bicycle_consensus_preserves_aggregate_policy_without_new_veto() -> None:
+    from app.classification import RefineEvidenceAccumulator
+
+    evidence = RefineEvidenceAccumulator()
+    for frame, source in ((100, "domain"), (110, "general"), (120, "domain"), (130, "general")):
+        evidence.update(7, frame, "bicycle", 0.80, source)
+    evidence.update(7, 125, "motorcycle", 0.75, "domain")
+    # Ordinary consensus historically uses an aggregate margin. Its existing
+    # policy is preserved; the crossing-context per-frame veto is separate.
+    result = _v0556_bicycle_consensus(evidence)
+    assert result is not None and result[0] == "bicycle" and result[1] >= 0.78

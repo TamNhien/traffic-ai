@@ -1297,6 +1297,15 @@ class PipelineWorker(threading.Thread):
                 crossing_class_refine_track_ids: set[int] = set()
                 gate_trace_tracks = []
                 self._bicycle_xframe_audit_this_frame = []
+                # Expire a provisional passage before any returning detection
+                # can commit it. The observed-frame deadline applies equally to
+                # visible and missing tracks, and keeps the crossing source time.
+                expired_guard_crossings = [
+                    pending for pending in self._pending_guard_crossings.values()
+                    if frame_index - (pending.observed_frame_index or pending.frame_index) >= self.human_guard_pending_max_frames
+                ]
+                for pending in expired_guard_crossings:
+                    self._drop_guard_crossing(counter, pending, expired=True)
                 active_track_ids_this_frame: set[int] = set()
                 boxes = result.boxes
                 self.state.detections_current_frame = int(len(boxes)) if boxes is not None else 0
@@ -1424,6 +1433,19 @@ class PipelineWorker(threading.Thread):
                             self.state.bicycle_tracks_seen = len(self._bicycle_tracks_seen)
                         last_track_event_meta[int(track_id)] = (str(display_label), float(confidence_f), int(frame_index))
 
+                        # A visible track remains diagnostic evidence while its
+                        # semantic transaction is pending. Record geometry before
+                        # the pending guard can skip another counting decision.
+                        anchor_signed = signed_distance(anchor, line_a, line_b) / max(1.0, min(width, height))
+                        center_signed = signed_distance(center, line_a, line_b) / max(1.0, min(width, height))
+                        gate_trace_track = {
+                            "track_id": int(track_id), "label": str(display_label),
+                            "anchor_signed": round(float(anchor_signed), 6),
+                            "center_signed": round(float(center_signed), 6),
+                            "human_guard_status": self._human_guard_policy.status(track_id),
+                        }
+                        gate_trace_tracks.append(gate_trace_track)
+
                         # V0.5.24 Rider-aware Human Guard 2.0 compatibility is preserved.
                         # V0.5.25 Transactional Human Guard 2.1.
                         # A pending two-wheel crossing is resolved on a *later*
@@ -1440,6 +1462,7 @@ class PipelineWorker(threading.Thread):
                                 self._drop_guard_crossing(counter, buffered)
                             elif action in {"rider", "released", "keep"}:
                                 self._commit_guard_crossing(cv2, buffered)
+                            gate_trace_track["human_guard_status"] = self._human_guard_policy.status(track_id)
                             if track_id in self._pending_guard_crossings:
                                 # One unresolved semantic transaction owns this
                                 # track's provisional passage. A second geometry
@@ -1464,14 +1487,7 @@ class PipelineWorker(threading.Thread):
                                 track_id, frame_index, analysis_frame, rect, display_label, confidence_f,
                                 device, use_half, velocity=velocity, force=False,
                             )
-
-                        anchor_signed = signed_distance(anchor, line_a, line_b) / max(1.0, min(width, height))
-                        center_signed = signed_distance(center, line_a, line_b) / max(1.0, min(width, height))
-                        gate_trace_tracks.append({
-                            "track_id": int(track_id), "label": str(display_label),
-                            "anchor_signed": round(float(anchor_signed), 6),
-                            "center_signed": round(float(center_signed), 6),
-                        })
+                        gate_trace_track["human_guard_status"] = self._human_guard_policy.status(track_id)
 
                         # V0.5.40/V0.5.41: sample a short pre-crossing context trail
                         # for weak motorcycle tracks. Sampling never creates an
@@ -1698,6 +1714,7 @@ class PipelineWorker(threading.Thread):
                                     track_id, frame_index, analysis_frame, rect, event_label, event_confidence,
                                     device, use_half, velocity=velocity, force=True,
                                 )
+                                gate_trace_track["human_guard_status"] = self._human_guard_policy.status(track_id)
                                 if action == "rejected":
                                     if context_trace.get("audit") is not None:
                                         context_trace["audit"]["commit_status"] = "rejected"
@@ -1847,16 +1864,6 @@ class PipelineWorker(threading.Thread):
                         if did_scan:
                             self.state.bicycle_context_xframe_priority_scans += 1
 
-                # Fail closed only for guard transactions that never receive a
-                # second semantic observation (for example a track disappears
-                # immediately after the line). Normal pending crossings resolve
-                # on the very next distinct frame.
-                expired_guard_crossings = [
-                    pending for pending in self._pending_guard_crossings.values()
-                    if frame_index - (pending.observed_frame_index or pending.frame_index) >= self.human_guard_pending_max_frames
-                ]
-                for pending in expired_guard_crossings:
-                    self._drop_guard_crossing(counter, pending, expired=True)
                 self._refresh_anchor_span_telemetry(counter)
 
                 calibration_stats = self._flow_calibrator.stats()

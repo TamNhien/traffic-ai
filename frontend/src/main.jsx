@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './styles.css'
 
-const APP_VERSION = '0.5.55'
+const APP_VERSION = '0.5.56'
 const vehicleLabels = {
   motorcycle: 'Xe máy', bicycle: 'Xe đạp', car: 'Ô tô', bus: 'Xe buýt', truck: 'Xe tải', other: 'Khác'
 }
@@ -485,6 +485,7 @@ function GroundTruthBenchmark({ selectedCameraId, sessions }) {
   const [playbackRate, setPlaybackRate] = useState(0.5)
   const [busy, setBusy] = useState(false)
   const [reconciling, setReconciling] = useState(false)
+  const [exporting, setExporting] = useState(false)
   const [reconcileStatus, setReconcileStatus] = useState('')
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
@@ -645,6 +646,30 @@ function GroundTruthBenchmark({ selectedCameraId, sessions }) {
     } catch (err) { setError(err.message) } finally { setBusy(false) }
   }
 
+  const exportBenchmark = async () => {
+    if (!detail || exporting) return
+    const benchmarkId = detail.id
+    const sessionId = detail.session_id
+    setExporting(true); setError(''); setMessage('')
+    try {
+      const response = await fetch(`/api/benchmarks/${benchmarkId}/export`, {cache:'no-store'})
+      if (!response.ok) {
+        const body = await readBody(response)
+        throw new Error(body.detail || 'Không tải được hồ sơ benchmark')
+      }
+      const archive = await response.blob()
+      const url = URL.createObjectURL(archive)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `traffic-ai-benchmark-${benchmarkId}-session-${sessionId}.zip`
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 60000)
+      setMessage(`Đã tải hồ sơ Benchmark #${benchmarkId}. manifest.json ghi rõ trace có sẵn hay bị thiếu.`)
+    } catch (err) { setError(err.message) } finally { setExporting(false) }
+  }
+
   const reconcileBenchmark = async () => {
     if (!detail || reconciling) return
     const before = report ? `${report.matched}/${report.missed}/${report.false_positives}` : ''
@@ -720,7 +745,7 @@ function GroundTruthBenchmark({ selectedCameraId, sessions }) {
 
     <article className="panel benchmark-report-panel">
       <div className="panel-head"><div><span className="panel-kicker">BENCHMARK REPORT</span><h2>Xe lọt / đếm dư theo timecode</h2></div></div>
-      {detail && <><div className="tolerance-row"><label>Cửa sổ ghép ± giây<input type="number" min="0.05" max="3" step="0.05" value={tolerance} onChange={e=>setTolerance(e.target.value)} /></label><button className="secondary" disabled={busy || reconciling} onClick={saveTolerance}>Áp dụng</button><button disabled={busy || reconciling} onClick={reconcileBenchmark}>{reconciling ? 'Đang đối chiếu…' : 'Đối chiếu lại'}</button></div>{reconcileStatus && <div className="benchmark-reconcile-status">{reconcileStatus}</div>}</>}
+      {detail && <><div className="tolerance-row"><label>Cửa sổ ghép ± giây<input type="number" min="0.05" max="3" step="0.05" value={tolerance} onChange={e=>setTolerance(e.target.value)} /></label><button className="secondary" disabled={busy || reconciling || exporting} onClick={saveTolerance}>Áp dụng</button><button disabled={busy || reconciling || exporting} onClick={reconcileBenchmark}>{reconciling ? 'Đang đối chiếu…' : 'Đối chiếu lại'}</button><button className="secondary" disabled={busy || reconciling || exporting} onClick={exportBenchmark}>{exporting ? 'Đang đóng gói…' : 'Tải hồ sơ benchmark'}</button></div>{reconcileStatus && <div className="benchmark-reconcile-status">{reconcileStatus}</div>}</>}
       {report ? <>
         <div className="benchmark-metrics"><div><span>Ground truth</span><strong>{report.ground_truth_total}</strong></div><div><span>AI đếm</span><strong>{report.ai_total}</strong></div><div><span>Khớp</span><strong>{report.matched}</strong></div><div className={report.missed ? 'metric-bad' : ''}><span>Lọt không đếm</span><strong>{report.missed}</strong></div><div className={report.false_positives ? 'metric-warn' : ''}><span>Đếm dư</span><strong>{report.false_positives}</strong></div><div><span>Sai số tổng</span><strong>{report.count_error > 0 ? '+' : ''}{report.count_error}</strong></div></div>
         <div className="benchmark-scores"><span>Counting Recall <strong>{(Number(report.counting_recall || 0)*100).toFixed(1)}%</strong></span><span>Precision <strong>{(Number(report.counting_precision || 0)*100).toFixed(1)}%</strong></span><span>F1 <strong>{(Number(report.counting_f1 || 0)*100).toFixed(1)}%</strong></span><span>Class đúng <strong>{report.class_accuracy == null ? '—' : `${(report.class_accuracy*100).toFixed(1)}%`}</strong></span><span title="GT lọt và AI dư gần nhau ngoài cửa sổ chấm điểm; chỉ phục vụ review, không đổi Recall/Precision">Review gần <strong>{report.unmatched_review_links ?? 0}</strong></span></div>

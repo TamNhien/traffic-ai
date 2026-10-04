@@ -20,7 +20,7 @@ def test_root_metadata() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["name"] == "Traffic AI"
-    assert payload["version"] == "0.5.55"
+    assert payload["version"] == "0.5.56"
     assert payload["docs"] == "/docs"
     assert payload["health"] == "/api/health"
 
@@ -158,7 +158,7 @@ def test_benchmark_clone_compatibility_rejects_different_line() -> None:
 
 
 def test_backend_version_metadata() -> None:
-    assert app.version == "0.5.55"
+    assert app.version == "0.5.56"
 
 
 def test_v0531_startup_crossing_signature_guard_is_narrow() -> None:
@@ -179,7 +179,7 @@ def test_v0533_ground_truth_mark_update_schema() -> None:
 
 
 def test_v0533_version() -> None:
-    assert app.version == "0.5.55"
+    assert app.version == "0.5.56"
 
 
 def test_v0533_ground_truth_mark_update_keeps_timecode() -> None:
@@ -1130,3 +1130,107 @@ def test_v0554_class_mismatch_report_fetches_trace_without_gate_miss(monkeypatch
         assert semantic["ai_tracking_id"] == 10
         assert semantic["diagnosis"]["bicycle_context_audit"] == [own]
         assert semantic["diagnosis"]["gate_span_audit"]["bicycle_context_audit"] == [own]
+
+
+def test_v0556_diagnostics_metadata_whitelist_distinguishes_snapshot_and_current_config() -> None:
+    from types import SimpleNamespace
+    from app.api.routes import _benchmark_export_metadata
+
+    session = SimpleNamespace(id=9, camera_id=1, model_id=2, status="completed", source_url="clip1.mp4", secret="session-private")
+    camera = SimpleNamespace(id=1, source_type="video", confidence_threshold=0.06, line_x1=0.40, line_x2=0.85, secret="camera-private")
+    model = SimpleNamespace(id=2, name="Detector", version="custom", architecture="YOLO", model_path="/private/weights.pt", secret="model-private")
+    benchmark = {"geometry": {"line_x1": 0.32, "line_x2": 0.84}, "tolerance_seconds": 0.75}
+    session_payload, config = _benchmark_export_metadata(session, camera, model, benchmark)
+    assert session_payload["source_url"] == "clip1.mp4"
+    assert "secret" not in session_payload
+    assert config["benchmark_snapshot"]["geometry"] == {"line_x1": 0.32, "line_x2": 0.84}
+    assert config["current_camera"]["geometry"] == {"line_x1": 0.40, "line_x2": 0.85}
+    assert config["session_model"] == {"id": 2, "name": "Detector", "version": "custom", "architecture": "YOLO"}
+    assert "model_path" not in config["session_model"]
+    assert "environment" in config["inference_settings"]
+    assert "current" in config["inference_settings"]
+
+
+def test_v0556_export_route_downloads_one_snapshot_without_changing_counts(monkeypatch) -> None:
+    from io import BytesIO
+    import json
+    from types import SimpleNamespace
+    from zipfile import ZipFile
+    from sqlalchemy import func, select
+    from app.api.routes import export_benchmark
+    from app.models.all_models import CountingBenchmark, CountingSession, GroundTruthCrossing, VehicleEvent
+
+    with _dedup_event_database() as db:
+        event, _ = _submit_dedup_event(db)
+        db.add(CountingBenchmark(id=1, camera_id=1, session_id=1, name="Export regression", source_url="rtsp://user:password@cam/live?token=private"))
+        db.flush()
+        db.add(GroundTruthCrossing(benchmark_id=1, source_time_seconds=10.0, vehicle_type="bicycle", direction="in", note="Xe đạp"))
+        db.commit()
+        monkeypatch.setattr("app.api.routes.httpx.post", lambda *_args, **_kwargs: SimpleNamespace(is_success=False))
+        trace = b'{"source_time_seconds":10.0,"frame_index":251,"tracks":1}\n'
+        monkeypatch.setattr("app.api.routes._fetch_benchmark_export_trace", lambda session_id: (trace, "available"))
+        response = export_benchmark(1, db)
+        assert response.media_type == "application/zip"
+        assert response.headers["Cache-Control"] == "no-store"
+        assert "traffic-ai-benchmark-1-session-1.zip" in response.headers["Content-Disposition"]
+        with ZipFile(BytesIO(response.body)) as zipped:
+            report = json.loads(zipped.read("report.json"))
+            assert report["matched"] == 1
+            assert report["class_accuracy"] == 0.0
+            assert report["benchmark"]["source_url"] == "rtsp://cam/live"
+            assert json.loads(zipped.read("events.json"))[0]["id"] == event.id
+            assert json.loads(zipped.read("ground-truth.json"))[0]["vehicle_type"] == "bicycle"
+            assert zipped.read("benchmark-trace.jsonl") == trace
+            assert json.loads(zipped.read("manifest.json"))["trace"]["available"] is True
+        assert db.get(CountingSession, 1).total_vehicles == 1
+        assert db.scalar(select(func.count()).select_from(VehicleEvent)) == 1
+        assert db.scalar(select(func.count()).select_from(GroundTruthCrossing)) == 1
+
+
+def test_v0556_export_missing_benchmark_fails_before_trace_download(monkeypatch) -> None:
+    import pytest
+    from fastapi import HTTPException
+    from app.api.routes import export_benchmark
+
+    def forbidden_trace(_session_id):
+        raise AssertionError("An unknown benchmark must not request a trace")
+
+    monkeypatch.setattr("app.api.routes._fetch_benchmark_export_trace", forbidden_trace)
+    with _dedup_event_database() as db:
+        with pytest.raises(HTTPException) as error:
+            export_benchmark(999, db)
+        assert error.value.status_code == 404
+
+
+def test_v0556_export_trace_transport_handles_oversized_missing_and_empty_sources(monkeypatch) -> None:
+    """Transport fixtures exercise optional failures; no real AI HTTP is used."""
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+    from app.api.routes import _fetch_benchmark_export_trace
+
+    requests = []
+    response = None
+
+    def stream(method, url, **options):
+        requests.append((method, url, options))
+        return nullcontext(response)
+
+    monkeypatch.setattr("app.api.routes.httpx.stream", stream)
+    monkeypatch.setattr("app.api.routes.BENCHMARK_TRACE_EXPORT_MAX_BYTES", 5)
+    for status_code, announced_bytes, chunks, reason in (
+        (404, "0", [], "not_found"),
+        (503, "0", [], "http_error_503"),
+        (200, "6", [], "too_large"),
+        (200, "0", [b"123", b"456"], "too_large"),
+        (200, "0", [], "empty"),
+        (200, "invalid", [b"12345"], "available"),
+    ):
+        response = SimpleNamespace(
+            status_code=status_code, is_success=status_code == 200,
+            headers={"Content-Length": announced_bytes}, iter_bytes=lambda **_kwargs: iter(chunks),
+        )
+        payload, actual_reason = _fetch_benchmark_export_trace(9)
+        assert actual_reason == reason
+        assert payload == (b"12345" if reason == "available" else None)
+    assert all(request[0] == "GET" and request[1].endswith("/benchmark-traces/9/download") for request in requests)
+    assert all(request[2] == {"timeout": 8.0, "follow_redirects": False} for request in requests)

@@ -10,13 +10,13 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.runtime import registry
-from app.benchmark_trace import diagnose_trace
+from app.benchmark_trace import diagnose_trace, trace_path
 from app.schemas import AnnotationBulkAcceptRequest, AnnotationSaveRequest, BenchmarkTraceDiagnoseRequest, DatasetAutoLabelRequest, DatasetExtractRequest, DatasetPrepareRequest, DatasetPurgeRequest, PipelineStart, SourceValidationRequest, TrainingStartRequest
 from app.sources import inspect_source, list_video_sources, read_source_preview, resolve_video_path
 from app.training import auto_label, dataset_stats, extract_frames, prepare_dataset, purge_dataset, reset_dataset_labels, training_registry
 from app.annotation import accept_safe_annotations, get_annotation, get_annotation_image, list_annotations, save_annotation
 
-APP_VERSION = '0.5.55'
+APP_VERSION = '0.5.56'
 app = FastAPI(title='Traffic AI Service', version=APP_VERSION)
 SNAPSHOT_DIR = Path(os.getenv('SNAPSHOT_DIR', '/tmp/traffic-ai-snapshots'))
 SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
@@ -89,6 +89,14 @@ def health() -> dict:
 @app.post('/benchmark-traces/{session_id}/diagnose')
 def benchmark_trace_diagnose(session_id: int, payload: BenchmarkTraceDiagnoseRequest) -> dict:
     return diagnose_trace(session_id, payload.times, payload.window_seconds, tracking_ids=payload.tracking_ids)
+
+
+@app.get('/benchmark-traces/{session_id}/download')
+def benchmark_trace_download(session_id: int) -> FileResponse:
+    path = trace_path(session_id)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail='Benchmark trace không còn trên AI service')
+    return FileResponse(path, media_type='application/x-ndjson', filename=f'session_{session_id}.jsonl')
 
 
 @app.get('/sources/videos')

@@ -394,3 +394,144 @@ def test_v0554_eof_trace_io_failure_still_revokes_every_pending_passage() -> Non
     assert worker.state.total_count == 0
     assert worker._event_dispatcher.payloads == []
     assert worker.state.last_error == "Benchmark trace shutdown failed: trace storage unavailable"
+
+
+def _execute_guard_frame(worker, frame_index, *, active=True):
+    """Execute actual per-frame expiry and tracked follow-up in source order.
+
+    Compiling these source blocks avoids importing inference/HTTP dependencies,
+    while retaining the ordering that previously let a visible track commit at
+    the very same deadline that expired an absent track.
+    """
+    import ast
+    from pathlib import Path
+    from app.counting import signed_distance
+
+    source_path = Path(__file__).resolve().parents[1] / "app/worker.py"
+    module = ast.parse(source_path.read_text(encoding="utf-8"))
+    cls = next(node for node in module.body if isinstance(node, ast.ClassDef) and node.name == "PipelineWorker")
+    run = next(node for node in cls.body if isinstance(node, ast.FunctionDef) and node.name == "run")
+    track_loop = next(
+        node for node in ast.walk(run) if isinstance(node, ast.For)
+        and isinstance(node.target, ast.Name) and node.target.id == "item_index"
+    )
+
+    def assigned_name(node, name):
+        return any(
+            isinstance(item, ast.Name) and item.id == name
+            for target in getattr(node, "targets", ()) for item in ast.walk(target)
+        )
+
+    expiry_assignment = next(node for node in ast.walk(run) if assigned_name(node, "expired_guard_crossings"))
+    expiry_loop = next(
+        node for node in ast.walk(run) if isinstance(node, ast.For)
+        and isinstance(node.iter, ast.Name) and node.iter.id == "expired_guard_crossings"
+    )
+    first_guard_node = min(
+        index for index, node in enumerate(track_loop.body)
+        if assigned_name(node, "buffered") or assigned_name(node, "anchor_signed")
+    )
+    last_guard_node = next(index for index, node in enumerate(track_loop.body) if assigned_name(node, "xframe_candidate"))
+    guard_loop = ast.For(
+        target=ast.Name(id="_active_track", ctx=ast.Store()),
+        iter=ast.Name(id="_active_tracks", ctx=ast.Load()),
+        body=track_loop.body[first_guard_node:last_guard_node], orelse=[],
+    )
+    ast.copy_location(guard_loop, track_loop.body[first_guard_node])
+    code = compile(ast.fix_missing_locations(ast.Module(
+        body=sorted([expiry_assignment, expiry_loop, guard_loop], key=lambda node: node.lineno), type_ignores=[],
+    )), str(source_path), "exec")
+    calls = []
+    worker._observe_human_guard = lambda *_args, **_kwargs: calls.append(frame_index) or (worker._frame_guard_action, None)
+    worker._draw_detection = lambda *_args: None
+    worker._human_guard_policy = SimpleNamespace(
+        status=lambda _tid: "pending" if _tid in worker._pending_guard_crossings else "keep",
+        is_rider=lambda _tid: True,
+    )
+    env = {
+        "self": worker, "counter": _Counter(), "frame_index": frame_index,
+        "track_id": 77, "confidence_f": .82, "display_label": "motorcycle",
+        "analysis_frame": object(), "frame": object(), "rect": (40, 45, 60, 65), "anchor": (50, 65),
+        "center": (50, 55), "class_certainty": .9, "raw_track_id": 77,
+        "device": "cpu", "use_half": False, "velocity": (0, 2), "cv2": object(),
+        "line_a": (10, 50), "line_b": (90, 50), "width": 100, "height": 100,
+        "gate_trace_tracks": [], "signed_distance": signed_distance,
+        "TWO_WHEEL_LABELS": {"bicycle", "motorcycle"},
+        "is_person_like_two_wheel_box": lambda _rect: False,
+        "_active_tracks": [77] if active else [],
+    }
+    exec(code, env)
+    return calls, env["counter"], env["gate_trace_tracks"]
+
+
+def _deadline_worker(*, action="rider"):
+    worker = _worker()
+    pending = _pending()
+    pending.observed_frame_index = 522
+    worker._pending_guard_crossings[77] = pending
+    worker.human_guard_pending_max_frames = 12
+    worker._frame_guard_action = action
+    return worker
+
+
+def test_v0556_visible_return_at_guard_deadline_expires_before_follow_up() -> None:
+    worker = _deadline_worker()
+
+    calls, counter, _ = _execute_guard_frame(worker, 534)
+
+    assert calls == []
+    assert counter.revoked == [(77, "in")]
+    assert worker.state.human_guard_pending_drops == 1
+    assert worker.state.total_count == 0
+    assert worker._event_dispatcher.payloads == []
+
+
+def test_v0556_visible_return_after_guard_deadline_cannot_resurrect_crossing() -> None:
+    worker = _deadline_worker()
+
+    calls, counter, _ = _execute_guard_frame(worker, 540)
+
+    assert calls == []
+    assert counter.revoked == [(77, "in")]
+    assert worker.state.human_guard_pending_drops == 1
+    assert worker.state.total_count == 0
+
+
+def test_v0556_guard_deadline_uses_observed_frame_and_keeps_event_source_clock() -> None:
+    worker = _deadline_worker()
+
+    calls, counter, _ = _execute_guard_frame(worker, 533)
+
+    assert calls == [533]
+    assert counter.revoked == []
+    assert worker.state.human_guard_pending_drops == 0
+    assert worker.state.total_count == 1
+    payload = worker._event_dispatcher.payloads[0]
+    assert payload["source_frame_index"] == 519
+    assert payload["source_time_seconds"] == 20.72
+
+
+def test_v0556_missing_track_keeps_same_guard_expiry_rule() -> None:
+    worker = _deadline_worker()
+
+    calls, counter, tracks = _execute_guard_frame(worker, 534, active=False)
+
+    assert calls == [] and tracks == []
+    assert counter.revoked == [(77, "in")]
+    assert worker.state.human_guard_pending_drops == 1
+    assert worker.state.total_count == 0
+
+
+def test_v0556_pending_guard_trace_keeps_visible_geometry_without_committing() -> None:
+    worker = _deadline_worker(action="pending")
+
+    calls, counter, tracks = _execute_guard_frame(worker, 523)
+
+    assert calls == [523] and counter.revoked == []
+    assert tracks == [{
+        "track_id": 77, "label": "motorcycle", "anchor_signed": .15,
+        "center_signed": .05, "human_guard_status": "pending",
+    }]
+    assert worker.state.total_count == 0
+    assert worker._event_dispatcher.payloads == []
+    assert 77 in worker._pending_guard_crossings

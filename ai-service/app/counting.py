@@ -552,6 +552,78 @@ class VerifiedAnchorSpanRescuer:
         pending.reviewed_through_frame = max(pending.reviewed_through_frame, previous.frame_index)
         return "valid"
 
+    def _revalidate_merged_pending_span(self, state: _AnchorSpanState) -> bool:
+        """Rebuild pending geometry from the canonical merged observations.
+
+        A pending span may have been proven by a sparse pair before an alias
+        supplied intervening samples or replaced an endpoint at the same frame.
+        Post-side confirmation cannot preserve proof contradicted by that now
+        observed route. Valid added observations also define the actual crossing
+        point and clock instead of the original sparse chord.
+        """
+        pending = state.pending
+        if pending is None:
+            return True
+        history = list(state.history)
+        by_frame = {item.frame_index: item for item in history}
+        start = by_frame.get(pending.start.frame_index)
+        end = by_frame.get(pending.end.frame_index)
+        proof = None
+        if (
+            start is not None and end is not None
+            and start.side == -pending.destination_side
+            and end.side == pending.destination_side
+            and 0 < end.frame_index - start.frame_index <= self.history_gap_frames
+        ):
+            window = [item for item in history if start.frame_index <= item.frame_index <= end.frame_index]
+            # Approach recovery additionally promised continuous normal
+            # progress. Merged evidence must keep that same promise.
+            monotonic = not pending.approach_span or all(
+                (right.distance - left.distance) * end.side >= -1e-6
+                for left, right in zip(window, window[1:])
+            )
+            a, b = self.line.denormalize(pending.frame_width, pending.frame_height)
+            crossing = observed_gate_crossing(
+                history, start, end, a, b, segment_margin=self.segment_margin,
+            )
+            if monotonic and crossing is not None:
+                left, right, point = crossing
+                path_length = max(observed_path_length(history, start, end), 1e-6)
+                normal_ratio = abs(end.distance - start.distance) / path_length
+                side_depth = min(abs(start.distance), abs(end.distance)) / max(
+                    1.0, min(pending.frame_width, pending.frame_height),
+                )
+                road_ok, road_edge = self._road_ok(
+                    start, end, point, pending.frame_width, pending.frame_height,
+                    corridor_start=left, corridor_end=right,
+                )
+                if self.road_zone is not None:
+                    road_ok = road_ok and observed_road_path_ok(
+                        self.road_zone, history, start, end, pending.frame_width,
+                        pending.frame_height, self.road_margin_ratio,
+                    )
+                if (
+                    normal_ratio >= self.min_normal_ratio
+                    and path_length / max(hypot(pending.frame_width, pending.frame_height), 1.0) <= self.max_jump_ratio
+                    and side_depth >= self.min_side_distance_ratio
+                    and road_ok
+                ):
+                    proof = start, end, point, crossing_frame_between(left, right, point), normal_ratio, side_depth, road_edge
+        if proof is None:
+            self.rejected_validation += 1
+            state.pending = None
+            # Keep the canonical end and later observations for a genuinely
+            # new return; the rejected incoming span can never reopen.
+            state.history = deque([
+                item for item in history if item.frame_index >= pending.end.frame_index
+            ], maxlen=64)
+            return False
+        (
+            pending.start, pending.end, pending.crossing, pending.crossing_frame,
+            pending.normal_ratio, pending.side_depth_ratio, pending.road_edge_rescue,
+        ) = proof
+        return True
+
     def _road_ok(
         self, start: _GateSample, end: _GateSample, crossing: Point, width: int, height: int,
         *, corridor_start: _GateSample | None = None, corridor_end: _GateSample | None = None,
@@ -1028,7 +1100,8 @@ class VerifiedAnchorSpanRescuer:
                 if item is not None and item.end.frame_index > dst.last_count_frame
             ]
             dst.pending = max(valid_pending, key=lambda item: item.end.frame_index, default=None)
-            self._review_pending_history(dst)
+            if self._revalidate_merged_pending_span(dst):
+                self._review_pending_history(dst)
         # Qualification describes a particular candidate transaction; aliases
         # cannot inherit an already-issued override after their state is merged.
         self._override_qualified.discard(source)

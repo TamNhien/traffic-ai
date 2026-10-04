@@ -177,8 +177,8 @@ foreach ($line in $remoteTagLines) {
 }
 if (-not $remoteTagSha) { $remoteTagSha = $directRemoteSha }
 
-git show-ref --verify --quiet "refs/tags/$tag"
-$tagStatus = $LASTEXITCODE
+$tagProbe = Invoke-QuietProbe -Command git -Arguments @("show-ref", "--verify", "--quiet", "refs/tags/$tag")
+$tagStatus = $tagProbe.ExitCode
 if ($tagStatus -notin @(0, 1)) { throw "Không kiểm tra được tag local $tag." }
 $localTagExists = ($tagStatus -eq 0)
 

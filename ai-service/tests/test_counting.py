@@ -3,6 +3,125 @@ import pytest
 from app.counting import CountingLine, LineCrossingCounter, RoadZone
 
 
+def test_v0556_anchor_merged_inner_endpoint_detour_invalidates_pending() -> None:
+    from app.counting import VerifiedAnchorSpanRescuer
+
+    gate = VerifiedAnchorSpanRescuer(CountingLine(), immediate_min_normal_ratio=0.95, max_jump_ratio=1.0, min_normal_ratio=0.01)
+    assert gate.update(5961, (450, 460), 1000, 1000, 10) is None
+    assert gate.update(5961, (500, 540), 1000, 1000, 12) is None
+    # Alias fusion reveals that the actual route went around the finite endpoint.
+    assert gate.update(5962, (950, 500), 1000, 1000, 11) is None
+    gate.merge_track(5962, 5961)
+    assert gate.update(5961, (500, 550), 1000, 1000, 13) is None
+    assert gate.finalize_lost(5961, 14) is None
+    assert gate.post_confirm_closures == gate.lost_track_finalizations == 0
+
+
+def test_v0556_anchor_merged_inner_road_departure_blocks_lost_closure() -> None:
+    from app.counting import VerifiedAnchorSpanRescuer
+
+    zone = RoadZone(0.49, 0.0, 0.51, 0.0, 0.51, 1.0, 0.49, 1.0)
+    gate = VerifiedAnchorSpanRescuer(CountingLine(), zone, immediate_min_normal_ratio=1.0)
+    assert gate.update(5963, (500, 470), 1000, 1000, 10) is None
+    assert gate.update(5963, (502, 530), 1000, 1000, 12) is None
+    # Bounded path and strong normal progress; the observed anchor alone is
+    # outside the existing road margin. Disappearance cannot erase that fact.
+    assert gate.update(5964, (522, 500), 1000, 1000, 11) is None
+    gate.merge_track(5964, 5963)
+    assert gate.finalize_lost(5963, 13) is None
+    assert gate.update(5963, (502, 540), 1000, 1000, 13) is None
+    assert gate.lost_track_finalizations == gate.post_confirm_closures == 0
+
+
+def test_v0556_anchor_merged_inner_path_exceeding_jump_cannot_confirm() -> None:
+    from app.counting import VerifiedAnchorSpanRescuer
+
+    gate = VerifiedAnchorSpanRescuer(CountingLine(), immediate_min_normal_ratio=0.95, min_normal_ratio=0.20)
+    assert gate.update(5965, (450, 460), 1000, 1000, 10) is None
+    assert gate.update(5965, (500, 540), 1000, 1000, 12) is None
+    assert gate.update(5966, (600, 500), 1000, 1000, 11) is None
+    gate.merge_track(5966, 5965)
+    assert gate.update(5965, (500, 550), 1000, 1000, 13) is None
+    assert gate.finalize_lost(5965, 14) is None
+    assert gate.rejected_validation >= 1
+
+
+def test_v0556_anchor_merged_inner_bounded_path_still_requires_normal_motion() -> None:
+    from app.counting import VerifiedAnchorSpanRescuer
+
+    gate = VerifiedAnchorSpanRescuer(CountingLine(), immediate_min_normal_ratio=1.0)
+    assert gate.update(5967, (500, 480), 1000, 1000, 10) is None
+    # A 1 px x shift keeps this original two-point proof pending rather than
+    # immediate. The later 120 px route is below the jump limit but too lateral.
+    assert gate.update(5967, (501, 520), 1000, 1000, 12) is None
+    assert gate.update(5968, (560, 500), 1000, 1000, 11) is None
+    gate.merge_track(5968, 5967)
+    assert gate.update(5967, (501, 530), 1000, 1000, 13) is None
+    assert gate.finalize_lost(5967, 14) is None
+    assert gate.rejected_validation >= 1
+
+
+def test_v0556_anchor_valid_merged_inner_path_updates_physical_crossing_proof() -> None:
+    from app.counting import VerifiedAnchorSpanRescuer
+
+    gate = VerifiedAnchorSpanRescuer(CountingLine(), immediate_min_normal_ratio=0.95)
+    assert gate.update(5969, (450, 460), 1000, 1000, 10) is None
+    assert gate.update(5969, (500, 540), 1000, 1000, 12) is None
+    assert gate.update(5970, (490, 500), 1000, 1000, 11) is None
+    gate.merge_track(5970, 5969)
+    assert gate.update(5969, (500, 550), 1000, 1000, 13) == ("in", (490.0, 500.0))
+    assert gate.crossing_frame_for(5969) == pytest.approx(11.0)
+    assert gate.post_confirm_closures == 1
+
+
+def test_v0556_anchor_canonical_end_replacement_discards_old_direction_proof() -> None:
+    from app.counting import VerifiedAnchorSpanRescuer
+
+    gate = VerifiedAnchorSpanRescuer(CountingLine(), immediate_min_normal_ratio=0.95)
+    assert gate.update(5971, (450, 460), 1000, 1000, 10) is None
+    assert gate.update(5971, (500, 540), 1000, 1000, 12) is None
+    # The established canonical alias wins a same-frame collision. Its real
+    # endpoint was still before the line, so the pending IN proof is invalid.
+    assert gate.update(5972, (500, 480), 1000, 1000, 12) is None
+    gate.merge_track(5971, 5972)
+    assert gate.update(5972, (500, 470), 1000, 1000, 13) is None
+    assert gate.update(5972, (500, 550), 1000, 1000, 14) == ("in", (500.0, 500.0))
+    assert gate.crossing_frame_for(5972) == pytest.approx(13 + 30 / 80)
+    assert gate.post_confirm_closures == 0
+
+
+def test_v0556_anchor_merged_valid_span_rechecks_stronger_lost_finalize_limit() -> None:
+    from app.counting import VerifiedAnchorSpanRescuer
+
+    gate = VerifiedAnchorSpanRescuer(CountingLine(), immediate_min_normal_ratio=1.0)
+    assert gate.update(5973, (500, 470), 1000, 1000, 10) is None
+    assert gate.update(5973, (501, 530), 1000, 1000, 12) is None
+    assert gate.update(5974, (550, 500), 1000, 1000, 11) is None
+    gate.merge_track(5974, 5973)
+    # The newly measured route still proves an ordinary pending span, but its
+    # normal progress is below the stronger disappearance-only closure limit.
+    assert gate.finalize_lost(5973, 13) is None
+    assert gate.update(5973, (501, 540), 1000, 1000, 13) == ("in", (550.0, 500.0))
+    assert gate.post_confirm_closures == 1
+    assert gate.lost_track_finalizations == 0
+
+
+def test_v0556_anchor_merged_approach_span_keeps_continuous_progress_requirement() -> None:
+    from app.counting import VerifiedAnchorSpanRescuer
+
+    gate = VerifiedAnchorSpanRescuer(CountingLine())
+    for frame, point in [(30, (500, 465)), (32, (480, 493)), (34, (530, 508))]:
+        assert gate.update(5975, point, 1000, 1000, frame) is None
+    assert gate.approach_span_candidates == 1
+    # A bounded alias observation reveals a retreat inside the approach. Even
+    # if aggregate normal progress remains sufficient, the approach promise
+    # of continuous measured progress is no longer true.
+    assert gate.update(5976, (482, 490), 1000, 1000, 33) is None
+    gate.merge_track(5976, 5975)
+    assert gate.update(5975, (530, 535), 1000, 1000, 35) is None
+    assert gate.approach_span_rescues == gate.post_confirm_closures == 0
+
+
 def test_v0555_all_gates_reject_large_observed_detour_hidden_by_short_chord() -> None:
     from app.counting import HeavyVehicleCrossingRescuer, TwoWheelCenterCrossingRescuer, VerifiedAnchorSpanRescuer
 

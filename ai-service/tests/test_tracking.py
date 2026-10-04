@@ -1,6 +1,49 @@
 from app.tracking import TrackContinuityResolver, motion_leading_anchor
 
 
+def test_v0556_tiny_heading_change_cannot_jump_between_box_edges() -> None:
+    from math import dist
+
+    for inset in (0.0, 0.16, 0.45):
+        first = motion_leading_anchor((100, 100, 200, 300), (-2, -2.01), inset)
+        second = motion_leading_anchor((100, 100, 200, 300), (-2.01, -2), inset)
+        assert dist(first, second) < 1.0
+
+
+def test_v0556_steady_diagonal_track_does_not_alternate_gate_side() -> None:
+    from app.counting import CountingLine, LineCrossingCounter
+
+    counter = LineCrossingCounter(CountingLine(0.0, 0.5, 1.0, 0.5), startup_grace_frames=0)
+    for index in range(5):
+        velocity = (-2, -2.01) if index % 2 == 0 else (-2.01, -2)
+        shift = index * 2
+        anchor = motion_leading_anchor((100-shift, 100-shift, 200-shift, 300-shift), velocity)
+        assert anchor[1] < 150
+        assert counter.update(19086, anchor, 300, 300, 10+index) is None
+    assert counter.total_crossings == 0
+
+
+def test_v0556_stationary_cutoff_does_not_create_box_height_jump() -> None:
+    from math import dist
+
+    before = motion_leading_anchor((100, 100, 200, 300), (0, -0.749))
+    after = motion_leading_anchor((100, 100, 200, 300), (0, -0.751))
+    assert dist(before, after) < 1
+    assert motion_leading_anchor((100, 100, 200, 300), (0.1, 0.1)) == (150, 300)
+
+
+def test_v0556_diagonal_anchor_still_counts_a_real_crossing() -> None:
+    from app.counting import CountingLine, LineCrossingCounter
+
+    counter = LineCrossingCounter(CountingLine(0.25, 0.5, 0.75, 0.5), startup_grace_frames=0)
+    before = motion_leading_anchor((100, 100, 200, 160), (2, 2.01))
+    after = motion_leading_anchor((110, 160, 210, 220), (2.01, 2))
+    assert before[1] < 180 < after[1]
+    assert counter.update(19087, before, 360, 360, 10) is None
+    assert counter.update(19087, after, 360, 360, 11) == 'in'
+    assert counter.total_crossings == 1
+
+
 def test_keeps_existing_raw_id() -> None:
     resolver = TrackContinuityResolver(max_gap_frames=10, max_distance_ratio=0.1)
     c1, stitched1 = resolver.resolve(7, (100, 100), "car", 1, 1000, 500)

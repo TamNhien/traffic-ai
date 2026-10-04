@@ -2,8 +2,119 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from dataclasses import dataclass
+from datetime import datetime
+from hashlib import sha256
+from io import BytesIO
+import json
 from math import inf
 from typing import Iterable, Mapping, Any
+from urllib.parse import urlsplit, urlunsplit
+from zipfile import ZIP_DEFLATED, ZipFile
+
+
+BENCHMARK_TRACE_EXPORT_MAX_BYTES = 128 * 1024 * 1024
+
+
+class BenchmarkTraceTooLarge(ValueError):
+    """The trace cannot fit in one diagnostic download."""
+
+
+def read_benchmark_trace_chunks(chunks: Iterable[bytes], max_bytes: int = BENCHMARK_TRACE_EXPORT_MAX_BYTES) -> bytes:
+    """Stop reading immediately at the bound; never export a truncated trace."""
+    payload = bytearray()
+    for chunk in chunks:
+        if len(payload) + len(chunk) > max_bytes:
+            raise BenchmarkTraceTooLarge("Benchmark trace exceeds the download limit")
+        payload.extend(chunk)
+    return bytes(payload)
+
+
+def benchmark_source_identity(source: str | None) -> str | None:
+    """Keep clip/stream identity without URL credentials or signed queries."""
+    if not source:
+        return None
+    try:
+        parsed = urlsplit(str(source))
+        if parsed.scheme.lower() in {"rtsp", "rtsps", "http", "https", "ftp", "sftp"}:
+            hostname = parsed.hostname
+            if not hostname:
+                return "[source omitted]"
+            if ":" in hostname:
+                hostname = f"[{hostname}]"
+            port = f":{parsed.port}" if parsed.port is not None else ""
+            return urlunsplit((parsed.scheme, hostname + port, parsed.path, "", ""))
+    except ValueError:
+        return "[source omitted]"
+    if "://" in str(source) and parsed.scheme.lower() != "file":
+        return "[source omitted]"
+    # Windows and POSIX paths are both possible when importing older sessions.
+    # A local file basename is enough to correlate snapshots with their clip.
+    return str(source).replace("\\", "/").rsplit("/", 1)[-1].split("?", 1)[0].split("#", 1)[0]
+
+
+def _benchmark_export_value(value: Any) -> Any:
+    """Copy JSON data; sanitize source URLs without mutating the live report."""
+    if isinstance(value, Mapping):
+        return {
+            key: benchmark_source_identity(item) if key == "source_url" else _benchmark_export_value(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_benchmark_export_value(item) for item in value]
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if hasattr(value, "value"):
+        return value.value
+    return value
+
+
+def build_benchmark_export(
+    *, report: dict, marks: list[dict], events: list[dict], session: dict,
+    config: dict, exported_at: datetime, trace: bytes | None = None,
+    trace_reason: str = "not_found",
+) -> bytes:
+    """Build a read-only evidence ZIP, with explicit optional trace status."""
+    if trace is not None and len(trace) > BENCHMARK_TRACE_EXPORT_MAX_BYTES:
+        raise BenchmarkTraceTooLarge("Benchmark trace exceeds the download limit")
+    if trace == b"":
+        trace, trace_reason = None, "empty"
+    files: dict[str, bytes] = {}
+    for filename, payload in (
+        ("report.json", report), ("ground-truth.json", marks),
+        ("events.json", events), ("session.json", session), ("config.json", config),
+    ):
+        files[filename] = (json.dumps(
+            _benchmark_export_value(payload), ensure_ascii=False,
+            allow_nan=False, sort_keys=True, indent=2,
+        ) + "\n").encode("utf-8")
+    if trace is not None:
+        files["benchmark-trace.jsonl"] = trace
+    manifest = {
+        "format": "traffic-ai-benchmark-diagnostics", "schema_version": 1,
+        "benchmark_id": report["benchmark"]["id"],
+        "session_id": report["session_id"], "exported_at": exported_at.isoformat(),
+        "trace": {
+            "available": trace is not None, "reason": "available" if trace is not None else trace_reason,
+            "bytes": len(trace) if trace is not None else 0,
+            "max_bytes": BENCHMARK_TRACE_EXPORT_MAX_BYTES,
+        },
+        "files": {
+            name: {"bytes": len(data), "sha256": sha256(data).hexdigest()}
+            for name, data in files.items()
+        },
+        "notes": [
+            "Report and events use the same database event snapshot; no marks or counts were changed.",
+            "A running session can append trace rows or deliver more events after this export.",
+            "Benchmark geometry is a stored snapshot; camera settings are current, not historical.",
+            "Source credentials and URL queries are omitted; videos, snapshots and model weights are not included.",
+        ],
+    }
+    files["manifest.json"] = (json.dumps(manifest, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    output = BytesIO()
+    with ZipFile(output, "w", compression=ZIP_DEFLATED, compresslevel=6) as archive:
+        for filename, data in files.items():
+            archive.writestr(filename, data)
+    return output.getvalue()
 
 
 @dataclass(slots=True)

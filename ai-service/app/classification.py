@@ -759,7 +759,7 @@ class RefineEvidenceAccumulator:
         competing_label: str,
         *,
         min_source_win: float = 0.0,
-        competing_veto: float = 0.10,
+        competing_veto: float | None = 0.10,
         include_current_frame: bool = True,
     ) -> tuple[int, float, float, int]:
         """Return temporal support that wins its target's class competition.
@@ -767,9 +767,11 @@ class RefineEvidenceAccumulator:
         Ordinary refiner history can contain a bicycle from one model and a
         stronger motorcycle from another on the same source frame. Those
         frames cannot prove repeated bicycle agreement for context rescue.
-        Apply the existing motor veto before retaining winning frames, then
+        Apply the caller's motor veto before retaining winning frames, then
         fuse only one positive opinion per distinct frame with the same decay
         used by ``support``. Future and expired samples remain ineligible.
+        Ordinary minority consensus passes no per-frame veto and keeps its
+        existing aggregate motorcycle margin instead.
         """
         current = int(frame_index)
         by_frame: dict[int, dict[str, dict[str, float]]] = {}
@@ -784,14 +786,14 @@ class RefineEvidenceAccumulator:
             sources[str(source)] = max(sources.get(str(source), 0.0), float(confidence))
 
         margin = max(0.0, float(min_source_win))
-        veto = max(0.0, float(competing_veto))
+        veto = None if competing_veto is None else max(0.0, float(competing_veto))
         winning: dict[int, float] = {}
         supporting_sources: set[str] = set()
         for observed_frame, frame in by_frame.items():
             sources = frame.get(str(label), {})
             confidence = max(sources.values(), default=0.0)
             competing_confidence = max(frame.get(str(competing_label), {}).values(), default=0.0)
-            if competing_confidence - confidence > veto:
+            if veto is not None and competing_confidence - confidence > veto:
                 return 0, 0.0, 0.0, 0
             if confidence <= 0.0 or confidence <= competing_confidence or confidence < competing_confidence + margin:
                 continue
@@ -893,12 +895,16 @@ class RefineEvidenceAccumulator:
         base = str(base_label)
         hits_required = max(2, int(min_hits))
         if base in TWO_WHEEL_CLASSES:
-            hits, fused, strongest = self.support(track_id, frame_index, "bicycle")
+            # Repeated bicycle agreement requires winning opinions. A tied or
+            # losing frame cannot supply another hit, and a losing model cannot
+            # borrow a stronger model's vote to qualify source diversity.
+            hits, fused, strongest, source_count = self.competitive_support(
+                track_id, frame_index, "bicycle", "motorcycle", competing_veto=None,
+            )
             base_hits, base_fused, _ = self.support(track_id, frame_index, "motorcycle")
             bike_hits_required = max(hits_required, int(bicycle_min_hits) if bicycle_min_hits is not None else hits_required)
             contrast_ok = base_hits == 0 or fused >= base_fused + max(0.0, float(bicycle_margin))
             strongest_ok = strongest >= max(0.0, float(bicycle_min_strongest))
-            source_count = self.source_count(track_id, frame_index, "bicycle")
             source_ok = source_count >= max(1, int(bicycle_min_sources))
             # Escape hatch for a genuinely clear bicycle seen repeatedly by one
             # refiner: source diversity is preferred, not an absolute blocker.

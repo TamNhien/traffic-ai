@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 import httpx2 as httpx
 import json
 import re
+import time
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
 from pydantic import BaseModel
 from sqlalchemy import func, select, text
@@ -12,7 +13,10 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.db.session import get_db
 from app.geometry import validate_counting_geometry
-from app.benchmarking import match_crossings
+from app.benchmarking import (
+    BENCHMARK_TRACE_EXPORT_MAX_BYTES, BenchmarkTraceTooLarge,
+    build_benchmark_export, match_crossings, read_benchmark_trace_chunks,
+)
 from app.models.all_models import AIModel, Camera, CameraStatus, CountingBenchmark, CountingSession, DatasetRecord, Direction, GroundTruthCrossing, SessionStatus, TrainingRun, VehicleCount, VehicleEvent, VehicleType
 from app.schemas.camera import CameraCreate, CameraRead, CameraUpdate
 from app.schemas.event import VehicleEventCreate, VehicleEventRead
@@ -1563,16 +1567,20 @@ def _attach_benchmark_trace_diagnosis(item: dict, diagnosis: dict) -> None:
     item["diagnosis"] = attached
 
 
-def _build_benchmark_report(benchmark_id: int, db: Session) -> dict:
+def _build_benchmark_report(
+    benchmark_id: int, db: Session, *,
+    source_marks: list[GroundTruthCrossing] | None = None,
+    source_events: list[VehicleEvent] | None = None,
+) -> dict:
     benchmark = db.get(CountingBenchmark, benchmark_id)
     if benchmark is None:
         raise HTTPException(status_code=404, detail="Benchmark not found")
-    marks = list(db.scalars(
+    marks = source_marks if source_marks is not None else list(db.scalars(
         select(GroundTruthCrossing)
         .where(GroundTruthCrossing.benchmark_id == benchmark_id)
         .order_by(GroundTruthCrossing.source_time_seconds, GroundTruthCrossing.id)
     ).all())
-    all_events = list(db.scalars(
+    all_events = source_events if source_events is not None else list(db.scalars(
         select(VehicleEvent)
         .where(VehicleEvent.session_id == benchmark.session_id)
         .order_by(VehicleEvent.id)
@@ -1637,6 +1645,109 @@ def _build_benchmark_report(benchmark_id: int, db: Session) -> dict:
 @router.get("/benchmarks/{benchmark_id}/report")
 def benchmark_report(benchmark_id: int, db: Session = Depends(get_db)) -> dict:
     return _build_benchmark_report(benchmark_id, db)
+
+
+def _benchmark_export_metadata(session: CountingSession | None, camera: Camera | None, model: AIModel | None, benchmark: dict) -> tuple[dict, dict]:
+    """Whitelist diagnostics fields; never serialize settings or an ORM object."""
+    session_fields = (
+        "id", "camera_id", "model_id", "started_at", "ended_at", "status",
+        "total_vehicles", "worker_total_vehicles", "dedup_suppressed_events",
+        "human_guard_rejections", "average_fps", "source_url", "source_fps",
+        "source_duration_seconds",
+    )
+    session_payload = {field: getattr(session, field, None) for field in session_fields} if session is not None else {"available": False}
+    camera_fields = ("id", "source_type", "confidence_threshold")
+    current_camera = {field: getattr(camera, field, None) for field in camera_fields} if camera is not None else None
+    if current_camera is not None:
+        current_camera["geometry"] = {
+            field: getattr(camera, field, None) for field in benchmark["geometry"]
+        }
+    config_payload = {
+        "benchmark_snapshot": {
+            "geometry": benchmark["geometry"],
+            "tolerance_seconds": benchmark["tolerance_seconds"],
+        },
+        "current_camera": current_camera,
+        "session_model": {
+            field: getattr(model, field, None) for field in ("id", "name", "version", "architecture")
+        } if model is not None else None,
+        "inference_settings": "Not stored historically; current environment settings are not substituted.",
+    }
+    return session_payload, config_payload
+
+
+def _fetch_benchmark_export_trace(session_id: int) -> tuple[bytes | None, str]:
+    """Optional trace failures leave a usable report ZIP with their status."""
+    try:
+        deadline = time.monotonic() + 20.0
+        with httpx.stream(
+            "GET", f"{settings.ai_service_url}/benchmark-traces/{int(session_id)}/download",
+            timeout=8.0, follow_redirects=False,
+        ) as response:
+            if response.status_code == 404:
+                return None, "not_found"
+            if not response.is_success:
+                return None, f"http_error_{response.status_code}"
+            try:
+                announced_bytes = int(response.headers.get("Content-Length", "0"))
+            except (TypeError, ValueError):
+                announced_bytes = 0
+            if announced_bytes > BENCHMARK_TRACE_EXPORT_MAX_BYTES:
+                return None, "too_large"
+
+            def chunks():
+                for chunk in response.iter_bytes(chunk_size=64 * 1024):
+                    if time.monotonic() > deadline:
+                        raise TimeoutError("Benchmark trace download timed out")
+                    yield chunk
+
+            trace = read_benchmark_trace_chunks(chunks(), max_bytes=BENCHMARK_TRACE_EXPORT_MAX_BYTES)
+            return (trace, "available") if trace else (None, "empty")
+    except BenchmarkTraceTooLarge:
+        return None, "too_large"
+    except (httpx.TimeoutException, TimeoutError):
+        return None, "timeout"
+    except Exception:
+        # Exception messages may contain a service URL, so they are not copied
+        # into a shareable archive. Database/report failures are not caught here.
+        return None, "service_unavailable"
+
+
+@router.get("/benchmarks/{benchmark_id}/export")
+def export_benchmark(benchmark_id: int, db: Session = Depends(get_db)) -> Response:
+    benchmark = db.get(CountingBenchmark, benchmark_id)
+    if benchmark is None:
+        raise HTTPException(status_code=404, detail="Benchmark not found")
+    marks = list(db.scalars(select(GroundTruthCrossing).where(
+        GroundTruthCrossing.benchmark_id == benchmark_id,
+    ).order_by(GroundTruthCrossing.source_time_seconds, GroundTruthCrossing.id)).all())
+    events = list(db.scalars(select(VehicleEvent).where(
+        VehicleEvent.session_id == benchmark.session_id,
+    ).order_by(VehicleEvent.id)).all())
+    report = _build_benchmark_report(benchmark_id, db, source_marks=marks, source_events=events)
+    session = db.get(CountingSession, benchmark.session_id)
+    camera = db.get(Camera, benchmark.camera_id)
+    model = db.get(AIModel, session.model_id) if session is not None and session.model_id is not None else None
+    session_payload, config_payload = _benchmark_export_metadata(session, camera, model, report["benchmark"])
+    event_fields = (
+        "id", "camera_id", "session_id", "model_id", "tracking_id", "vehicle_type",
+        "direction", "confidence", "detected_at", "source_frame_index",
+        "source_time_seconds", "crossing_method", "crossing_x", "crossing_y",
+    )
+    event_payloads = [{field: getattr(event, field, None) for field in event_fields} for event in events]
+    trace, trace_reason = _fetch_benchmark_export_trace(benchmark.session_id)
+    archive = build_benchmark_export(
+        report=report, marks=[_ground_truth_payload(mark) for mark in marks], events=event_payloads,
+        session=session_payload, config=config_payload, exported_at=datetime.now(timezone.utc),
+        trace=trace, trace_reason=trace_reason,
+    )
+    return Response(
+        archive, media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="traffic-ai-benchmark-{benchmark.id}-session-{benchmark.session_id}.zip"',
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 @router.post("/benchmarks/{benchmark_id}/reconcile")

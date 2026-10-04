@@ -19,25 +19,33 @@ def _vehicle_family(label: str) -> str:
 def motion_leading_anchor(rect: Rect, velocity: Point, inset_ratio: float = 0.0) -> Point:
     """Pick a motion-leading road-contact proxy inside the detection box.
 
-    Two-wheel traffic still uses the true leading edge by default. Large cars,
-    vans, buses and trucks can pass a non-zero ``inset_ratio`` so a clipped or
-    oversized detector box does not push the anchor outside the editable Road
-    Zone exactly while the vehicle crosses the gate. The inset is directional:
-    it moves the leading point toward the box interior without changing the
-    travel axis or the IN/OUT semantics.
+    V0.5.56 follows the heading continuously around an inset ellipse. A tiny
+    change between horizontal and vertical dominance must not move the anchor
+    from the top to the side of the box and invent a crossing. Cardinal motion
+    keeps the existing leading-edge points. Near the stationary cutoff, blend
+    from the bottom-center fallback to avoid a second discontinuity.
     """
     x1, y1, x2, y2 = rect
     vx, vy = velocity
     width = max(0.0, x2 - x1)
     height = max(0.0, y2 - y1)
     inset = max(0.0, min(0.45, float(inset_ratio)))
-    ix = width * inset
     iy = height * inset
-    if abs(vx) + abs(vy) < 0.75:
-        return ((x1 + x2) / 2.0, y2 - iy)
-    if abs(vx) > abs(vy):
-        return ((x2 - ix) if vx > 0 else (x1 + ix), (y1 + y2) / 2.0)
-    return ((x1 + x2) / 2.0, (y2 - iy) if vy > 0 else (y1 + iy))
+    cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+    fallback = (cx, y2 - iy)
+    speed = abs(vx) + abs(vy)
+    if speed <= 0.75:
+        return fallback
+    heading_length = hypot(vx, vy)
+    lead = (
+        cx + width * (0.5 - inset) * vx / heading_length,
+        cy + height * (0.5 - inset) * vy / heading_length,
+    )
+    heading_weight = min(1.0, (speed - 0.75) / 0.75)
+    return (
+        fallback[0] + heading_weight * (lead[0] - fallback[0]),
+        fallback[1] + heading_weight * (lead[1] - fallback[1]),
+    )
 
 
 @dataclass(slots=True)
