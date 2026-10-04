@@ -15,6 +15,44 @@ def test_benchmark_exact_match() -> None:
     assert result["counting_recall"] == 1.0
 
 
+def test_v0555_equal_timestamp_report_is_independent_of_input_order() -> None:
+    from itertools import permutations
+
+    gt = [item(1, 10.0, "in", "bicycle"), item(2, 10.0, "out", "truck")]
+    ai = [item(11, 10.0, "in", "bicycle"), item(12, 10.0, "out", "truck")]
+    reference = match_crossings(gt, ai, 0.10)
+    for gt_order in permutations(gt):
+        for ai_order in permutations(ai):
+            assert match_crossings(gt_order, ai_order, 0.10) == reference
+    assert reference["matched"] == 2
+    assert reference["direction_accuracy"] == 1.0
+    assert reference["class_accuracy"] == 1.0
+
+
+def test_v0555_equal_gt_time_retains_temporal_objective_and_id_ties() -> None:
+    gt = [item(2, 10.0, "out", "bicycle"), item(1, 10.0, "in", "motorcycle")]
+    ai = [item(12, 10.04, "in", "motorcycle"), item(11, 9.96, "out", "bicycle")]
+    result = match_crossings(gt, ai, 0.10)
+    assert result["matched"] == 2
+    assert [(pair["ground_truth_id"], pair["ai_event_id"]) for pair in result["matched_items"]] == [(1, 11), (2, 12)]
+    # Neither class nor direction is used to repair the equal-time pairing.
+    assert result["direction_accuracy"] == 0.0
+    assert result["class_accuracy"] == 0.0
+    assert sum(abs(pair["delta_seconds"]) for pair in result["matched_items"]) == 0.08
+
+
+def test_v0555_equal_ai_time_false_positive_attribution_is_stable() -> None:
+    gt = [item(1, 10.0, "in", "bicycle")]
+    ai = [item(11, 10.0, "in", "bicycle"), item(12, 10.0, "out", "motorcycle")]
+    first = match_crossings(gt, ai, 0.10)
+    second = match_crossings(gt, reversed(ai), 0.10)
+    assert first == second
+    assert first["matched_items"][0]["ai_event_id"] == 12
+    assert first["class_accuracy"] == 0.0
+    assert first["direction_accuracy"] == 0.0
+    assert first["false_positive_items"][0]["ai_event_id"] == 11
+
+
 def test_benchmark_reports_missed_and_false_positive() -> None:
     gt = [item(1, 1.0), item(2, 5.0, "out", "truck")]
     ai = [item(11, 1.02), item(12, 8.0, "out", "truck")]

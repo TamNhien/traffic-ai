@@ -635,7 +635,7 @@ class PipelineWorker(threading.Thread):
         certainty: float,
         hits: int,
     ) -> tuple[str, float] | None:
-        truck_hits, truck_fused, _strongest = self._refine_consensus.support(
+        truck_hits, truck_fused, _strongest = self._refine_consensus.four_wheel_support(
             track_id, frame_index, "truck"
         )
         locked = self._truck_semantic_lock.observe(
@@ -792,6 +792,54 @@ class PipelineWorker(threading.Thread):
             self.state.truck_class_rescues += 1
         return str(resolved_label), float(resolved_conf)
 
+    def _resolve_crossing_class_refinement(
+        self, track_id: int, frame_index: int, current_label: str, stable_label: str,
+        certainty: float, hits: int, base_display_label: str, refined: tuple[str, float] | None,
+    ) -> tuple[str, float]:
+        # A fallback correction is an existing observation. Reading it at a
+        # crossing must not reset its source clock or count another rescue.
+        event_label, confidence = self._class_policy.final_label(
+            current_label, stable_label, certainty, hits, refined,
+        )
+        if refined is None:
+            remembered = self._class_override_for(track_id, frame_index, base_display_label)
+        else:
+            remembered = self._remember_class_refinement(
+                track_id, frame_index, current_label, stable_label, certainty,
+                hits, base_display_label, refined,
+            )
+        if remembered is not None:
+            event_label = remembered[0]
+            confidence = max(confidence, remembered[1])
+        return event_label, confidence
+
+    def _run_deferred_class_refinements(
+        self, candidates: list[dict], frame_index: int, frame, device, use_half: bool,
+        refines_used: int, crossing_track_ids: set[int],
+    ) -> int:
+        used = max(0, int(refines_used))
+        prioritized = sorted(candidates, key=lambda item: (
+            float(item["distance"]), float(item["confidence"]), int(item["track_id"]),
+        ))
+        for candidate in prioritized:
+            if used >= self.refine_max_per_frame:
+                break
+            tid = int(candidate["track_id"])
+            if tid in crossing_track_ids:
+                continue
+            refined, did_infer = self._observe_class_refiner(
+                tid, frame_index, frame, candidate["rect"], candidate["display_label"],
+                device, use_half, force=False,
+            )
+            if did_infer:
+                used += 1
+            if refined is not None:
+                self._remember_class_refinement(
+                    tid, frame_index, candidate["current_label"], candidate["stable_label"],
+                    candidate["certainty"], candidate["hits"], candidate["base_display_label"], refined,
+                )
+        return used
+
     def _prefer_refinement_candidate(
         self, target_label: str, candidates: list[tuple[str, float]]
     ) -> tuple[str, float] | None:
@@ -801,29 +849,42 @@ class PipelineWorker(threading.Thread):
         target = str(target_label)
         family = vehicle_family(target)
 
-        # Prefer a credible minority-class correction over a very confident
-        # repeat of the recall-detector class. This lets YOLO26m disagree with
-        # best.pt on a bicycle/truck without the common motorcycle/car class
-        # automatically winning only because it has the larger confidence.
+        # Preserve the existing high-confidence bicycle correction policy.
+        # Four-wheel competition below uses the actual strongest target opinion
+        # before a truck/bus correction can pass its existing threshold.
         if family == "two-wheel" and target != "bicycle":
             bicycles = [item for item in valid if item[0] == "bicycle"]
             if bicycles:
                 candidate = max(bicycles, key=lambda item: item[1])
                 if candidate[1] >= self._class_policy.bicycle_refine_override_conf:
                     return candidate
+        if family == "four-wheel":
+            # A truck/bus correction must win the independent opinions for
+            # this target. A minority label alone cannot overrule a stronger
+            # car (or a tied other heavy class) on the same observation.
+            valid = [item for item in valid if vehicle_family(item[0]) == family]
+            if not valid:
+                return None
         if family == "four-wheel" and target != "truck":
             trucks = [item for item in valid if item[0] == "truck"]
             if trucks:
                 candidate = max(trucks, key=lambda item: item[1])
-                if candidate[1] >= self._class_policy.truck_refine_override_conf:
+                competing = max((conf for label, conf in valid if label != "truck"), default=0.0)
+                if candidate[1] >= self._class_policy.truck_refine_override_conf and candidate[1] > competing:
                     return candidate
         if family == "four-wheel" and target != "bus":
             buses = [item for item in valid if item[0] == "bus"]
             if buses:
                 candidate = max(buses, key=lambda item: item[1])
-                if candidate[1] >= self._class_policy.heavy_refine_override_conf:
+                competing = max((conf for label, conf in valid if label != "bus"), default=0.0)
+                if candidate[1] >= self._class_policy.heavy_refine_override_conf and candidate[1] > competing:
                     return candidate
-        return max(valid, key=lambda item: item[1])
+        best = max(valid, key=lambda item: (item[1], item[0] == target))
+        if family == "four-wheel" and best[0] != target and any(
+            label != best[0] and confidence == best[1] for label, confidence in valid
+        ):
+            return None
+        return best
 
     def _observe_class_refiner(
         self,
@@ -846,6 +907,17 @@ class PipelineWorker(threading.Thread):
         Repeated low-confidence bicycle/truck evidence can then reach consensus
         across distinct source frames instead of requiring one lucky frame.
         """
+        from math import isfinite
+
+        def usable_observation(observation) -> bool:
+            return (
+                observation is not None
+                and str(observation[0]) in VEHICLE_CLASSES
+                and vehicle_family(observation[0]) == vehicle_family(target_label)
+                and isfinite(float(observation[1]))
+                and float(observation[1]) > 0.0
+            )
+
         tid = int(track_id)
         frame_idx = int(frame_index)
         cached = self._class_refine_last_observation.get(tid)
@@ -873,7 +945,7 @@ class PipelineWorker(threading.Thread):
                 frame, rect, device, use_half, self._refine_ids,
                 target_label=target_label, model=self._refiner_model,
             )
-            if domain is not None:
+            if usable_observation(domain):
                 observations.append(domain)
                 self._refine_consensus.update(tid, frame_idx, domain[0], domain[1], "domain")
 
@@ -884,9 +956,16 @@ class PipelineWorker(threading.Thread):
                 frame, rect, device, use_half, self._general_refine_ids,
                 target_label=target_label, model=self._general_refiner_model,
             )
-            if general is not None:
+            if usable_observation(general):
                 observations.append(general)
                 self._refine_consensus.update(tid, frame_idx, general[0], general[1], "general")
+
+        if not observations:
+            # An attempted inference costs a slot, but no target opinion is
+            # not a new semantic observation. Reading old consensus here would
+            # relabel a cache hit as fresh and restart its override lifetime.
+            self._class_refine_last_observation[tid] = (frame_idx, None)
+            return None, did_infer
 
         consensus = self._refine_consensus.minority_consensus(
             tid,
@@ -1214,6 +1293,8 @@ class PipelineWorker(threading.Thread):
                 refines_used_this_frame = 0
                 bicycle_context_used_this_frame = 0
                 bicycle_xframe_scan_candidates = []
+                periodic_class_refine_candidates = []
+                crossing_class_refine_track_ids: set[int] = set()
                 gate_trace_tracks = []
                 self._bicycle_xframe_audit_this_frame = []
                 active_track_ids_this_frame: set[int] = set()
@@ -1302,13 +1383,9 @@ class PipelineWorker(threading.Thread):
                         if cached_class is not None:
                             display_label = cached_class[0]
 
-                        # V0.5.26 Target-aware Class Refiner 3.0. Heavy vehicles
-                        # are rare enough to verify periodically even before they
-                        # reach the gate, so the small delivery truck is shown as
-                        # TRUCK instead of a permanent COCO `car`. Two-wheel
-                        # tracks are refined only near the line to preserve FPS;
-                        # this is where a bicycle/motorcycle mistake affects the
-                        # persisted benchmark class.
+                        # Collect periodic class work without spending the bounded
+                        # inference budget before a later track's real crossing.
+                        # Geometry still runs in the original track order.
                         line_a, line_b = counter.line.denormalize(width, height)
                         gate_distance_ratio = self._finite_gate_distance_ratio(anchor, line_a, line_b, width, height)
                         track_on_road = (
@@ -1324,23 +1401,14 @@ class PipelineWorker(threading.Thread):
                             family == "four-wheel"
                             or (family == "two-wheel" and gate_distance_ratio <= self.class_refine_gate_distance_ratio)
                         )
-                        if (
-                            self.refine_at_crossing
-                            and pre_refine_candidate
-                            and lag_allows_class_refine
-                            and refines_used_this_frame < self.refine_max_per_frame
-                        ):
-                            class_refined, did_refine = self._observe_class_refiner(
-                                track_id, frame_index, analysis_frame, rect, display_label, device, use_half, force=False
-                            )
-                            if did_refine:
-                                refines_used_this_frame += 1
-                            remembered = self._remember_class_refinement(
-                                track_id, frame_index, current_label, stable_label, class_certainty,
-                                class_hits, base_display_label, class_refined,
-                            )
-                            if remembered is not None:
-                                display_label = remembered[0]
+                        if self.refine_at_crossing and pre_refine_candidate and lag_allows_class_refine:
+                            periodic_class_refine_candidates.append({
+                                "distance": gate_distance_ratio, "confidence": confidence_f,
+                                "track_id": int(track_id), "rect": rect,
+                                "current_label": current_label, "stable_label": stable_label,
+                                "certainty": class_certainty, "hits": class_hits,
+                                "base_display_label": base_display_label, "display_label": display_label,
+                            })
 
                         # V0.5.27 exposes detection-vs-count truth explicitly.
                         # Seeing a truck is not the same thing as counting one:
@@ -1535,17 +1603,17 @@ class PipelineWorker(threading.Thread):
                         )
 
                         if direction:
+                            crossing_class_refine_track_ids.add(int(track_id))
                             crossing_this_frame = True
                             refined = None
                             lag_allows_refine = (
                                 self.payload.source_type != "video"
                                 or self.state.playback_lag_seconds <= self.refine_max_lag
                             )
-                            # Reuse a same-frame pre-gate refinement first. If none
-                            # exists, every supported vehicle class (including a
-                            # high-certainty CAR) is eligible for target-aware
-                            # crossing refinement. This is what lets best.pt rescue
-                            # a small truck that the recall detector calls `car`.
+                            # Every supported class may spend a crossing slot.
+                            # Periodic candidates run only after all tracks have
+                            # made their geometry decisions, so ordinary road
+                            # traffic cannot starve a later crossing this frame.
                             cached_refine = self._class_refine_last_observation.get(int(track_id))
                             if cached_refine is not None and cached_refine[0] == int(frame_index):
                                 refined = cached_refine[1]
@@ -1562,30 +1630,10 @@ class PipelineWorker(threading.Thread):
                                 if did_refine:
                                     refines_used_this_frame += 1
 
-                            if refined is None:
-                                # A recent pre-gate class correction is still
-                                # valid if the crossing frame cannot spend another
-                                # refine slot. Treat it as cached semantic evidence.
-                                cached_override = self._class_override_for(
-                                    track_id, frame_index, base_display_label
-                                )
-                                if cached_override is not None:
-                                    refined = cached_override
-
-                            event_label, policy_conf = self._class_policy.final_label(
-                                current_label,
-                                stable_label,
-                                class_certainty,
-                                class_hits,
-                                refined,
-                            )
-                            remembered = self._remember_class_refinement(
+                            event_label, policy_conf = self._resolve_crossing_class_refinement(
                                 track_id, frame_index, current_label, stable_label, class_certainty,
                                 class_hits, base_display_label, refined,
                             )
-                            if remembered is not None:
-                                event_label = remembered[0]
-                                policy_conf = max(policy_conf, remembered[1])
 
                             # V0.5.34 crossing-only bicycle context rescue.  The
                             # strict V0.5.33 policy remains the default; only a
@@ -1771,6 +1819,14 @@ class PipelineWorker(threading.Thread):
                     ))
                     crossing_this_frame = True
                 previous_active_track_ids = set(active_track_ids_this_frame)
+
+                # Crossing decisions own the same bounded class-refine budget
+                # first. Rank remaining periodic work by the finite segment so
+                # iterator order cannot favor distant ordinary traffic.
+                refines_used_this_frame = self._run_deferred_class_refinements(
+                    periodic_class_refine_candidates, frame_index, analysis_frame, device, use_half,
+                    refines_used_this_frame, crossing_class_refine_track_ids,
+                )
 
                 # V0.5.43 Cross-Frame Bicycle Finalization: rank weak motorcycle
                 # candidates by finite-gate proximity first, then confidence.  The

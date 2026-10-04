@@ -521,3 +521,295 @@ def test_v0554_veto_context_audit_keeps_the_contradictory_source_frame() -> None
     assert record["observations"][0] == {
         "frame_index": 100, "source": "domain", "bicycle": .19, "motorcycle": .70,
     }
+
+
+def _class_worker() -> PipelineWorker:
+    from app.classification import TruckSemanticLock, VehicleClassPolicy
+
+    worker = _worker()
+    worker._class_policy = VehicleClassPolicy()
+    worker._truck_semantic_lock = TruckSemanticLock()
+    worker._truck_tracks_seen = set()
+    worker._truck_class_rescue_tracks = set()
+    worker._bicycle_class_rescue_tracks = set()
+    worker._class_consensus_rescue_tracks = set()
+    worker._class_refine_last_observation = {}
+    worker._class_refine_last_check = {}
+    worker.class_override_ttl_frames = 180
+    worker.bicycle_override_ttl_frames = 60
+    worker.heavy_override_ttl_frames = 240
+    worker.refine_max_per_frame = 1
+    worker.refine_at_crossing = True
+    worker.refine_max_lag = .35
+    worker.class_refine_gate_distance_ratio = .11
+    worker.class_refine_interval = 10
+    worker.class_refine_heavy_interval = 45
+    worker.refine_consensus_min_hits = 2
+    worker.bicycle_consensus_conf = .78
+    worker.truck_consensus_conf = .52
+    worker.bicycle_consensus_min_hits = 3
+    worker.bicycle_consensus_margin = .18
+    worker.bicycle_consensus_min_strong = .36
+    worker.bicycle_consensus_min_sources = 2
+    worker.bicycle_consensus_single_source_strong = .82
+    worker.payload = SimpleNamespace(source_type="video")
+    worker.state.playback_lag_seconds = 0.0
+    for name in (
+        "class_refine_checks", "domain_refine_checks", "general_refine_checks",
+        "class_consensus_rescues", "truck_class_rescues", "bicycle_class_rescues",
+        "truck_tracks_seen", "truck_semantic_locks",
+    ):
+        setattr(worker.state, name, 0)
+    return worker
+
+
+def _execute_frame_class_work(worker, tracks, *, initial_used=0):
+    """Execute the real production loop's class-work statements in track order.
+
+    Only camera transport/inference is supplied by the fixture. This deliberately
+    runs the production frame sections instead of reimplementing their budget
+    algorithm; the V0.5.54 sections spend the first slot before a later crossing.
+    """
+    import ast
+    from pathlib import Path
+    import app.worker as worker_module
+
+    source_path = Path(worker_module.__file__)
+    tree = ast.parse(source_path.read_text(encoding="utf-8"))
+    cls = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "PipelineWorker")
+    run = next(node for node in cls.body if isinstance(node, ast.FunctionDef) and node.name == "run")
+    track_loop = next(
+        node for node in ast.walk(run) if isinstance(node, ast.For)
+        and isinstance(node.target, ast.Name) and node.target.id == "item_index"
+    )
+
+    def assigned_names(node):
+        return {
+            item.id for target in getattr(node, "targets", ()) for item in ast.walk(target)
+            if isinstance(item, ast.Name)
+        }
+
+    start = next(index for index, node in enumerate(track_loop.body) if "line_a" in assigned_names(node))
+    end = next(index for index, node in enumerate(track_loop.body) if "locked_truck" in assigned_names(node))
+    crossing = next(
+        node for node in track_loop.body if isinstance(node, ast.If)
+        and isinstance(node.test, ast.Name) and node.test.id == "direction"
+    )
+    stop = next(index for index, node in enumerate(crossing.body) if "context_trace" in assigned_names(node))
+    deferred = next((
+        node for node in ast.walk(run) if isinstance(node, ast.Assign)
+        and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Attribute)
+        and node.value.func.attr == "_run_deferred_class_refinements"
+    ), None)
+
+    def compile_nodes(nodes):
+        return compile(ast.fix_missing_locations(ast.Module(body=nodes, type_ignores=[])), str(source_path), "exec")
+
+    collect_code = compile_nodes(track_loop.body[start:end])
+    crossing_code = compile_nodes(crossing.body[:stop])
+    env = {
+        "self": worker, "frame_index": 100, "width": 1000, "height": 1000,
+        "analysis_frame": object(), "device": "cpu", "use_half": False,
+        "counter": SimpleNamespace(road_zone=None, line=SimpleNamespace(denormalize=lambda *_: ((100, 500), (900, 500)))),
+        "vehicle_family": __import__("app.classification", fromlist=["vehicle_family"]).vehicle_family,
+        "AMBIGUOUS_CLASSES": {"bicycle", "motorcycle", "car", "bus", "truck"},
+        "refines_used_this_frame": initial_used, "periodic_class_refine_candidates": [],
+        "crossing_class_refine_track_ids": set(),
+    }
+    for tid, anchor, crossing_direction in tracks:
+        env.update({
+            "track_id": tid, "anchor": anchor, "rect": (anchor[0] - 10, anchor[1] - 10, anchor[0] + 10, anchor[1] + 10),
+            "current_label": "motorcycle", "stable_label": "motorcycle", "display_label": "motorcycle",
+            "base_display_label": "motorcycle", "class_certainty": .95, "class_hits": 10,
+            "confidence_f": .30, "direction": crossing_direction,
+        })
+        exec(collect_code, env)
+        if crossing_direction:
+            exec(crossing_code, env)
+    if deferred is not None:
+        exec(compile_nodes([deferred]), env)
+    return env
+
+
+def test_v0555_ordinary_track_before_crossing_cannot_spend_crossing_budget() -> None:
+    worker = _class_worker()
+    calls = []
+    worker._observe_class_refiner = lambda track, *_args, **kwargs: (
+        calls.append((track, kwargs["force"])) or (("motorcycle", .8), True)
+    )
+
+    env = _execute_frame_class_work(worker, [(1, (500, 550), None), (2, (500, 510), "IN")])
+
+    assert calls == [(2, True)]
+    assert env["refines_used_this_frame"] == 1
+
+
+def test_v0555_periodic_queue_ranks_finite_gate_proximity_after_crossings() -> None:
+    worker = _class_worker()
+    calls = []
+    worker._observe_class_refiner = lambda track, *_args, **kwargs: (
+        calls.append((track, kwargs["force"])) or (("motorcycle", .8), True)
+    )
+
+    env = _execute_frame_class_work(worker, [(1, (500, 590), None), (2, (500, 510), None)])
+
+    assert calls == [(2, False)]
+    assert env["refines_used_this_frame"] == 1
+
+
+def test_v0555_multiple_crossings_preserve_existing_total_refiner_budget() -> None:
+    worker = _class_worker()
+    calls = []
+    worker._observe_class_refiner = lambda track, *_args, **kwargs: (
+        calls.append((track, kwargs["force"])) or (("motorcycle", .8), True)
+    )
+
+    env = _execute_frame_class_work(worker, [(1, (500, 510), "IN"), (2, (500, 515), "OUT")])
+
+    assert calls == [(1, True)]
+    assert env["refines_used_this_frame"] == 1
+
+
+def test_v0555_disabled_class_refinement_performs_no_periodic_or_crossing_inference() -> None:
+    worker = _class_worker()
+    worker.refine_at_crossing = False
+    calls = []
+    worker._observe_class_refiner = lambda *_args, **_kwargs: calls.append(1) or (None, True)
+
+    env = _execute_frame_class_work(worker, [(1, (500, 550), None), (2, (500, 510), "IN")])
+
+    assert calls == []
+    assert env["refines_used_this_frame"] == 0
+
+
+def test_v0555_cache_fallback_crossing_keeps_original_override_expiry() -> None:
+    worker = _class_worker()
+    worker._class_refine_overrides[7] = ("bicycle", .95, 50)
+
+    env = _execute_frame_class_work(worker, [(7, (500, 510), "IN")], initial_used=1)
+
+    assert env["event_label"] == "bicycle"
+    assert worker._class_refine_overrides[7] == ("bicycle", .95, 50)
+    assert worker._class_override_for(7, 111, "motorcycle") is None
+    assert worker.state.bicycle_class_rescues == 0
+
+
+def test_v0555_fresh_crossing_refiner_can_establish_new_override_clock() -> None:
+    worker = _class_worker()
+    worker._class_refine_overrides[7] = ("bicycle", .91, 50)
+    worker._observe_class_refiner = lambda *_args, **_kwargs: (("bicycle", .96), True)
+
+    env = _execute_frame_class_work(worker, [(7, (500, 510), "IN")])
+
+    assert env["event_label"] == "bicycle"
+    assert worker._class_refine_overrides[7] == ("bicycle", .96, 100)
+    assert worker._class_override_for(7, 111, "motorcycle") == ("bicycle", .96)
+
+
+def test_v0555_stronger_car_refiner_blocks_single_frame_truck_preference() -> None:
+    worker = _class_worker()
+    assert worker._prefer_refinement_candidate("car", [("truck", .60), ("car", .90)]) == ("car", .90)
+    assert worker._prefer_refinement_candidate("car", [("bus", .60), ("car", .90)]) == ("car", .90)
+
+
+def test_v0555_tied_four_wheel_opinions_cannot_force_minority_preference() -> None:
+    worker = _class_worker()
+    assert worker._prefer_refinement_candidate("car", [("car", .60), ("truck", .60)]) == ("car", .60)
+    assert worker._prefer_refinement_candidate("car", [("truck", .60), ("car", .60)]) == ("car", .60)
+    assert worker._prefer_refinement_candidate("car", [("truck", .60), ("bus", .60)]) is None
+
+
+def test_v0555_winning_truck_refiner_keeps_existing_promotion_threshold() -> None:
+    worker = _class_worker()
+    assert worker._prefer_refinement_candidate("car", [("car", .40), ("truck", .48)]) == ("truck", .48)
+
+
+def test_v0555_losing_truck_frames_cannot_create_worker_semantic_lock() -> None:
+    worker = _class_worker()
+    for frame in (90, 95):
+        worker._refine_consensus.update(7, frame, "truck", .60, "domain")
+        worker._refine_consensus.update(7, frame, "car", .90, "general")
+
+    assert worker._refresh_truck_semantic_lock(7, 100, "car", .95, 10) is None
+    assert worker._truck_semantic_lock.resolve(7, 100, "car") is None
+    assert worker._truck_tracks_seen == set()
+
+
+def test_v0555_winning_truck_frames_can_create_worker_semantic_lock() -> None:
+    worker = _class_worker()
+    for frame in (90, 95):
+        worker._refine_consensus.update(7, frame, "truck", .60, "domain")
+        worker._refine_consensus.update(7, frame, "car", .20, "general")
+
+    lock = worker._refresh_truck_semantic_lock(7, 100, "car", .95, 10)
+    assert lock is not None and lock[0] == "truck"
+    assert worker._truck_tracks_seen == {7}
+
+
+def _seed_weak_truck_consensus(worker):
+    worker._refine_consensus.update(7, 90, "truck", .31, "domain")
+    worker._refine_consensus.update(7, 95, "truck", .35, "general")
+    worker._class_refine_overrides[7] = ("truck", .55, 50)
+
+
+def test_v0555_no_opinion_refiner_cannot_restart_old_consensus_override_lifetime() -> None:
+    worker = _class_worker()
+    _seed_weak_truck_consensus(worker)
+    calls = []
+    worker._refine_crossing_label = lambda *_args, **_kwargs: calls.append(1) or None
+
+    refined, inferred = worker._observe_class_refiner(
+        7, 100, object(), object(), "car", "cpu", False, force=True,
+    )
+    remembered = worker._remember_class_refinement(
+        7, 100, "car", "car", .95, 10, "car", refined,
+    )
+
+    assert inferred is True and len(calls) == 2
+    assert remembered == ("truck", .55)
+    assert worker._class_refine_overrides[7] == ("truck", .55, 50)
+    assert refined is None
+    assert worker._class_refine_last_observation[7] == (100, None)
+    assert worker.state.class_consensus_rescues == 0
+    assert worker.state.class_refine_checks == 1
+    assert worker._class_override_for(7, 291, "car") is None
+    # A same-frame retry reuses the no-opinion result without a new budget cost.
+    assert worker._observe_class_refiner(7, 100, object(), object(), "car", "cpu", False, force=True) == (None, False)
+    assert len(calls) == 2
+
+
+def test_v0555_nonfinite_zero_or_wrong_family_refiner_opinions_are_not_fresh_evidence() -> None:
+    for opinion in (("truck", 0.0), ("truck", float("nan")), ("truck", float("inf")), ("bicycle", .95)):
+        worker = _class_worker()
+        _seed_weak_truck_consensus(worker)
+        worker._refine_crossing_label = lambda *_args, **_kwargs: opinion
+
+        refined, inferred = worker._observe_class_refiner(
+            7, 100, object(), object(), "car", "cpu", False, force=True,
+        )
+
+        assert (refined, inferred) == (None, True)
+        assert worker._class_refine_last_observation[7] == (100, None)
+        assert worker.state.class_consensus_rescues == 0
+        assert worker._refine_consensus.support(7, 100, "bicycle") == (0, 0.0, 0.0)
+
+
+def test_v0555_fresh_target_opinion_can_complete_existing_weak_truck_consensus() -> None:
+    worker = _class_worker()
+    _seed_weak_truck_consensus(worker)
+    worker._refine_crossing_label = lambda *_args, **kwargs: (
+        ("truck", .12) if kwargs["model"] is worker._refiner_model else None
+    )
+
+    refined, inferred = worker._observe_class_refiner(
+        7, 100, object(), object(), "car", "cpu", False, force=True,
+    )
+    remembered = worker._remember_class_refinement(
+        7, 100, "car", "car", .95, 10, "car", refined,
+    )
+
+    assert inferred is True and refined is not None and refined[0] == "truck"
+    assert remembered is not None and remembered[0] == "truck"
+    assert worker._class_refine_overrides[7][2] == 100
+    assert worker.state.class_consensus_rescues == 1
+    assert worker._class_override_for(7, 291, "car") is not None

@@ -315,6 +315,24 @@ def observed_road_path_ok(
     )
 
 
+def observed_path_length(
+    history: list[_GateSample], start: _GateSample, end: _GateSample,
+) -> float:
+    """Measure the trajectory used by the crossing, including neutral samples.
+
+    A short endpoint chord can hide a large lateral excursion. Motion and jump
+    guards must measure the same observed window as finite-gate/road checks.
+    With just two observations this is exactly the existing chord length.
+    """
+    window = [start] + [
+        item for item in history if start.frame_index < item.frame_index < end.frame_index
+    ] + [end]
+    return sum(
+        hypot(right.point[0] - left.point[0], right.point[1] - left.point[1])
+        for left, right in zip(window, window[1:])
+    )
+
+
 @dataclass(slots=True)
 class _TrackGateState:
     history: deque[_GateSample] = field(default_factory=lambda: deque(maxlen=48))
@@ -355,6 +373,8 @@ class _AnchorSpanPending:
     crossing: Point
     crossing_frame: float
     destination_side: int
+    frame_width: int
+    frame_height: int
     confirmations: int = 1
     opposite_observations: int = 0
     road_edge_rescue: bool = False
@@ -362,6 +382,7 @@ class _AnchorSpanPending:
     side_depth_ratio: float = 0.0
     same_direction_candidate: bool = False
     approach_span: bool = False
+    reviewed_through_frame: int = -10_000
 
 
 @dataclass(slots=True)
@@ -479,6 +500,57 @@ class VerifiedAnchorSpanRescuer:
             self.same_direction_overrides = max(0, self.same_direction_overrides + delta)
         if pending.approach_span:
             self.approach_span_rescues = max(0, self.approach_span_rescues + delta)
+
+    def _review_pending_history(self, state: _AnchorSpanState) -> str:
+        """Replay post-span observations after aliases merge their histories.
+
+        The latest step alone cannot validate an earlier jump, road departure or
+        sustained opposite return inserted by alias fusion. Rebuild confirmation
+        from unique source frames; a cancelled lifecycle cannot revive because a
+        later destination observation happens to be local.
+        """
+        pending = state.pending
+        if pending is None:
+            return "valid"
+        previous = pending.end
+        confirmations = 1
+        opposite = 0
+        for sample in state.history:
+            if sample.frame_index <= pending.end.frame_index:
+                continue
+            jump = hypot(
+                sample.point[0] - previous.point[0], sample.point[1] - previous.point[1],
+            ) / max(hypot(pending.frame_width, pending.frame_height), 1.0)
+            road_ok = self.road_zone is None or self.road_zone.contains_with_margin(
+                sample.point, pending.frame_width, pending.frame_height, self.road_margin_ratio,
+            )
+            if jump > self.max_jump_ratio or not road_ok:
+                self.rejected_validation += 1
+                state.pending = None
+                # A fresh span may start at this observation, but it cannot
+                # replay the original span or the rejected incoming jump.
+                state.history = deque([
+                    item for item in state.history if item.frame_index >= sample.frame_index
+                ], maxlen=64)
+                return "invalid"
+            if sample.side == -pending.destination_side:
+                opposite += 1
+                if opposite >= self.post_confirm_opposite_samples:
+                    state.pending = None
+                    state.history = deque([
+                        item for item in state.history if item.frame_index >= sample.frame_index
+                    ], maxlen=64)
+                    return "opposite"
+                if sample.frame_index > pending.reviewed_through_frame:
+                    self.post_confirm_jitter_holds += 1
+            elif sample.side == pending.destination_side:
+                opposite = 0
+                confirmations += 1
+            previous = sample
+        pending.confirmations = confirmations
+        pending.opposite_observations = opposite
+        pending.reviewed_through_frame = max(pending.reviewed_through_frame, previous.frame_index)
+        return "valid"
 
     def _road_ok(
         self, start: _GateSample, end: _GateSample, crossing: Point, width: int, height: int,
@@ -603,27 +675,11 @@ class VerifiedAnchorSpanRescuer:
         self._span_proposals.pop(tid, None)
         self._override_qualified.discard(tid)
         self._immediate_candidates.discard(tid)
-        last_sample = state.history[-1] if state.history else None
         state.history.append(sample)
 
         pending = state.pending
         if pending is not None:
             age = sample.frame_index - pending.end.frame_index
-            post_jump = (
-                hypot(anchor[0] - last_sample.point[0], anchor[1] - last_sample.point[1])
-                / max(hypot(width, height), 1.0)
-            ) if last_sample is not None else 0.0
-            post_road_ok = self.road_zone is None or self.road_zone.contains_with_margin(
-                anchor, width, height, self.road_margin_ratio
-            )
-            if age <= self.post_confirm_max_gap_frames and (post_jump > self.max_jump_ratio or not post_road_ok):
-                # Every observation in the pending lifecycle must belong to the
-                # same bounded road trajectory; a neutral box jump cannot hide
-                # an alias switch before the final confirming sample.
-                self.rejected_validation += 1
-                state.pending = None
-                state.history = deque([sample], maxlen=64)
-                return None
             if age > self.post_confirm_max_gap_frames:
                 state.pending = None
                 # Expiry closes the original geometry window. Retaining its
@@ -632,23 +688,18 @@ class VerifiedAnchorSpanRescuer:
                 state.history = deque([
                     item for item in state.history if item.frame_index > pending.end.frame_index
                 ], maxlen=64)
+            elif self._review_pending_history(state) != "valid":
+                return None
             elif side == -pending.destination_side:
                 # V0.5.43 Post-Confirm Closure 8.6: one opposite-side sample can
                 # be box jitter immediately after a proven span.  Require a
                 # second distinct opposite observation before cancelling.  While
                 # this pending lifecycle is active, do not let the same jitter
                 # sample open a reverse crossing candidate in the code below.
-                pending.opposite_observations += 1
-                if pending.opposite_observations >= self.post_confirm_opposite_samples:
-                    state.pending = None
-                else:
-                    self.post_confirm_jitter_holds += 1
                 return None
             elif side == pending.destination_side:
-                pending.opposite_observations = 0
                 # Count only distinct later observations. A near-line sample is
                 # enough here because the original span already proved geometry.
-                pending.confirmations += 1
                 if pending.confirmations >= self.post_confirm_samples:
                     if pending.direction not in state.counted_directions or pending.same_direction_candidate:
                         if not commit:
@@ -699,9 +750,7 @@ class VerifiedAnchorSpanRescuer:
         if observed_crossing is None:
             return None
         crossing_start, crossing_end, crossing = observed_crossing
-        dx = sample.point[0] - previous.point[0]
-        dy = sample.point[1] - previous.point[1]
-        move_len = max(hypot(dx, dy), 1e-6)
+        move_len = max(observed_path_length(list(state.history), previous, sample), 1e-6)
         normal_ratio = abs(sample.distance - previous.distance) / move_len
         jump_ratio = move_len / max(hypot(width, height), 1.0)
         side_depth_ratio = min(abs(sample.distance), abs(previous.distance)) / scale
@@ -752,6 +801,7 @@ class VerifiedAnchorSpanRescuer:
             state.pending = _AnchorSpanPending(
                 start=previous, end=sample, direction=direction, crossing=crossing,
                 crossing_frame=crossing_frame, destination_side=side, confirmations=1,
+                frame_width=width, frame_height=height,
                 road_edge_rescue=road_edge_rescue, normal_ratio=normal_ratio,
                 side_depth_ratio=side_depth_ratio, same_direction_candidate=False,
             )
@@ -771,6 +821,7 @@ class VerifiedAnchorSpanRescuer:
         state.pending = _AnchorSpanPending(
             start=previous, end=sample, direction=direction, crossing=crossing,
             crossing_frame=crossing_frame, destination_side=side, confirmations=1,
+            frame_width=width, frame_height=height,
             road_edge_rescue=road_edge_rescue,
             normal_ratio=normal_ratio,
             side_depth_ratio=side_depth_ratio,
@@ -797,6 +848,8 @@ class VerifiedAnchorSpanRescuer:
             return None
         age = int(frame_index) - pending.end.frame_index
         if age < 1 or age > self.post_confirm_max_gap_frames:
+            return None
+        if self._review_pending_history(state) != "valid":
             return None
         if pending.approach_span:
             # A measured approach can repair an oblique last box pair only with
@@ -975,6 +1028,7 @@ class VerifiedAnchorSpanRescuer:
                 if item is not None and item.end.frame_index > dst.last_count_frame
             ]
             dst.pending = max(valid_pending, key=lambda item: item.end.frame_index, default=None)
+            self._review_pending_history(dst)
         # Qualification describes a particular candidate transaction; aliases
         # cannot inherit an already-issued override after their state is merged.
         self._override_qualified.discard(source)
@@ -1215,9 +1269,7 @@ class HeavyVehicleCrossingRescuer(_CenterPassageRescuer):
             return None
         crossing_start, crossing_end, crossing = observed_crossing
 
-        dx = center[0] - previous.point[0]
-        dy = center[1] - previous.point[1]
-        move_len = max(hypot(dx, dy), 1e-6)
+        move_len = max(observed_path_length(list(state.history), previous, sample), 1e-6)
         perpendicular = abs(distance - previous.distance)
         if perpendicular < max(2.0, scale * self.min_motion_ratio) or perpendicular / move_len < self.min_normal_ratio:
             self.rejected_motion += 1
@@ -1382,9 +1434,7 @@ class TwoWheelCenterCrossingRescuer(_CenterPassageRescuer):
             self.rejected_segment += 1
             return None
 
-        dx = center[0] - previous.point[0]
-        dy = center[1] - previous.point[1]
-        move_len = max(hypot(dx, dy), 1e-6)
+        move_len = max(observed_path_length(list(state.history), previous, sample), 1e-6)
         perpendicular = abs(distance - previous.distance)
         normal_ratio = perpendicular / move_len
         jump_ratio = move_len / diagonal
@@ -1667,7 +1717,7 @@ class LineCrossingCounter:
                 origin_band = max(dead_band * 2.0, scale * self.origin_rescue_distance_ratio)
                 move_x_origin = current_origin.point[0] - first_origin.point[0]
                 move_y_origin = current_origin.point[1] - first_origin.point[1]
-                move_len_origin = max(hypot(move_x_origin, move_y_origin), 1e-6)
+                move_len_origin = max(observed_path_length(origin_samples, first_origin, current_origin), 1e-6)
                 delta_origin = current_origin.distance - first_origin.distance
                 current_origin_side = current_origin.side
                 moving_away = (
@@ -1735,9 +1785,7 @@ class LineCrossingCounter:
             quick_crossing = segment_crossing_point(
                 previous.point, anchor, a, b, segment_margin=self.segment_margin
             )
-            quick_dx = anchor[0] - previous.point[0]
-            quick_dy = anchor[1] - previous.point[1]
-            quick_len = max(hypot(quick_dx, quick_dy), 1e-6)
+            quick_len = max(observed_path_length(list(state.history), previous, sample), 1e-6)
             quick_normal_ratio = abs(distance - previous.distance) / quick_len
             bracket_destination = (
                 quick_crossing is not None
@@ -1808,9 +1856,14 @@ class LineCrossingCounter:
             self.rejected_outside_segment += 1
             return None
 
-        confirm_dx = anchor[0] - previous.point[0]
-        confirm_dy = anchor[1] - previous.point[1]
-        confirm_move_len = max(hypot(confirm_dx, confirm_dy), 1e-6)
+        # Origin rescue has a synthetic pre-side anchor. Its measured origin
+        # trajectory was checked above; ordinary crossings use every observed
+        # point in their own stable-side window.
+        confirm_move_len = max(
+            hypot(anchor[0] - previous.point[0], anchor[1] - previous.point[1])
+            if origin_candidate else observed_path_length(history, previous, sample),
+            1e-6,
+        )
         confirm_diagonal = max(hypot(frame_width, frame_height), 1.0)
         confirm_normal_ratio = abs(distance - previous.distance) / confirm_move_len
         confirm_jump_ratio = confirm_move_len / confirm_diagonal
@@ -1924,14 +1977,11 @@ class LineCrossingCounter:
                 self.rejected_unconfirmed_side += 1
                 return None
 
-        move_x = anchor[0] - previous.point[0]
-        move_y = anchor[1] - previous.point[1]
-        move_len = max(hypot(move_x, move_y), 1e-6)
         perpendicular = abs(distance - previous.distance)
         min_motion = max(2.0, scale * self.min_crossing_motion_ratio)
         if perpendicular < min_motion:
             return None
-        if perpendicular / move_len < self.min_perpendicular_ratio:
+        if perpendicular / confirm_move_len < self.min_perpendicular_ratio:
             return None
 
         direction = "in" if previous.side < 0 < side else "out"

@@ -133,7 +133,9 @@ def select_target_refinement(
             or evidence_cov >= float(min_evidence_coverage)
             or (center_ok and evidence_cov >= 0.30)
         )
-        if not geometry_ok:
+        # Overlap with a large neighbor does not waive the caller's local
+        # center bound. The crop may contain several real vehicles.
+        if not center_ok or not geometry_ok:
             continue
 
         # Confidence still matters most, but target geometry prevents a nearby
@@ -805,6 +807,47 @@ class RefineEvidenceAccumulator:
             miss_probability *= max(0.0, 1.0 - confidence)
         return len(winning), 1.0 - miss_probability, max(winning.values()), len(supporting_sources)
 
+    def four_wheel_support(
+        self, track_id: int, frame_index: int, label: str,
+    ) -> tuple[int, float, float]:
+        """Return repeated four-wheel evidence that beats its alternatives.
+
+        A target-matched truck opinion from one refiner can coexist with a
+        stronger car or bus opinion from another. Count a source frame only
+        when the requested label wins that frame, then require its fused
+        support to beat each competing label's full eligible history. This
+        keeps weak repeated winners useful without accumulating losing or
+        tied opinions into a truck/bus correction or semantic lock.
+        """
+        selected_label = str(label)
+        if selected_label not in HEAVY_CLASSES:
+            return 0, 0.0, 0.0
+        current = int(frame_index)
+        by_frame: dict[int, dict[str, float]] = {}
+        for observed_frame, observed_label, confidence, _source in self._samples.get(int(track_id), ()):
+            age = current - int(observed_frame)
+            if age < 0 or age > self.history_frames or observed_label not in HEAVY_CLASSES:
+                continue
+            frame = by_frame.setdefault(int(observed_frame), {})
+            frame[observed_label] = max(frame.get(observed_label, 0.0), float(confidence))
+
+        competing_labels = HEAVY_CLASSES - {selected_label}
+        winning: list[float] = []
+        for observed_frame, frame in by_frame.items():
+            confidence = frame.get(selected_label, 0.0)
+            competing_confidence = max((frame.get(other, 0.0) for other in competing_labels), default=0.0)
+            if confidence > competing_confidence:
+                winning.append(confidence * (0.992 ** (current - observed_frame)))
+        if not winning:
+            return 0, 0.0, 0.0
+        miss_probability = 1.0
+        for confidence in winning:
+            miss_probability *= max(0.0, 1.0 - confidence)
+        fused = 1.0 - miss_probability
+        if any(fused <= self.support(track_id, current, other)[1] for other in competing_labels):
+            return 0, 0.0, 0.0
+        return len(winning), fused, max(winning)
+
     def consume_through(self, track_id: int, frame_index: int) -> None:
         """Consume completed-passage evidence while preserving newer samples."""
         tid = int(track_id)
@@ -873,10 +916,10 @@ class RefineEvidenceAccumulator:
             return None
 
         if base in HEAVY_CLASSES:
-            truck_hits, truck_fused, _ = self.support(track_id, frame_index, "truck")
+            truck_hits, truck_fused, _ = self.four_wheel_support(track_id, frame_index, "truck")
             if base != "truck" and truck_hits >= hits_required and truck_fused >= float(truck_confidence):
                 return "truck", truck_fused
-            bus_hits, bus_fused, _ = self.support(track_id, frame_index, "bus")
+            bus_hits, bus_fused, _ = self.four_wheel_support(track_id, frame_index, "bus")
             if base != "bus" and bus_hits >= hits_required and bus_fused >= float(bus_confidence):
                 return "bus", bus_fused
         return None

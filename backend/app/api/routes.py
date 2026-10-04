@@ -942,16 +942,26 @@ def _session_finish_owns_camera(session: CountingSession | None, latest_session:
 def internal_event(payload: VehicleEventCreate, response: Response, x_ai_token: str | None = Header(default=None), db: Session = Depends(get_db)) -> VehicleEvent:
     _assert_ai_token(x_ai_token)
 
+    # Serialize signature reads, event writes and hourly bucket updates per
+    # camera. Both delivery and finish acquire camera then session, so waiting
+    # on another request cannot leave an identity-map copy of the totals stale.
+    camera = db.scalar(select(Camera).where(
+        Camera.id == payload.camera_id,
+    ).with_for_update().execution_options(populate_existing=True))
     # V0.5.54: validate ownership before returning a duplicate or changing
     # counters. A stale worker must not attach another camera's source clock
     # and track IDs to this replay's session.
     session = None
     if payload.session_id is not None:
-        session = db.get(CountingSession, payload.session_id)
+        session = db.scalar(select(CountingSession).where(
+            CountingSession.id == payload.session_id,
+        ).with_for_update().execution_options(populate_existing=True))
         if session is None:
             raise HTTPException(status_code=404, detail="Session not found")
         if not _event_session_camera_matches(session, payload.camera_id):
             raise HTTPException(status_code=422, detail="Event camera does not match session camera")
+    if camera is None:
+        raise HTTPException(status_code=404, detail="Camera not found")
 
     # Event delivery is retried by the AI service. V0.5.44 keeps retries
     # idempotent by source frame/time instead of treating one tracking ID and
@@ -1195,7 +1205,7 @@ def internal_event(payload: VehicleEventCreate, response: Response, x_ai_token: 
         VehicleCount.vehicle_type == payload.vehicle_type,
         VehicleCount.direction == payload.direction,
         VehicleCount.period_start == period_start,
-    ))
+    ).execution_options(populate_existing=True))
     if bucket is None:
         bucket = VehicleCount(
             camera_id=payload.camera_id,
@@ -1217,7 +1227,15 @@ def internal_event(payload: VehicleEventCreate, response: Response, x_ai_token: 
 @router.post("/internal/sessions/{session_id}/finish")
 def internal_session_finish(session_id: int, payload: SessionFinish, x_ai_token: str | None = Header(default=None), db: Session = Depends(get_db)) -> dict:
     _assert_ai_token(x_ai_token)
-    session = db.get(CountingSession, session_id)
+    initial_session = db.get(CountingSession, session_id)
+    if initial_session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    camera = db.scalar(select(Camera).where(
+        Camera.id == initial_session.camera_id,
+    ).with_for_update().execution_options(populate_existing=True))
+    session = db.scalar(select(CountingSession).where(
+        CountingSession.id == session_id,
+    ).with_for_update().execution_options(populate_existing=True))
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
     persisted_events = list(db.scalars(select(VehicleEvent).where(VehicleEvent.session_id == session_id).order_by(VehicleEvent.id)).all())
@@ -1239,7 +1257,6 @@ def internal_session_finish(session_id: int, payload: SessionFinish, x_ai_token:
     if session.ended_at is None:
         session.ended_at = datetime.now(timezone.utc)
     session.status = SessionStatus.error if payload.status == "error" else (SessionStatus.completed if payload.status == "completed" else SessionStatus.stopped)
-    camera = db.get(Camera, session.camera_id)
     latest_session = db.scalar(select(CountingSession).where(
         CountingSession.camera_id == session.camera_id,
     ).order_by(CountingSession.id.desc()))
@@ -1531,6 +1548,7 @@ def _attach_benchmark_trace_diagnosis(item: dict, diagnosis: dict) -> None:
     """Keep class evidence scoped to the matched canonical event track."""
     attached = dict(diagnosis)
     tracking_id = item.get("ai_tracking_id")
+    attached["bicycle_context_scope"] = "matched_track" if tracking_id is not None else "nearby_tracks"
     if tracking_id is not None:
         def same_track_audits(audits: list[dict]) -> list[dict]:
             return [audit for audit in audits if audit.get("track_id") == tracking_id]
@@ -1569,6 +1587,7 @@ def _build_benchmark_report(benchmark_id: int, db: Session) -> dict:
                 f"{settings.ai_service_url}/benchmark-traces/{benchmark.session_id}/diagnose",
                 json={
                     "times": [source_time for _, source_time in trace_targets],
+                    "tracking_ids": [item.get("ai_tracking_id") for item, _ in trace_targets],
                     "window_seconds": min(1.0, max(0.35, benchmark.tolerance_seconds)),
                 },
                 timeout=8.0,

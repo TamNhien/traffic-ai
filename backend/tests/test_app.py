@@ -20,7 +20,7 @@ def test_root_metadata() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["name"] == "Traffic AI"
-    assert payload["version"] == "0.5.54"
+    assert payload["version"] == "0.5.55"
     assert payload["docs"] == "/docs"
     assert payload["health"] == "/api/health"
 
@@ -158,7 +158,7 @@ def test_benchmark_clone_compatibility_rejects_different_line() -> None:
 
 
 def test_backend_version_metadata() -> None:
-    assert app.version == "0.5.54"
+    assert app.version == "0.5.55"
 
 
 def test_v0531_startup_crossing_signature_guard_is_narrow() -> None:
@@ -179,7 +179,7 @@ def test_v0533_ground_truth_mark_update_schema() -> None:
 
 
 def test_v0533_version() -> None:
-    assert app.version == "0.5.54"
+    assert app.version == "0.5.55"
 
 
 def test_v0533_ground_truth_mark_update_keeps_timecode() -> None:
@@ -984,13 +984,114 @@ def test_v0554_class_trace_filters_other_tracks_in_top_and_nested_audit() -> Non
     assert diagnosis["gate_span_audit"]["bicycle_context_audit"] == [unrelated, own]
 
 
+def test_v0555_class_trace_provenance_identifies_matched_canonical_track() -> None:
+    from app.api.routes import _attach_benchmark_trace_diagnosis
+
+    own = {"track_id": 77, "frame_index": 251, "commit_status": "accepted"}
+    other = {"track_id": 88, "frame_index": 251, "commit_status": "accepted"}
+    diagnosis = {"bicycle_context_audit": [other, own], "bicycle_context_scope": "nearby_tracks"}
+    item = {"ai_tracking_id": 77}
+    _attach_benchmark_trace_diagnosis(item, diagnosis)
+    assert item["diagnosis"]["bicycle_context_scope"] == "matched_track"
+    assert item["diagnosis"]["bicycle_context_audit"] == [own]
+    assert diagnosis["bicycle_context_scope"] == "nearby_tracks"
+    assert diagnosis["bicycle_context_audit"] == [other, own]
+
+
+def test_v0555_class_trace_missing_track_does_not_claim_nearby_decision() -> None:
+    from app.api.routes import _attach_benchmark_trace_diagnosis
+
+    other = {"track_id": 88, "frame_index": 251, "commit_status": "accepted"}
+    diagnosis = {"bicycle_context_audit": [other]}
+    item = {"ai_tracking_id": None}
+    _attach_benchmark_trace_diagnosis(item, diagnosis)
+    assert item["diagnosis"]["bicycle_context_scope"] == "nearby_tracks"
+    assert item["diagnosis"]["bicycle_context_audit"] == [other]
+    assert "bicycle_context_scope" not in diagnosis
+
+
+def test_v0555_event_refreshes_session_and_bucket_after_another_delivery() -> None:
+    """Sequential identity-map regression; SQLite does not prove row locking."""
+    from sqlalchemy import func, select
+    from sqlalchemy.orm import Session
+    from app.models.all_models import CountingSession, VehicleCount, VehicleEvent
+
+    with _dedup_event_database() as db:
+        db.expire_on_commit = False
+        db.autoflush = False
+        _submit_dedup_event(db)
+        cached_session = db.get(CountingSession, 1)
+        cached_bucket = db.scalar(select(VehicleCount))
+        assert cached_session.total_vehicles == cached_bucket.count == 1
+        with Session(db.get_bind(), expire_on_commit=False, autoflush=False) as other:
+            _submit_dedup_event(other, source_time_seconds=20.0, source_frame_index=501)
+        assert cached_session.total_vehicles == cached_bucket.count == 1
+
+        _submit_dedup_event(db, source_time_seconds=30.0, source_frame_index=751)
+        assert cached_session.total_vehicles == 3
+        assert cached_bucket.count == 3
+        assert db.scalar(select(func.count()).select_from(VehicleEvent)) == 3
+
+
+def test_v0555_finish_refreshes_first_end_time_after_another_finish() -> None:
+    """Refresh a stale session before applying an idempotent finish retry."""
+    from sqlalchemy.orm import Session
+    from app.api.routes import SessionFinish, internal_session_finish, settings
+    from app.models.all_models import CountingSession
+
+    with _dedup_event_database() as db:
+        db.expire_on_commit = False
+        db.autoflush = False
+        _submit_dedup_event(db)
+        cached_session = db.get(CountingSession, 1)
+        assert cached_session.ended_at is None
+        with Session(db.get_bind(), expire_on_commit=False, autoflush=False) as other:
+            internal_session_finish(1, SessionFinish(status="completed", total_vehicles=3), settings.ai_shared_token, other)
+            first_finished = other.get(CountingSession, 1)
+            other.refresh(first_finished)
+            first_end_time = first_finished.ended_at
+        assert cached_session.ended_at is None
+
+        internal_session_finish(1, SessionFinish(status="completed", total_vehicles=3), settings.ai_shared_token, db)
+        assert cached_session.ended_at == first_end_time
+        assert cached_session.total_vehicles == 1
+        assert cached_session.dedup_suppressed_events == 2
+
+
+def test_v0555_event_and_finish_lock_same_camera_then_refresh_session(monkeypatch) -> None:
+    """Compile actual lock statements; no PostgreSQL concurrency simulation."""
+    from sqlalchemy.dialects import postgresql
+    from app.api.routes import SessionFinish, internal_session_finish, settings
+    from app.models.all_models import Camera, CountingSession
+
+    with _dedup_event_database() as db:
+        locked = []
+        scalar = db.scalar
+
+        def record_scalar(statement, *args, **kwargs):
+            if getattr(statement, "_for_update_arg", None) is not None:
+                locked.append(statement)
+            return scalar(statement, *args, **kwargs)
+
+        monkeypatch.setattr(db, "scalar", record_scalar)
+        _submit_dedup_event(db)
+        internal_session_finish(1, SessionFinish(status="completed", total_vehicles=1), settings.ai_shared_token, db)
+        assert [statement.column_descriptions[0]["entity"] for statement in locked] == [Camera, CountingSession, Camera, CountingSession]
+        for statement in locked:
+            assert statement.get_execution_options()["populate_existing"] is True
+            assert str(statement.compile(dialect=postgresql.dialect())).endswith("FOR UPDATE")
+
+
 def test_v0554_class_trace_unknown_track_keeps_nearby_evidence_for_review() -> None:
     from app.api.routes import _attach_benchmark_trace_diagnosis
 
     diagnosis = {"bicycle_context_audit": [{"track_id": 77}], "gate_span_audit": {"bicycle_context_audit": [{"track_id": 88}]}}
     item = {"ai_tracking_id": None}
     _attach_benchmark_trace_diagnosis(item, diagnosis)
-    assert item["diagnosis"] == diagnosis
+    assert item["diagnosis"]["bicycle_context_audit"] == diagnosis["bicycle_context_audit"]
+    assert item["diagnosis"]["gate_span_audit"] == diagnosis["gate_span_audit"]
+    assert item["diagnosis"]["bicycle_context_scope"] == "nearby_tracks"
+    assert "bicycle_context_scope" not in diagnosis
 
 
 def test_v0554_class_mismatch_report_fetches_trace_without_gate_miss(monkeypatch) -> None:
@@ -1018,6 +1119,7 @@ def test_v0554_class_mismatch_report_fetches_trace_without_gate_miss(monkeypatch
         monkeypatch.setattr("app.api.routes.httpx.post", trace_post)
         report = _build_benchmark_report(1, db)
         assert calls[0]["times"] == [event.source_time_seconds]
+        assert calls[0]["tracking_ids"] == [10]
         assert report["matched"] == 1
         assert report["missed"] == 0
         assert report["false_positives"] == 0

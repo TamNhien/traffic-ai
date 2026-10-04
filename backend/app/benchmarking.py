@@ -345,8 +345,11 @@ def match_crossings(ground_truth: Iterable[Any], ai_events: Iterable[Any], toler
     """
 
     tolerance = max(0.05, float(tolerance_seconds))
-    gt = sorted((_timed(item) for item in ground_truth), key=lambda x: x.source_time_seconds)
-    ai = sorted((_timed(item) for item in ai_events), key=lambda x: x.source_time_seconds)
+    # Exact timestamps may belong to different lanes or directions. Canonical
+    # IDs break those ties without using class/direction to improve the score;
+    # an equivalent query/input order must produce the same report.
+    gt = sorted((_timed(item) for item in ground_truth), key=lambda x: (x.source_time_seconds, x.id))
+    ai = sorted((_timed(item) for item in ai_events), key=lambda x: (x.source_time_seconds, x.id))
     pairs = _global_temporal_pairs(gt, ai, tolerance)
     matched_ai = {ai_index for _, ai_index in pairs}
     matched_gt = {gt_index for gt_index, _ in pairs}
@@ -383,7 +386,7 @@ def match_crossings(ground_truth: Iterable[Any], ai_events: Iterable[Any], toler
         })
 
     unmatched_ai = set(range(len(ai))) - matched_ai
-    false_positive_events = [ai[index] for index in sorted(unmatched_ai, key=lambda i: ai[i].source_time_seconds)]
+    false_positive_events = [ai[index] for index in sorted(unmatched_ai, key=lambda i: (ai[i].source_time_seconds, ai[i].id))]
     false_positive_items, false_positive_reason_counts, dominant_false_positive_reason = _false_positive_diagnostics(
         false_positive_events, ai, matched, tolerance
     )

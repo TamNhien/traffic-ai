@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './styles.css'
 
-const APP_VERSION = '0.5.54'
+const APP_VERSION = '0.5.55'
 const vehicleLabels = {
   motorcycle: 'Xe máy', bicycle: 'Xe đạp', car: 'Ô tô', bus: 'Xe buýt', truck: 'Xe tải', other: 'Khác'
 }
@@ -79,8 +79,10 @@ const auditScore = value => value != null && Number.isFinite(Number(value)) ? Nu
 function BicycleContextAudit({ item }) {
   const audits = item?.diagnosis?.bicycle_context_audit || []
   if (!audits.length) return null
+  const matchedTrack = item?.diagnosis?.bicycle_context_scope === 'matched_track'
   return <details className="bicycle-context-audit">
     <summary>Bằng chứng phân loại xe đạp ({audits.length})</summary>
+    <p>{matchedTrack ? `Bằng chứng của track ${item.ai_tracking_id} đã ghép với GT.` : 'Bằng chứng của các track gần timecode; chưa xác định track của event đã ghép.'}</p>
     {audits.map(audit=><div className="bicycle-context-record" key={`${audit.track_id}-${audit.frame_index}`}>
       <strong>Track {audit.track_id} · frame {audit.frame_index} · {bicycleBranchLabels[audit.branch] || audit.branch}</strong>
       <p>{audit.decision_accepted ? 'Model đề xuất xe đạp' : 'Model giữ loại xe'} · {bicycleCommitLabels[audit.commit_status] || audit.commit_status}</p>

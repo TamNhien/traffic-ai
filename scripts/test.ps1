@@ -323,12 +323,12 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.54") { throw "VERSION phải là 0.5.54, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0068_gate_semantics_v0554.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0068_gate_semantics_v0554.py." }
+  if ($version -ne "0.5.55") { throw "VERSION phải là 0.5.55, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0069_refine_admission_v0555.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0069_refine_admission_v0555.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0068_gate_semantics_v0554"' -or $migrationText -notmatch 'down_revision = "0067_candidate_evidence_v0553"' -or $migrationText -notmatch "value='0.5.54'") {
-    throw "Migration 0068_gate_semantics_v0554 không đúng contract V0.5.54."
+  if ($migrationText -notmatch 'revision = "0069_refine_admission_v0555"' -or $migrationText -notmatch 'down_revision = "0068_gate_semantics_v0554"' -or $migrationText -notmatch "value='0.5.55'") {
+    throw "Migration 0069_refine_admission_v0555 không đúng contract V0.5.55."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
@@ -1660,6 +1660,29 @@ function Assert-GateSemanticsV0554Contract {
   Write-Host "[OK] Gate Path + Competitive Evidence V0.5.54" -ForegroundColor Green
 }
 
+function Assert-RefineAdmissionV0555Contract {
+  Write-Host "`n[Traffic AI] Refinement Admission + Passage Lifecycle V0.5.55" -ForegroundColor Cyan
+  $counting = Get-Content (Join-Path $root "ai-service\app\counting.py") -Raw -Encoding UTF8
+  $worker = Get-Content (Join-Path $root "ai-service\app\worker.py") -Raw -Encoding UTF8
+  $classification = Get-Content (Join-Path $root "ai-service\app\classification.py") -Raw -Encoding UTF8
+  $backend = Get-Content (Join-Path $root "backend\app\api\routes.py") -Raw -Encoding UTF8
+  $trace = Get-Content (Join-Path $root "ai-service\app\benchmark_trace.py") -Raw -Encoding UTF8
+  $schemas = Get-Content (Join-Path $root "ai-service\app\schemas.py") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  $githubInit = Get-Content (Join-Path $root "scripts\github-init.ps1") -Raw -Encoding UTF8
+  if ($counting -notmatch 'def observed_path_length' -or $counting -notmatch 'def _review_pending_history') { throw "V0.5.55 thiếu measured motion hoặc merged pending validation." }
+  if ($classification -notmatch 'def four_wheel_support' -or $worker -notmatch '_refine_consensus.four_wheel_support') { throw "V0.5.55 thiếu competitive four-wheel evidence." }
+  if ($worker -notmatch 'def _run_deferred_class_refinements' -or $worker -notmatch 'def _resolve_crossing_class_refinement' -or $worker -notmatch 'crossing_class_refine_track_ids') { throw "V0.5.55 thiếu crossing priority hoặc override source-clock contract." }
+  if ($backend -notmatch 'with_for_update' -or $backend -notmatch 'populate_existing=True' -or $backend -notmatch 'bicycle_context_scope') { throw "V0.5.55 thiếu event/finish serialization hoặc trace provenance." }
+  if ($trace -notmatch 'context_updates=rows' -or $trace -notmatch 'tracking_ids' -or $schemas -notmatch 'def align_tracking_ids' -or $frontend -notmatch 'bicycle_context_scope') { throw "V0.5.55 thiếu matched-track trace hoặc final guard outcome." }
+  if ($githubInit -notmatch 'function Invoke-QuietProbe' -or $githubInit -notmatch 'repoProbe.ExitCode' -or $githubInit -notmatch 'originProbe.ExitCode') { throw "V0.5.55 thiếu quiet probe khi GitHub repository/origin chưa tồn tại." }
+  foreach ($relative in @("ai-service\tests\test_counting.py", "ai-service\tests\test_classification.py", "ai-service\tests\test_worker_context.py", "ai-service\tests\test_v0541_benchmark_trace.py", "backend\tests\test_app.py", "backend\tests\test_benchmarking.py")) {
+    $text = Get-Content (Join-Path $root $relative) -Raw -Encoding UTF8
+    if ($text -notmatch 'def test_v0555_') { throw "V0.5.55 thiếu regression trong $relative." }
+  }
+  Write-Host "[OK] Refinement Admission + Passage Lifecycle V0.5.55" -ForegroundColor Green
+}
+
 function Invoke-Step([string]$Title, [scriptblock]$Action) {
   Write-Host "`n[Traffic AI] $Title" -ForegroundColor Cyan
   & $Action
@@ -1730,6 +1753,7 @@ Assert-SpanShadowV0551Contract
 Assert-ObservedPathCleanFrameV0552Contract
 Assert-CandidateEvidenceV0553Contract
 Assert-GateSemanticsV0554Contract
+Assert-RefineAdmissionV0555Contract
 Assert-LegacySemanticCompatibilityV0523R1
 
 Write-Host "`n[Traffic AI] Road Zone + Frame Browser V0.5.11" -ForegroundColor Cyan

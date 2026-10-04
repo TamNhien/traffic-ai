@@ -13,17 +13,27 @@ def trace_path(session_id: int) -> Path:
     return TRACE_ROOT / f"session_{int(session_id)}.jsonl"
 
 
-def _gate_span_audit(rows: list[dict]) -> dict:
+def _context_decision_key(audit: dict) -> tuple[int, int] | None:
+    if audit.get("kind") != "bicycle_context":
+        return None
+    try:
+        return int(audit["track_id"]), int(audit["frame_index"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _gate_span_audit(rows: list[dict], tracking_id: int | None = None, context_updates: list[dict] | None = None) -> dict:
     tracks: dict[int, dict[str, list[float] | str]] = {}
     xframe_audits: list[dict] = []
     context_audits: dict[tuple[int, int], dict] = {}
     for row in rows:
         for audit in row.get("bicycle_xframe_decision_audit", []) or []:
             if isinstance(audit, dict):
+                if tracking_id is not None and audit.get("track_id") != tracking_id:
+                    continue
                 if audit.get("kind") == "bicycle_context":
-                    try:
-                        key = (int(audit["track_id"]), int(audit["frame_index"]))
-                    except (KeyError, TypeError, ValueError):
+                    key = _context_decision_key(audit)
+                    if key is None:
                         continue
                     # Rolling snapshots repeat a proposal; a later guard outcome
                     # replaces it while keeping the source observation identity.
@@ -38,9 +48,21 @@ def _gate_span_audit(rows: list[dict]) -> dict:
                 center = float(item.get("center_signed"))
             except (TypeError, ValueError):
                 continue
+            if tracking_id is not None and tid != tracking_id:
+                continue
             bucket = tracks.setdefault(tid, {"anchor": [], "center": [], "label": str(item.get("label", ""))})
             bucket["anchor"].append(anchor)
             bucket["center"].append(center)
+    # A guard outcome may arrive outside the requested observation window.
+    # Refresh only identities already observed in that window; unrelated later
+    # decisions cannot be attached to the matched crossing.
+    for row in context_updates or []:
+        for audit in row.get("bicycle_xframe_decision_audit", []) or []:
+            if not isinstance(audit, dict):
+                continue
+            key = _context_decision_key(audit)
+            if key in context_audits:
+                context_audits[key] = audit
     anchor_span = []
     center_only = []
     near = []
@@ -70,7 +92,11 @@ def _gate_span_audit(rows: list[dict]) -> dict:
     }
 
 
-def diagnose_trace(session_id: int, times: Iterable[float], window_seconds: float = 0.60) -> dict:
+def diagnose_trace(session_id: int, times: Iterable[float], window_seconds: float = 0.60, *, tracking_ids: Iterable[int | None] | None = None) -> dict:
+    targets = list(times)
+    target_tracks = list(tracking_ids) if tracking_ids is not None else [None] * len(targets)
+    if len(target_tracks) != len(targets):
+        raise ValueError("tracking_ids must align with times")
     path = trace_path(session_id)
     if not path.exists():
         return {"available": False, "session_id": int(session_id), "items": []}
@@ -86,10 +112,10 @@ def diagnose_trace(session_id: int, times: Iterable[float], window_seconds: floa
                 continue
     window = max(0.05, min(2.0, float(window_seconds)))
     result = []
-    for raw_time in times:
+    for raw_time, tracking_id in zip(targets, target_tracks):
         target = max(0.0, float(raw_time))
         nearby = [row for row in rows if abs(float(row.get("source_time_seconds", -9999.0)) - target) <= window]
-        gate_audit = _gate_span_audit(nearby)
+        gate_audit = _gate_span_audit(nearby, tracking_id=tracking_id, context_updates=rows)
         nearby = [row for row in nearby if not row.get("audit_only")]
         if not nearby:
             result.append({"time": target, "reason": "no_trace_window", "max_det": 0, "max_track": 0, "max_road": 0,

@@ -3,6 +3,161 @@ import pytest
 from app.counting import CountingLine, LineCrossingCounter, RoadZone
 
 
+def test_v0555_all_gates_reject_large_observed_detour_hidden_by_short_chord() -> None:
+    from app.counting import HeavyVehicleCrossingRescuer, TwoWheelCenterCrossingRescuer, VerifiedAnchorSpanRescuer
+
+    # The endpoints look like a 40 px perpendicular crossing, but the measured
+    # anchor/center moved more than 600 px through the dead band.
+    for gate in (
+        LineCrossingCounter(CountingLine()), VerifiedAnchorSpanRescuer(CountingLine()),
+        HeavyVehicleCrossingRescuer(CountingLine()), TwoWheelCenterCrossingRescuer(CountingLine()),
+    ):
+        for frame, point in enumerate([(500, 480), (800, 500), (500, 520), (500, 530)], 1):
+            assert gate.update(5901, point, 1000, 1000, frame) is None
+
+
+def test_v0555_observed_normal_guard_rejects_small_lateral_loop_without_jump() -> None:
+    from app.counting import HeavyVehicleCrossingRescuer, TwoWheelCenterCrossingRescuer, VerifiedAnchorSpanRescuer
+
+    # The 108 px path passes existing jump limits. Normal progress is only
+    # 40/108, even though the endpoint chord claims perfectly normal motion.
+    for gate in (
+        LineCrossingCounter(CountingLine(), min_perpendicular_ratio=0.42),
+        VerifiedAnchorSpanRescuer(CountingLine()),
+        HeavyVehicleCrossingRescuer(CountingLine(), min_normal_ratio=0.42),
+        TwoWheelCenterCrossingRescuer(CountingLine()),
+    ):
+        for frame, point in enumerate([(500, 480), (550, 500), (500, 520)], 1):
+            assert gate.update(5902, point, 1000, 1000, frame) is None
+
+
+def test_v0555_jump_guard_measures_observed_distance_when_normal_guard_passes() -> None:
+    from app.counting import TwoWheelCenterCrossingRescuer, VerifiedAnchorSpanRescuer
+
+    for gate in (
+        LineCrossingCounter(CountingLine(), rescue_max_jump_ratio=0.10),
+        VerifiedAnchorSpanRescuer(CountingLine(), min_normal_ratio=0.20, max_jump_ratio=0.10),
+        TwoWheelCenterCrossingRescuer(CountingLine(), min_normal_ratio=0.20),
+    ):
+        for frame, point in [(10, (500, 470)), (12, (570, 500)), (15, (500, 530))]:
+            assert gate.update(5903, point, 1000, 1000, frame) is None
+
+
+def test_v0555_primary_short_bracket_cannot_bypass_measured_normal_guard() -> None:
+    gate = LineCrossingCounter(
+        CountingLine(), min_perpendicular_ratio=0.42, side_confirm_samples=2,
+        bracket_confirm=True, bracket_confirm_min_normal_ratio=0.55,
+    )
+    for frame, point in enumerate([(500, 480), (550, 500), (500, 520)], 1):
+        assert gate.update(5904, point, 1000, 1000, frame) is None
+    assert gate.bracket_confirm_rescues == 0
+
+
+def test_v0555_primary_late_confirm_cannot_bypass_measured_normal_guard() -> None:
+    gate = LineCrossingCounter(
+        CountingLine(), side_confirm_samples=2, late_geometry_confirm=True,
+    )
+    for frame, point in enumerate([(500, 480), (550, 500), (500, 520)], 1):
+        assert gate.update(5905, point, 1000, 1000, frame) is None
+    assert gate.late_geometry_confirms == 0
+
+
+def test_v0555_primary_long_gap_lineage_guard_uses_measured_normal_progress() -> None:
+    gate = LineCrossingCounter(CountingLine(), lineage_rescue_guard=True)
+    for frame, point in [(10, (500, 480)), (12, (550, 500)), (16, (500, 520))]:
+        assert gate.update(5906, point, 1000, 1000, frame, lineage_size=2) is None
+    assert gate.rejected_lineage_rescue == 1
+
+
+def test_v0555_all_gates_preserve_bounded_bent_path_and_two_observation_crossings() -> None:
+    from app.counting import HeavyVehicleCrossingRescuer, TwoWheelCenterCrossingRescuer, VerifiedAnchorSpanRescuer
+
+    for path in ([(500, 470), (510, 500), (500, 530)], [(500, 470), (500, 530)]):
+        for gate in (
+            LineCrossingCounter(CountingLine()), VerifiedAnchorSpanRescuer(CountingLine()),
+            HeavyVehicleCrossingRescuer(CountingLine()), TwoWheelCenterCrossingRescuer(CountingLine()),
+        ):
+            result = None
+            for frame, point in enumerate(path, 1):
+                result = gate.update(5907, point, 1000, 1000, frame)
+            assert result is not None
+            assert result == "in" or result[0] == "in"
+
+
+def test_v0555_anchor_alias_merged_post_jump_invalidates_pending_before_local_confirmation() -> None:
+    from app.counting import VerifiedAnchorSpanRescuer
+
+    gate = VerifiedAnchorSpanRescuer(CountingLine(), immediate_min_normal_ratio=0.95)
+    assert gate.update(5908, (450, 460), 1000, 1000, 10) is None
+    assert gate.update(5908, (500, 540), 1000, 1000, 11) is None
+    assert gate.update(5909, (900, 500), 1000, 1000, 12) is None
+    assert gate.update(5909, (500, 503), 1000, 1000, 13) is None
+    gate.merge_track(5909, 5908)
+    assert gate.update(5908, (500, 550), 1000, 1000, 14) is None
+    assert gate.finalize_lost(5908, 15) is None
+    assert gate.post_confirm_closures == gate.lost_track_finalizations == 0
+    assert gate.rejected_validation >= 1
+
+
+def test_v0555_anchor_alias_merged_neutral_road_departure_invalidates_pending() -> None:
+    from app.counting import VerifiedAnchorSpanRescuer
+
+    zone = RoadZone(0.4, 0.0, 0.6, 0.0, 0.6, 1.0, 0.4, 1.0)
+    gate = VerifiedAnchorSpanRescuer(CountingLine(), zone, immediate_min_normal_ratio=0.95)
+    assert gate.update(5910, (450, 460), 1000, 1000, 10) is None
+    assert gate.update(5910, (500, 540), 1000, 1000, 11) is None
+    # Each step is below the jump limit; only the measured road departure fails.
+    assert gate.update(5911, (620, 500), 1000, 1000, 12) is None
+    assert gate.update(5911, (500, 503), 1000, 1000, 13) is None
+    gate.merge_track(5911, 5910)
+    assert gate.update(5910, (500, 550), 1000, 1000, 14) is None
+    assert gate.finalize_lost(5910, 15) is None
+    assert gate.post_confirm_closures == gate.lost_track_finalizations == 0
+
+
+def test_v0555_anchor_alias_sustained_opposite_return_cannot_revive_original_pending() -> None:
+    from app.counting import VerifiedAnchorSpanRescuer
+
+    gate = VerifiedAnchorSpanRescuer(CountingLine(), immediate_min_normal_ratio=0.95)
+    assert gate.update(5912, (450, 460), 1000, 1000, 10) is None
+    assert gate.update(5912, (500, 540), 1000, 1000, 11) is None
+    for frame, point in [(12, (500, 480)), (13, (500, 479)), (14, (500, 503))]:
+        assert gate.update(5913, point, 1000, 1000, frame) is None
+    gate.merge_track(5913, 5912)
+    # The later return proves a fresh finite span. It may count that new
+    # geometry, but cannot confirm the original crossing at frame 10.5.
+    assert gate.update(5912, (500, 535), 1000, 1000, 15) == ("in", (500.0, 500.0))
+    assert gate.post_confirm_closures == 0
+    assert gate.crossing_frame_for(5912) == pytest.approx(13 + 21 / 24)
+
+
+def test_v0555_anchor_alias_opposite_observation_blocks_lost_closure_until_return() -> None:
+    from app.counting import VerifiedAnchorSpanRescuer
+
+    gate = VerifiedAnchorSpanRescuer(CountingLine(), immediate_min_normal_ratio=0.95)
+    assert gate.update(5914, (450, 460), 1000, 1000, 10) is None
+    assert gate.update(5914, (500, 540), 1000, 1000, 11) is None
+    assert gate.update(5915, (500, 480), 1000, 1000, 12) is None
+    gate.merge_track(5915, 5914)
+    assert gate.finalize_lost(5914, 13) is None
+    assert gate.update(5914, (500, 550), 1000, 1000, 13) == ("in", (475.0, 500.0))
+    assert gate.post_confirm_jitter_holds == 1
+
+
+def test_v0555_anchor_alias_duplicate_frames_do_not_supply_post_confirmation() -> None:
+    from app.counting import VerifiedAnchorSpanRescuer
+
+    gate = VerifiedAnchorSpanRescuer(CountingLine(), immediate_min_normal_ratio=0.95, post_confirm_samples=3)
+    for tid in (5916, 5917):
+        assert gate.update(tid, (450, 460), 1000, 1000, 10) is None
+        assert gate.update(tid, (500, 540), 1000, 1000, 11) is None
+        assert gate.update(tid, (500, 550), 1000, 1000, 12) is None
+    gate.merge_track(5917, 5916)
+    assert gate.update(5916, (500, 550), 1000, 1000, 12) is None
+    assert gate.update(5916, (500, 560), 1000, 1000, 13) == ("in", (475.0, 500.0))
+    assert gate.post_confirm_closures == 1
+
+
 def test_v0554_all_gates_use_observed_road_corridor_for_curved_valid_path() -> None:
     from app.counting import HeavyVehicleCrossingRescuer, TwoWheelCenterCrossingRescuer, VerifiedAnchorSpanRescuer
 

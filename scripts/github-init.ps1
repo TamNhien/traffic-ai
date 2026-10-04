@@ -17,6 +17,15 @@ function Assert-Command([string]$Name) {
   }
 }
 
+function Invoke-QuietProbe([string]$Command, [string[]]$Arguments) {
+  # PowerShell 5.1 có thể biến stderr dự kiến thành lỗi khi Stop.
+  # Scope cục bộ giữ lỗi probe để xử lý fallback theo exit code.
+  $ErrorActionPreference = "Continue"
+  $PSNativeCommandUseErrorActionPreference = $false
+  $output = @(& $Command @Arguments 2>$null)
+  return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = $output }
+}
+
 Assert-Command git
 Assert-Command gh
 
@@ -44,8 +53,8 @@ if ($LASTEXITCODE -ne 0) { throw "Unable to set branch $Branch" }
 $repoFullName = "$Owner/$Repository"
 $repoUrl = "https://github.com/$repoFullName.git"
 
-gh repo view $repoFullName --json nameWithOwner 1>$null 2>$null
-$repoExists = ($LASTEXITCODE -eq 0)
+$repoProbe = Invoke-QuietProbe -Command gh -Arguments @("repo", "view", $repoFullName, "--json", "nameWithOwner")
+$repoExists = ($repoProbe.ExitCode -eq 0)
 
 if (-not $repoExists) {
   Write-Host "[Traffic AI] Creating GitHub repository $repoFullName ..." -ForegroundColor Cyan
@@ -59,8 +68,9 @@ if (-not $repoExists) {
   Write-Host "[OK] GitHub repository already exists: $repoFullName" -ForegroundColor Green
 }
 
-$origin = git remote get-url origin 2>$null
-if ($LASTEXITCODE -eq 0 -and $origin) {
+$originProbe = Invoke-QuietProbe -Command git -Arguments @("remote", "get-url", "origin")
+$origin = ($originProbe.Output | Select-Object -First 1)
+if ($originProbe.ExitCode -eq 0 -and $origin) {
   if ($origin -ne $repoUrl) {
     git remote set-url origin $repoUrl
     if ($LASTEXITCODE -ne 0) { throw "Unable to update origin" }

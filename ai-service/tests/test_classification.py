@@ -798,3 +798,148 @@ def test_v0554_completed_passage_consumes_all_labels_but_preserves_newer_samples
     assert evidence.support(7, 105, "bicycle") == (0, 0.0, 0.0)
     assert evidence.support(7, 105, "motorcycle") == (0, 0.0, 0.0)
     assert evidence.support(7, 110, "bicycle") == (1, 0.70, 0.70)
+
+
+def test_v0555_target_matcher_honors_center_bound_despite_full_target_overlap() -> None:
+    from app.classification import RefineCandidate, select_target_refinement
+
+    target = (80.0, 70.0, 120.0, 150.0)
+    candidate = RefineCandidate("truck", 0.90, (50.0, 45.0, 180.0, 165.0))
+    assert select_target_refinement(target, [candidate], max_center_distance_ratio=0.10) is None
+    assert select_target_refinement(target, [candidate]) is not None
+
+
+def test_v0555_target_matcher_remote_large_neighbor_cannot_steal_local_vote() -> None:
+    from app.classification import RefineCandidate, select_target_refinement
+
+    match = select_target_refinement(
+        (80.0, 70.0, 120.0, 150.0),
+        [
+            RefineCandidate("truck", 0.99, (85.0, 20.0, 500.0, 210.0)),
+            RefineCandidate("car", 0.46, (85.0, 75.0, 115.0, 145.0)),
+        ],
+        target_family="four-wheel",
+    )
+    assert match is not None and match.label == "car" and match.confidence == 0.46
+
+
+def test_v0555_target_matcher_retains_bounded_partial_and_family_filter() -> None:
+    from app.classification import RefineCandidate, select_target_refinement
+
+    match = select_target_refinement(
+        (40.0, 40.0, 180.0, 190.0),
+        [
+            RefineCandidate("motorcycle", 0.99, (45.0, 45.0, 175.0, 185.0)),
+            RefineCandidate("truck", 0.53, (120.0, 100.0, 175.0, 185.0)),
+        ],
+        target_family="four-wheel",
+    )
+    assert match is not None and match.label == "truck" and match.confidence == 0.53
+
+
+def test_v0555_truck_consensus_cannot_accumulate_losing_car_votes() -> None:
+    from app.classification import RefineEvidenceAccumulator
+
+    evidence = RefineEvidenceAccumulator()
+    for frame in (100, 110):
+        evidence.update(7, frame, "truck", 0.55, "domain")
+        evidence.update(7, frame, "car", 0.80, "general")
+    assert evidence.minority_consensus(7, 110, "car") is None
+
+
+def test_v0555_tied_car_and_truck_frames_cannot_prove_truck_consensus() -> None:
+    from app.classification import RefineEvidenceAccumulator
+
+    evidence = RefineEvidenceAccumulator()
+    for frame in (100, 110):
+        evidence.update(7, frame, "truck", 0.65, "domain")
+        evidence.update(7, frame, "car", 0.65, "general")
+    assert evidence.minority_consensus(7, 110, "car") is None
+
+
+def test_v0555_bus_consensus_cannot_accumulate_losing_car_votes() -> None:
+    from app.classification import RefineEvidenceAccumulator
+
+    evidence = RefineEvidenceAccumulator()
+    for frame in (100, 110):
+        evidence.update(7, frame, "bus", 0.65, "domain")
+        evidence.update(7, frame, "car", 0.80, "general")
+    assert evidence.minority_consensus(7, 110, "car") is None
+
+
+def test_v0555_bus_winner_survives_losing_truck_label_priority() -> None:
+    from app.classification import RefineEvidenceAccumulator
+
+    evidence = RefineEvidenceAccumulator()
+    for frame in (100, 110):
+        evidence.update(7, frame, "truck", 0.55, "domain")
+        evidence.update(7, frame, "bus", 0.70, "general")
+    result = evidence.minority_consensus(7, 110, "car")
+    assert result is not None and result[0] == "bus"
+
+
+def test_v0555_tied_truck_bus_frames_cannot_prove_either_correction() -> None:
+    from app.classification import RefineEvidenceAccumulator
+
+    evidence = RefineEvidenceAccumulator()
+    for frame in (100, 110):
+        evidence.update(7, frame, "truck", 0.65, "domain")
+        evidence.update(7, frame, "bus", 0.65, "general")
+    assert evidence.minority_consensus(7, 110, "car") is None
+
+
+def test_v0555_truck_consensus_checks_competing_history_outside_winning_frames() -> None:
+    from app.classification import RefineEvidenceAccumulator
+
+    evidence = RefineEvidenceAccumulator()
+    evidence.update(7, 100, "truck", 0.50, "domain")
+    evidence.update(7, 110, "truck", 0.50, "general")
+    evidence.update(7, 105, "car", 0.99, "general")
+    assert evidence.minority_consensus(7, 110, "car") is None
+
+
+def test_v0555_four_wheel_support_counts_only_strict_winning_frames() -> None:
+    from app.classification import RefineEvidenceAccumulator
+
+    evidence = RefineEvidenceAccumulator()
+    for frame in (100, 110, 120):
+        evidence.update(7, frame, "truck", 0.65, "domain")
+    evidence.update(7, 100, "car", 0.90, "general")
+    hits, fused, strongest = evidence.four_wheel_support(7, 120, "truck")
+    assert hits == 2 and fused > strongest > 0.0
+    assert evidence.minority_consensus(7, 120, "car") == ("truck", fused)
+
+
+def test_v0555_four_wheel_support_keeps_weak_repeated_winners() -> None:
+    from app.classification import RefineEvidenceAccumulator
+
+    evidence = RefineEvidenceAccumulator()
+    evidence.update(7, 300, "truck", 0.31, "domain")
+    evidence.update(7, 300, "car", 0.20, "general")
+    evidence.update(7, 320, "truck", 0.35, "general")
+    evidence.update(7, 320, "bus", 0.20, "domain")
+    result = evidence.minority_consensus(7, 320, "car", truck_confidence=0.52)
+    assert result is not None and result[0] == "truck" and result[1] >= 0.52
+    assert evidence.four_wheel_support(7, 320, "truck")[0] == 2
+
+
+def test_v0555_four_wheel_support_ignores_future_expired_and_other_family() -> None:
+    from app.classification import RefineEvidenceAccumulator
+
+    evidence = RefineEvidenceAccumulator(history_frames=20)
+    for frame in (10, 90, 100, 110):
+        evidence.update(7, frame, "truck", 0.60, "domain")
+    evidence.update(7, 90, "motorcycle", 0.99, "general")
+    assert evidence.four_wheel_support(7, 100, "truck")[0] == 2
+    assert evidence.four_wheel_support(7, 100, "motorcycle") == (0, 0.0, 0.0)
+
+
+def test_v0555_four_wheel_support_collapses_duplicate_sources_to_one_frame() -> None:
+    from app.classification import RefineEvidenceAccumulator
+
+    evidence = RefineEvidenceAccumulator()
+    for source in ("domain", "general"):
+        for _ in range(10):
+            evidence.update(7, 100, "truck", 0.70, source)
+    assert evidence.four_wheel_support(7, 100, "truck") == (1, 0.70, 0.70)
+    assert evidence.minority_consensus(7, 100, "car") is None
