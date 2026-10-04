@@ -762,6 +762,24 @@ class RefineEvidenceAccumulator:
         competing_veto: float | None = 0.10,
         include_current_frame: bool = True,
     ) -> tuple[int, float, float, int]:
+        hits, fused, strongest, sources, _source_frame = self.competitive_support_snapshot(
+            track_id, frame_index, label, competing_label,
+            min_source_win=min_source_win, competing_veto=competing_veto,
+            include_current_frame=include_current_frame,
+        )
+        return hits, fused, strongest, sources
+
+    def competitive_support_snapshot(
+        self,
+        track_id: int,
+        frame_index: int,
+        label: str,
+        competing_label: str,
+        *,
+        min_source_win: float = 0.0,
+        competing_veto: float | None = 0.10,
+        include_current_frame: bool = True,
+    ) -> tuple[int, float, float, int, int | None]:
         """Return temporal support that wins its target's class competition.
 
         Ordinary refiner history can contain a bicycle from one model and a
@@ -794,7 +812,7 @@ class RefineEvidenceAccumulator:
             confidence = max(sources.values(), default=0.0)
             competing_confidence = max(frame.get(str(competing_label), {}).values(), default=0.0)
             if veto is not None and competing_confidence - confidence > veto:
-                return 0, 0.0, 0.0, 0
+                return 0, 0.0, 0.0, 0, None
             if confidence <= 0.0 or confidence <= competing_confidence or confidence < competing_confidence + margin:
                 continue
             winning[observed_frame] = confidence * (0.992 ** (current - observed_frame))
@@ -803,11 +821,23 @@ class RefineEvidenceAccumulator:
                 if value > competing_confidence and value >= competing_confidence + margin
             )
         if not winning:
-            return 0, 0.0, 0.0, 0
+            return 0, 0.0, 0.0, 0, None
         miss_probability = 1.0
         for confidence in winning.values():
             miss_probability *= max(0.0, 1.0 - confidence)
-        return len(winning), 1.0 - miss_probability, max(winning.values()), len(supporting_sources)
+        return len(winning), 1.0 - miss_probability, max(winning.values()), len(supporting_sources), max(winning)
+
+    def minority_consensus_source_frame(
+        self, track_id: int, frame_index: int, label: str,
+    ) -> int | None:
+        """Return the latest winning observation behind a minority decision."""
+        if str(label) == "bicycle":
+            return self.competitive_support_snapshot(
+                track_id, frame_index, "bicycle", "motorcycle", competing_veto=None,
+            )[4]
+        if str(label) in HEAVY_CLASSES:
+            return self.four_wheel_support_snapshot(track_id, frame_index, label)[3]
+        return None
 
     def four_wheel_support(
         self, track_id: int, frame_index: int, label: str,
@@ -1052,9 +1082,39 @@ class TrackLabelSmoother:
     def __init__(self, history: int = 24) -> None:
         self.history = max(3, history)
         self._samples: dict[int, deque[tuple[str, float]]] = defaultdict(lambda: deque(maxlen=self.history))
+        self._source_frames: dict[int, deque[int | None]] = defaultdict(lambda: deque(maxlen=self.history))
 
-    def update(self, track_id: int, label: str, confidence: float) -> None:
-        self._samples[int(track_id)].append((str(label), float(confidence)))
+    def _store_timed_samples(
+        self, track_id: int, samples: list[tuple[int | None, str, float]],
+    ) -> None:
+        if all(frame is not None for frame, _label, _confidence in samples):
+            by_frame: dict[int, tuple[str, float]] = {}
+            for frame, label, confidence in samples:
+                previous = by_frame.get(int(frame))
+                if previous is None or float(confidence) > previous[1]:
+                    by_frame[int(frame)] = (str(label), float(confidence))
+            samples = [(frame, *opinion) for frame, opinion in sorted(by_frame.items())]
+        # Clockless callers retain the legacy append order and two-tuple ABI.
+        retained = samples[-self.history :]
+        self._samples[int(track_id)] = deque(
+            ((label, confidence) for _frame, label, confidence in retained), maxlen=self.history,
+        )
+        self._source_frames[int(track_id)] = deque(
+            (frame for frame, _label, _confidence in retained), maxlen=self.history,
+        )
+
+    def update(
+        self, track_id: int, label: str, confidence: float, frame_index: int | None = None,
+    ) -> None:
+        tid = int(track_id)
+        frames = list(self._source_frames.get(tid, ()))
+        samples = list(self._samples.get(tid, ()))
+        if len(frames) != len(samples):
+            frames = [None] * len(samples)
+        self._store_timed_samples(tid, [
+            *((frame, *opinion) for frame, opinion in zip(frames, samples)),
+            (None if frame_index is None else int(frame_index), str(label), float(confidence)),
+        ])
 
     def evidence(self, track_id: int) -> tuple[dict[str, float], dict[str, int]]:
         samples = self._samples.get(int(track_id))
@@ -1082,12 +1142,19 @@ class TrackLabelSmoother:
         if source == target:
             return
         source_samples = list(self._samples.pop(source, ()))
+        source_frames = list(self._source_frames.pop(source, ()))
         if not source_samples:
             return
-        merged = list(self._samples.get(target, ())) + source_samples
-        bucket = deque(maxlen=self.history)
-        bucket.extend(merged[-self.history :])
-        self._samples[target] = bucket
+        target_samples = list(self._samples.get(target, ()))
+        target_frames = list(self._source_frames.get(target, ()))
+        if len(source_frames) != len(source_samples):
+            source_frames = [None] * len(source_samples)
+        if len(target_frames) != len(target_samples):
+            target_frames = [None] * len(target_samples)
+        self._store_timed_samples(target, [
+            *((frame, *opinion) for frame, opinion in zip(target_frames, target_samples)),
+            *((frame, *opinion) for frame, opinion in zip(source_frames, source_samples)),
+        ])
 
 
 class VehicleClassPolicy:

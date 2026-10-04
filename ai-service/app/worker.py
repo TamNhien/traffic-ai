@@ -12,7 +12,7 @@ from typing import Callable
 import httpx2 as httpx
 
 from app.async_tasks import EventDispatcher, LatestFrameEncoder
-from app.benchmark_trace import trace_path
+from app.benchmark_trace import publish_closed_trace, trace_path
 from app.classification import (
     RefineCandidate,
     RefineEvidenceAccumulator,
@@ -109,6 +109,7 @@ class PipelineWorker(threading.Thread):
         self._class_refine_last_check: dict[int, int] = {}
         self._class_refine_last_observation: dict[int, tuple[int, tuple[str, float] | None]] = {}
         self._class_refine_consensus_proof: dict[int, tuple[int, tuple[str, float]]] = {}
+        self._class_refine_consensus_source_frame: dict[int, tuple[int, int]] = {}
         self._class_refine_overrides: dict[int, tuple[str, float, int]] = {}
         self._bicycle_class_rescue_tracks: set[int] = set()
         self._bicycle_context_rescue_tracks: set[int] = set()
@@ -602,7 +603,50 @@ class PipelineWorker(threading.Thread):
         if expired:
             self.state.human_guard_pending_drops += 1
 
-    def _expire_guard_crossings(self, counter: LineCrossingCounter, trace_file=None) -> None:
+    def _warn_benchmark_trace(self, stage: str, exc: Exception) -> None:
+        # Optional evidence must never replace a fatal inference/delivery error.
+        self.state.benchmark_trace_warning = (
+            getattr(self.state, "benchmark_trace_warning", None)
+            or f"Benchmark trace {stage} failed: {exc}"
+        )
+
+    def _write_benchmark_trace(self, trace_file, row: dict):
+        """Disable a failed optional writer without interrupting event dispatch."""
+        if trace_file is None:
+            return None
+        try:
+            trace_file.write(json.dumps(row, separators=(",", ":"), allow_nan=False) + "\n")
+            return trace_file
+        except Exception as exc:
+            self._warn_benchmark_trace("write", exc)
+            try:
+                trace_file.close()
+            except Exception:
+                pass
+            return None
+
+    def _close_and_publish_benchmark_trace(self, trace_file, *, publish: bool = True) -> None:
+        if trace_file is None:
+            return
+        try:
+            trace_file.close()
+        except Exception as exc:
+            self._warn_benchmark_trace("close", exc)
+            return
+        if not publish:
+            return
+        try:
+            artifact = publish_closed_trace(
+                self.payload.camera_id, self.payload.session_id, snapshot_root=self.snapshot_root,
+            )
+            if artifact is not None:
+                self.state.benchmark_trace_snapshot_path = artifact["path"]
+                self.state.benchmark_trace_snapshot_bytes = artifact["bytes"]
+                self.state.benchmark_trace_snapshot_method = artifact["method"]
+        except Exception as exc:
+            self._warn_benchmark_trace("publish", exc)
+
+    def _expire_guard_crossings(self, counter: LineCrossingCounter, trace_file=None) -> bool:
         """Persist EOF context status without inventing another analyzed frame."""
         audit_rows = []
         for pending in list(self._pending_guard_crossings.values()):
@@ -626,7 +670,9 @@ class PipelineWorker(threading.Thread):
             except Exception as exc:
                 # Trace I/O must not interrupt dispatcher/encoder shutdown or
                 # leave another provisional crossing unrevoked.
-                self.state.last_error = getattr(self.state, "last_error", None) or f"Benchmark trace shutdown failed: {exc}"
+                self._warn_benchmark_trace("shutdown", exc)
+                return False
+        return True
 
     def _refresh_truck_semantic_lock(
         self,
@@ -703,6 +749,7 @@ class PipelineWorker(threading.Thread):
             self._class_refine_last_check,
             self._class_refine_last_observation,
             self._class_refine_consensus_proof,
+            getattr(self, "_class_refine_consensus_source_frame", {}),
             self._class_refine_overrides,
         ):
             self._move_track_key(mapping, source, target)
@@ -736,11 +783,7 @@ class PipelineWorker(threading.Thread):
         label, confidence, observed_frame = entry
         if int(frame_index) < int(observed_frame):
             return None
-        ttl = self.class_override_ttl_frames
-        if str(label) == "bicycle":
-            ttl = self.bicycle_override_ttl_frames
-        elif vehicle_family(label) == "four-wheel":
-            ttl = self.heavy_override_ttl_frames
+        ttl = self._class_refinement_ttl(label)
         if int(frame_index) - int(observed_frame) > ttl:
             self._class_refine_overrides.pop(int(track_id), None)
             return None
@@ -748,6 +791,31 @@ class PipelineWorker(threading.Thread):
             self._class_refine_overrides.pop(int(track_id), None)
             return None
         return str(label), float(confidence)
+
+    def _class_refinement_ttl(self, label: str) -> int:
+        ttl = self.class_override_ttl_frames
+        if str(label) == "bicycle":
+            ttl = self.bicycle_override_ttl_frames
+        elif vehicle_family(label) == "four-wheel":
+            ttl = self.heavy_override_ttl_frames
+        return int(ttl)
+
+    def _class_consensus_source_frame_for(
+        self, track_id: int, frame_index: int, refined: tuple[str, float] | None,
+    ) -> int | None:
+        if refined is None or self._class_refine_consensus_proof.get(int(track_id)) != (int(frame_index), refined):
+            return None
+        clocks = getattr(self, "_class_refine_consensus_source_frame", {})
+        clock = clocks.get(int(track_id))
+        # Legacy certificates have the decision frame as their source.
+        # Production certificates always record both clocks independently.
+        source_frame = int(frame_index) if clock is None else int(clock[1])
+        if clock is not None and int(clock[0]) != int(frame_index):
+            return None
+        age = int(frame_index) - source_frame
+        if age < 0 or age > self._class_refinement_ttl(refined[0]):
+            return None
+        return source_frame
 
     def _remember_class_refinement(
         self,
@@ -768,7 +836,13 @@ class PipelineWorker(threading.Thread):
         if refined is None:
             return self._class_override_for(track_id, frame_index, base_display_label)
         proof = self._class_refine_consensus_proof.get(int(track_id))
+        source_frame = int(frame_index)
         if proof == (int(frame_index), refined):
+            source_frame = self._class_consensus_source_frame_for(track_id, frame_index, refined)
+            if source_frame is None:
+                return self._class_override_for(track_id, frame_index, base_display_label)
+            if existing is not None and int(source_frame) < int(existing[2]):
+                return self._class_override_for(track_id, frame_index, base_display_label)
             # A validated multi-frame consensus has already passed its own
             # competitive thresholds. Its fused score is not a one-shot score.
             resolved_label, resolved_conf = refined
@@ -791,7 +865,7 @@ class PipelineWorker(threading.Thread):
             resolved_label, resolved_conf = semantic_lock
 
         self._class_refine_overrides[int(track_id)] = (
-            str(resolved_label), float(resolved_conf), int(frame_index)
+            str(resolved_label), float(resolved_conf), int(source_frame)
         )
         if resolved_label == "bicycle" and base_display_label != "bicycle" and int(track_id) not in self._bicycle_class_rescue_tracks:
             self._bicycle_class_rescue_tracks.add(int(track_id))
@@ -805,6 +879,13 @@ class PipelineWorker(threading.Thread):
         self, track_id: int, frame_index: int, current_label: str, stable_label: str,
         certainty: float, hits: int, base_display_label: str, refined: tuple[str, float] | None,
     ) -> tuple[str, float]:
+        if (
+            refined is not None
+            and self._class_refine_consensus_proof.get(int(track_id)) == (int(frame_index), refined)
+            and self._class_consensus_source_frame_for(track_id, frame_index, refined) is None
+        ):
+            # Expired temporal evidence cannot become a fresh one-shot score.
+            refined = None
         # A fallback correction is an existing observation. Reading it at a
         # crossing must not reset its source clock or count another rescue.
         event_label, confidence = self._class_policy.final_label(
@@ -944,6 +1025,10 @@ class PipelineWorker(threading.Thread):
 
         self._class_refine_last_check[tid] = frame_idx
         self._class_refine_consensus_proof.pop(tid, None)
+        clocks = getattr(self, "_class_refine_consensus_source_frame", None)
+        if clocks is None:
+            clocks = self._class_refine_consensus_source_frame = {}
+        clocks.pop(tid, None)
         self.state.class_refine_checks += 1
         observations: list[tuple[str, float]] = []
         did_infer = False
@@ -991,7 +1076,20 @@ class PipelineWorker(threading.Thread):
             bicycle_single_source_strong=self.bicycle_consensus_single_source_strong,
         )
         if consensus is not None:
+            source_frame = self._refine_consensus.minority_consensus_source_frame(
+                tid, frame_idx, consensus[0],
+            )
+            if (
+                source_frame is None
+                or frame_idx - int(source_frame) > self._class_refinement_ttl(consensus[0])
+                or int(source_frame) > frame_idx
+            ):
+                # A competing current opinion does not renew old minority
+                # evidence. Leave the existing correction's clock unchanged.
+                self._class_refine_last_observation[tid] = (frame_idx, None)
+                return None, did_infer
             self._class_refine_consensus_proof[tid] = (frame_idx, consensus)
+            clocks[tid] = (frame_idx, int(source_frame))
             if consensus[0] != str(target_label) and tid not in self._class_consensus_rescue_tracks:
                 self._class_consensus_rescue_tracks.add(tid)
                 self.state.class_consensus_rescues += 1
@@ -1067,9 +1165,18 @@ class PipelineWorker(threading.Thread):
                 self.state.source_duration_seconds = round(source_frame_count / source_fps, 3)
             self.state.frame_policy = "all-frames" if self.payload.source_type == "video" else "live-latest"
             if self.payload.source_type == "video" and self.benchmark_trace_enabled:
-                path = trace_path(self.payload.session_id)
-                path.parent.mkdir(parents=True, exist_ok=True)
-                trace_file = path.open("w", encoding="utf-8", buffering=1)
+                try:
+                    path = trace_path(self.payload.session_id)
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    trace_file = path.open("w", encoding="utf-8", buffering=1)
+                except Exception as exc:
+                    self._warn_benchmark_trace("open", exc)
+                trace_file = self._write_benchmark_trace(trace_file, {
+                    "kind": "session_metadata", "audit_only": True,
+                    "camera_id": self.payload.camera_id, "session_id": self.payload.session_id,
+                    "source_fps": self.state.source_fps, "source_frame_count": source_frame_count,
+                    "frame_policy": self.state.frame_policy,
+                })
             self.state.status = "warming"
 
             # Prime MJPEG immediately with a raw source frame so switching to
@@ -1381,9 +1488,8 @@ class PipelineWorker(threading.Thread):
                         velocity = self._continuity.velocity_for(track_id)
                         family_hint = vehicle_family(current_label)
                         anchor_inset = self.heavy_anchor_inset_ratio if family_hint == "four-wheel" else 0.0
-                        anchor = motion_leading_anchor(
-                            rect, self._continuity.anchor_velocity_for(track_id), inset_ratio=anchor_inset
-                        )
+                        anchor_velocity = self._continuity.anchor_velocity_for(track_id)
+                        anchor = motion_leading_anchor(rect, anchor_velocity, inset_ratio=anchor_inset)
                         if anchor_inset > 0.0 and int(track_id) not in self._heavy_anchor_tracks:
                             self._heavy_anchor_tracks.add(int(track_id))
                             self.state.heavy_anchor_tracks = len(self._heavy_anchor_tracks)
@@ -1393,7 +1499,7 @@ class PipelineWorker(threading.Thread):
                         self._seen_track_ids.add(track_id)
                         active_track_ids_this_frame.add(int(track_id))
                         self._flow_calibrator.add(track_id, anchor, width, height, frame_index)
-                        self._labels.update(track_id, current_label, confidence_f)
+                        self._labels.update(track_id, current_label, confidence_f, frame_index=frame_index)
                         stable_label, class_certainty, class_hits = self._labels.stable_label(track_id, current_label)
                         base_display_label = self._class_policy.display_label(
                             current_label, stable_label, class_certainty, class_hits, confidence_f
@@ -1454,6 +1560,12 @@ class PipelineWorker(threading.Thread):
                         center_signed = signed_distance(center, line_a, line_b) / max(1.0, min(width, height))
                         gate_trace_track = {
                             "track_id": int(track_id), "label": str(display_label),
+                            "raw_track_id": int(raw_track_id), "stitched": bool(stitched),
+                            "rect": [round(float(value), 3) for value in rect],
+                            "anchor": [round(float(value), 3) for value in anchor],
+                            "center": [round(float(value), 3) for value in center],
+                            "measured_velocity": [round(float(value), 6) for value in velocity],
+                            "anchor_velocity": [round(float(value), 6) for value in anchor_velocity],
                             "anchor_signed": round(float(anchor_signed), 6),
                             "center_signed": round(float(center_signed), 6),
                             "human_guard_status": self._human_guard_policy.status(track_id),
@@ -1898,7 +2010,9 @@ class PipelineWorker(threading.Thread):
                 self._draw_overlay(cv2, frame, counter)
                 if trace_file is not None:
                     source_time = ((frame_index - 1) / self.state.source_fps) if self.state.source_fps > 0 else 0.0
-                    trace_file.write(json.dumps({
+                    trace_file = self._write_benchmark_trace(trace_file, {
+                        "camera_id": self.payload.camera_id,
+                        "session_id": self.payload.session_id,
                         "frame_index": frame_index,
                         "source_time_seconds": round(source_time, 4),
                         "detections": self.state.detections_current_frame,
@@ -1972,7 +2086,7 @@ class PipelineWorker(threading.Thread):
                         "human_guard_pending_crossings": self.state.human_guard_pending_crossings,
                         "human_guard_deferred_commits": self.state.human_guard_deferred_commits,
                         "human_guard_pending_drops": self.state.human_guard_pending_drops,
-                    }, separators=(",", ":")) + "\n")
+                    })
                 if pending_crossing_events:
                     snapshot = self._save_crossing_snapshot(cv2, frame, frame_index)
                     for event_track_id, event_label, event_direction, event_confidence, event_frame_index, event_source_time, event_method, event_crossing_x, event_crossing_y in pending_crossing_events:
@@ -2015,13 +2129,10 @@ class PipelineWorker(threading.Thread):
             # No ambiguous two-wheel crossing may leak into persistence at
             # shutdown. If the source ended before a second semantic frame,
             # revoke the provisional geometry crossing and record a timeout drop.
+            trace_usable = True
             if counter is not None and self._pending_guard_crossings:
-                self._expire_guard_crossings(counter, trace_file)
-            if trace_file is not None:
-                try:
-                    trace_file.close()
-                except Exception:
-                    pass
+                trace_usable = self._expire_guard_crossings(counter, trace_file)
+            self._close_and_publish_benchmark_trace(trace_file, publish=trace_usable)
             if cap is not None:
                 cap.release()
             try:

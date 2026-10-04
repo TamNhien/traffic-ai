@@ -1,4 +1,4 @@
-from app.classification import TrackLabelSmoother, VehicleClassPolicy
+from app.classification import RefineEvidenceAccumulator, TrackLabelSmoother, TruckSemanticLock, VehicleClassPolicy
 
 
 def test_track_label_smoothing_resists_one_frame_bus_truck_flip() -> None:
@@ -1120,3 +1120,85 @@ def test_v0557_future_refiner_score_cannot_inflate_valid_primary_truck_confidenc
     ) == ("truck", .90)
     assert lock.resolve(7, 130, "car") == ("truck", .90)
     assert lock.resolve(7, 131, "car") is None
+
+
+def test_v0558_bicycle_consensus_clock_tracks_only_eligible_winning_frames() -> None:
+    evidence = RefineEvidenceAccumulator(history_frames=120)
+    evidence.update(7, 100, "bicycle", .90, "domain")
+    evidence.update(7, 110, "bicycle", .80, "general")
+    evidence.update(7, 120, "bicycle", .30, "domain")
+    evidence.update(7, 120, "motorcycle", .40, "general")
+    evidence.update(7, 130, "bicycle", .50, "domain")
+    evidence.update(7, 130, "motorcycle", .50, "general")
+    evidence.update(7, 141, "bicycle", .99, "general")
+    evidence.update(7, 10, "bicycle", .99, "domain")
+    assert evidence.minority_consensus_source_frame(7, 140, "bicycle") == 110
+    assert evidence.minority_consensus_source_frame(7, 231, "bicycle") == 141
+    assert evidence.minority_consensus_source_frame(7, 262, "bicycle") is None
+
+
+def test_v0558_four_wheel_consensus_clock_does_not_use_current_losing_truck_opinion() -> None:
+    evidence = RefineEvidenceAccumulator()
+    for frame in (100, 110):
+        evidence.update(7, frame, "truck", .90, "domain")
+    evidence.update(7, 120, "truck", .10, "domain")
+    evidence.update(7, 120, "car", .20, "general")
+    assert evidence.minority_consensus_source_frame(7, 120, "truck") == 110
+
+
+def test_v0558_old_alias_labels_cannot_replace_newer_canonical_car_history() -> None:
+    smoother = TrackLabelSmoother(history=24)
+    for frame in range(25, 49):
+        smoother.update(7, "truck", .90, frame_index=frame)
+    for frame in range(77, 101):
+        smoother.update(8, "car", .90, frame_index=frame)
+    smoother.merge_track(7, 8)
+    smoother.update(8, "car", .90, frame_index=101)
+    assert smoother.stable_label(8, "car") == ("car", 1.0, 24)
+    label, certainty, hits = smoother.stable_label(8, "car")
+    assert TruckSemanticLock().observe(8, 101, stable_label=label, certainty=certainty, hits=hits) is None
+
+
+def test_v0558_newer_alias_truck_history_keeps_its_actual_recent_position() -> None:
+    smoother = TrackLabelSmoother(history=24)
+    for frame in range(25, 49):
+        smoother.update(8, "car", .90, frame_index=frame)
+    for frame in range(77, 101):
+        smoother.update(7, "truck", .90, frame_index=frame)
+    smoother.merge_track(7, 8)
+    assert smoother.stable_label(8, "car") == ("truck", 1.0, 24)
+
+
+def test_v0558_same_frame_alias_votes_do_not_inflate_temporal_hits() -> None:
+    smoother = TrackLabelSmoother(history=24)
+    for frame in range(100, 110):
+        smoother.update(7, "car", .70, frame_index=frame)
+        smoother.update(8, "car", .90, frame_index=frame)
+    smoother.merge_track(7, 8)
+    assert smoother.stable_label(8, "truck") == ("car", 1.0, 10)
+
+
+def test_v0558_same_frame_alias_competition_keeps_strongest_actual_opinion() -> None:
+    smoother = TrackLabelSmoother(history=24)
+    for frame in range(100, 110):
+        smoother.update(7, "car", .90, frame_index=frame)
+        smoother.update(8, "truck", .60, frame_index=frame)
+    smoother.merge_track(7, 8)
+    assert smoother.stable_label(8, "truck") == ("car", 1.0, 10)
+
+
+def test_v0558_delayed_label_observation_retains_source_chronology() -> None:
+    smoother = TrackLabelSmoother(history=3)
+    smoother.update(7, "car", .90, frame_index=200)
+    smoother.update(7, "truck", .90, frame_index=100)
+    assert smoother.stable_label(7, "truck")[0] == "car"
+
+
+def test_v0558_clockless_label_callers_keep_legacy_two_tuple_history() -> None:
+    smoother = TrackLabelSmoother(history=3)
+    smoother.update(7, "truck", .90)
+    smoother.update(8, "car", .80)
+    smoother.merge_track(7, 8)
+    assert list(smoother._samples[8]) == [("car", .80), ("truck", .90)]
+    smoother.update(8, "car", .90, frame_index=200)
+    assert list(smoother._samples[8]) == [("car", .80), ("truck", .90), ("car", .90)]

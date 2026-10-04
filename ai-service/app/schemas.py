@@ -1,3 +1,5 @@
+from typing import Annotated
+
 from pydantic import BaseModel, Field, model_validator
 
 
@@ -86,8 +88,8 @@ class AnnotationSaveRequest(BaseModel):
 
 
 class BenchmarkTraceDiagnoseRequest(BaseModel):
-    times: list[float] = Field(default_factory=list, max_length=5000)
-    window_seconds: float = Field(default=0.60, ge=0.05, le=2.0)
+    times: list[Annotated[float, Field(allow_inf_nan=False)]] = Field(default_factory=list, max_length=5000)
+    window_seconds: float = Field(default=0.60, ge=0.05, le=2.0, allow_inf_nan=False)
     tracking_ids: list[int | None] | None = Field(default=None, max_length=5000)
 
     @model_validator(mode="after")

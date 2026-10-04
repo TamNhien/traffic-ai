@@ -20,7 +20,7 @@ def test_root_metadata() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["name"] == "Traffic AI"
-    assert payload["version"] == "0.5.57"
+    assert payload["version"] == "0.5.58"
     assert payload["docs"] == "/docs"
     assert payload["health"] == "/api/health"
 
@@ -158,7 +158,7 @@ def test_benchmark_clone_compatibility_rejects_different_line() -> None:
 
 
 def test_backend_version_metadata() -> None:
-    assert app.version == "0.5.57"
+    assert app.version == "0.5.58"
 
 
 def test_v0531_startup_crossing_signature_guard_is_narrow() -> None:
@@ -179,7 +179,7 @@ def test_v0533_ground_truth_mark_update_schema() -> None:
 
 
 def test_v0533_version() -> None:
-    assert app.version == "0.5.57"
+    assert app.version == "0.5.58"
 
 
 def test_v0533_ground_truth_mark_update_keeps_timecode() -> None:
@@ -1234,3 +1234,95 @@ def test_v0556_export_trace_transport_handles_oversized_missing_and_empty_source
         assert payload == (b"12345" if reason == "available" else None)
     assert all(request[0] == "GET" and request[1].endswith("/benchmark-traces/9/download") for request in requests)
     assert all(request[2] == {"timeout": 8.0, "follow_redirects": False} for request in requests)
+
+
+def test_v0558_numeric_event_clock_rejects_nonfinite_source_seconds() -> None:
+    import pytest
+    from pydantic import ValidationError
+    from app.schemas.event import VehicleEventCreate
+
+    for source_time in (float("nan"), float("inf"), float("-inf")):
+        with pytest.raises(ValidationError):
+            VehicleEventCreate(camera_id=1, vehicle_type="motorcycle", confidence=0.8,
+                               source_time_seconds=source_time)
+
+
+def test_v0558_numeric_event_clock_preserves_optional_and_finite_inputs() -> None:
+    import pytest
+    from pydantic import ValidationError
+    from app.schemas.event import VehicleEventCreate
+
+    base = dict(camera_id=1, vehicle_type="motorcycle", confidence=0.8)
+    assert VehicleEventCreate(**base).source_time_seconds is None
+    for source_time in (None, 0.0, 10.6203):
+        assert VehicleEventCreate(**base, source_time_seconds=source_time).source_time_seconds == source_time
+    with pytest.raises(ValidationError):
+        VehicleEventCreate(**base, source_time_seconds=-0.01)
+
+
+def test_v0558_numeric_ground_truth_clock_rejects_nonfinite_inputs() -> None:
+    import pytest
+    from pydantic import ValidationError
+    from app.api.routes import GroundTruthMarkCreate
+
+    for source_time in (float("nan"), float("inf"), float("-inf")):
+        with pytest.raises(ValidationError):
+            GroundTruthMarkCreate(source_time_seconds=source_time)
+
+
+def test_v0558_numeric_ground_truth_clock_keeps_finite_clamp_compatibility() -> None:
+    from app.api.routes import GroundTruthMarkCreate
+
+    # Finite negative values remain accepted here: the existing mark route owns
+    # the clamp to zero before computing the source-frame index.
+    for source_time in (-1.0, 0.0, 641.981):
+        mark = GroundTruthMarkCreate(source_time_seconds=source_time)
+        assert mark.source_time_seconds == source_time
+        assert mark.vehicle_type.value == "motorcycle"
+        assert mark.direction.value == "unknown"
+
+
+def test_v0558_numeric_session_finish_rejects_nonfinite_source_metadata() -> None:
+    import pytest
+    from pydantic import ValidationError
+    from app.api.routes import SessionFinish
+
+    for field in ("average_fps", "source_fps", "source_duration_seconds"):
+        for value in (float("nan"), float("inf"), float("-inf")):
+            with pytest.raises(ValidationError):
+                SessionFinish(status="completed", **{field: value})
+
+
+def test_v0558_numeric_session_finish_keeps_optional_and_finite_metadata() -> None:
+    from app.api.routes import SessionFinish
+
+    omitted = SessionFinish(status="completed")
+    assert omitted.average_fps is None
+    assert omitted.source_fps is None
+    assert omitted.source_duration_seconds is None
+    for field in ("average_fps", "source_fps", "source_duration_seconds"):
+        for value in (None, -1.0, 0.0, 25.0, 946.0):
+            assert getattr(SessionFinish(status="completed", **{field: value}), field) == value
+
+
+def test_v0558_numeric_benchmark_tolerance_rejects_nonfinite_inputs() -> None:
+    import pytest
+    from pydantic import ValidationError
+    from app.api.routes import BenchmarkCreate, BenchmarkUpdate
+
+    for tolerance in (float("nan"), float("inf"), float("-inf")):
+        with pytest.raises(ValidationError):
+            BenchmarkCreate(session_id=1, tolerance_seconds=tolerance)
+        with pytest.raises(ValidationError):
+            BenchmarkUpdate(tolerance_seconds=tolerance)
+
+
+def test_v0558_numeric_benchmark_tolerance_keeps_finite_route_clamp_inputs() -> None:
+    from app.api.routes import BenchmarkCreate, BenchmarkUpdate
+
+    assert BenchmarkCreate(session_id=1).tolerance_seconds == 0.75
+    # Preserve finite out-of-range inputs for the existing route's 0.05–3.0
+    # clamp; the API's scoring window does not change in this upgrade.
+    for tolerance in (-1.0, 0.0, 0.05, 0.75, 3.0, 4.0):
+        assert BenchmarkCreate(session_id=1, tolerance_seconds=tolerance).tolerance_seconds == tolerance
+        assert BenchmarkUpdate(tolerance_seconds=tolerance).tolerance_seconds == tolerance

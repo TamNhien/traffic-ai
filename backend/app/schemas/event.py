@@ -16,7 +16,7 @@ class VehicleEventCreate(BaseModel):
     detected_at: datetime | None = None
     snapshot_path: str | None = None
     source_frame_index: int | None = Field(default=None, ge=0)
-    source_time_seconds: float | None = Field(default=None, ge=0.0)
+    source_time_seconds: float | None = Field(default=None, ge=0.0, allow_inf_nan=False)
     crossing_method: str | None = None
     crossing_x: float | None = Field(default=None, ge=0.0, le=1.0)
     crossing_y: float | None = Field(default=None, ge=0.0, le=1.0)

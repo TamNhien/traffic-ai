@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from pathlib import Path
 from typing import Iterable
+from uuid import uuid4
 
 SNAPSHOT_ROOT = Path(os.getenv("SNAPSHOT_DIR", "/tmp/traffic-ai-snapshots"))
 TRACE_ROOT = SNAPSHOT_ROOT / "benchmark-traces"
@@ -11,6 +13,39 @@ TRACE_ROOT = SNAPSHOT_ROOT / "benchmark-traces"
 
 def trace_path(session_id: int) -> Path:
     return TRACE_ROOT / f"session_{int(session_id)}.jsonl"
+
+
+def publish_closed_trace(camera_id: int, session_id: int, *, snapshot_root: Path) -> dict | None:
+    """Expose a successfully closed canonical trace beside this session's JPGs.
+
+    The worker calls this only after the sole writer closes successfully. An
+    atomic hardlink shares those exact bytes without a second writer or copy;
+    filesystems without hardlinks receive one atomic copy of the closed file.
+    """
+    source = trace_path(session_id)
+    if not source.is_file():
+        return None
+    folder = Path(snapshot_root) / f"camera_{int(camera_id)}"
+    folder.mkdir(parents=True, exist_ok=True)
+    filename = f"session_{int(session_id)}_benchmark-trace.jsonl"
+    target = folder / filename
+    temporary = folder / f".{filename}.{uuid4().hex}.tmp"
+    method = "hardlink"
+    try:
+        try:
+            os.link(source, temporary)
+        except OSError:
+            method = "copy"
+            shutil.copyfile(source, temporary)
+        size = temporary.stat().st_size
+        os.replace(temporary, target)
+        return {
+            "path": target.relative_to(snapshot_root).as_posix(),
+            "bytes": size,
+            "method": method,
+        }
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _context_decision_key(audit: dict) -> tuple[int, int] | None:

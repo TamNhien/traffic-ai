@@ -323,12 +323,12 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.57") { throw "VERSION phải là 0.5.57, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0071_anchor_lifecycle_v0557.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0071_anchor_lifecycle_v0557.py." }
+  if ($version -ne "0.5.58") { throw "VERSION phải là 0.5.58, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0072_trace_lifecycle_v0558.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0072_trace_lifecycle_v0558.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0071_anchor_lifecycle_v0557"' -or $migrationText -notmatch 'down_revision = "0070_benchmark_evidence_v0556"' -or $migrationText -notmatch "value='0.5.57'") {
-    throw "Migration 0071_anchor_lifecycle_v0557 không đúng contract V0.5.57."
+  if ($migrationText -notmatch 'revision = "0072_trace_lifecycle_v0558"' -or $migrationText -notmatch 'down_revision = "0071_anchor_lifecycle_v0557"' -or $migrationText -notmatch "value='0.5.58'") {
+    throw "Migration 0072_trace_lifecycle_v0558 không đúng contract V0.5.58."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
@@ -1731,6 +1731,33 @@ function Assert-AnchorLifecycleV0557Contract {
   Write-Host "[OK] Anchor Lifecycle + Evidence Provenance V0.5.57" -ForegroundColor Green
 }
 
+function Assert-TraceLifecycleV0558Contract {
+  Write-Host "`n[Traffic AI] Trace Lifecycle + Source Evidence V0.5.58" -ForegroundColor Cyan
+  $tracking = Get-Content (Join-Path $root "ai-service\app\tracking.py") -Raw -Encoding UTF8
+  $worker = Get-Content (Join-Path $root "ai-service\app\worker.py") -Raw -Encoding UTF8
+  $classification = Get-Content (Join-Path $root "ai-service\app\classification.py") -Raw -Encoding UTF8
+  $trace = Get-Content (Join-Path $root "ai-service\app\benchmark_trace.py") -Raw -Encoding UTF8
+  $runtime = Get-Content (Join-Path $root "ai-service\app\runtime.py") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  $routes = Get-Content (Join-Path $root "backend\app\api\routes.py") -Raw -Encoding UTF8
+  $event = Get-Content (Join-Path $root "backend\app\schemas\event.py") -Raw -Encoding UTF8
+  $schemas = Get-Content (Join-Path $root "ai-service\app\schemas.py") -Raw -Encoding UTF8
+  if ($tracking -notmatch '_anchor_reversals' -or $tracking -notmatch 'observations >= 2 and reverse_travel >= 1.5' -or $tracking -notmatch 'frame_index <= previous.frame_index') { throw "V0.5.58 thiếu chứng cứ đảo chiều chậm hoặc chặn clock cũ." }
+  if ($classification -notmatch 'def minority_consensus_source_frame' -or $classification -notmatch 'def _store_timed_samples' -or $worker -notmatch '_class_consensus_source_frame_for' -or $worker -notmatch '_labels.update\(track_id, current_label, confidence_f, frame_index=frame_index\)') { throw "V0.5.58 thiếu source clock consensus hoặc thứ tự lịch sử nhãn." }
+  if ($worker -notmatch 'def _write_benchmark_trace' -or $worker -notmatch 'def _close_and_publish_benchmark_trace' -or $runtime -notmatch 'benchmark_trace_warning' -or $runtime -notmatch 'benchmark_trace_snapshot_path') { throw "V0.5.58 thiếu trace lifecycle không chặn event." }
+  if ($trace -notmatch 'def publish_closed_trace' -or $trace -notmatch 'os.link' -or $trace -notmatch 'os.replace' -or $trace -notmatch 'shutil.copyfile') { throw "V0.5.58 thiếu công bố trace nguyên tử cùng ảnh camera." }
+  foreach ($key in @('rect', 'anchor', 'center', 'raw_track_id', 'measured_velocity', 'anchor_velocity', 'stitched')) {
+    if ($worker -notmatch ('"' + $key + '"')) { throw "V0.5.58 thiếu geometry trace: $key." }
+  }
+  if ($routes -notmatch 'allow_inf_nan=False' -or $event -notmatch 'allow_inf_nan=False' -or $schemas -notmatch 'allow_inf_nan=False') { throw "V0.5.58 thiếu validation số hữu hạn." }
+  if ($frontend -notmatch 'loadedSelectionRef' -or $frontend -notmatch 'expectedSelection === selectionRef.current' -or $frontend -notmatch 'const currentBoxes = currentAnnotation' -or $frontend -notmatch 'benchmark_trace_warning') { throw "V0.5.58 thiếu chặn annotation cũ hoặc cảnh báo trace." }
+  foreach ($relative in @("ai-service\tests\test_tracking.py", "ai-service\tests\test_classification.py", "ai-service\tests\test_worker_context.py", "ai-service\tests\test_guard_transaction.py", "ai-service\tests\test_benchmark_trace.py", "ai-service\tests\test_v0541_benchmark_trace.py", "backend\tests\test_app.py")) {
+    $text = Get-Content (Join-Path $root $relative) -Raw -Encoding UTF8
+    if ($text -notmatch 'def test_v0558_') { throw "V0.5.58 thiếu regression trong $relative." }
+  }
+  Write-Host "[OK] Trace Lifecycle + Source Evidence V0.5.58" -ForegroundColor Green
+}
+
 function Invoke-Step([string]$Title, [scriptblock]$Action) {
   Write-Host "`n[Traffic AI] $Title" -ForegroundColor Cyan
   & $Action
@@ -1804,6 +1831,7 @@ Assert-GateSemanticsV0554Contract
 Assert-RefineAdmissionV0555Contract
 Assert-BenchmarkEvidenceV0556Contract
 Assert-AnchorLifecycleV0557Contract
+Assert-TraceLifecycleV0558Contract
 Assert-LegacySemanticCompatibilityV0523R1
 
 Write-Host "`n[Traffic AI] Road Zone + Frame Browser V0.5.11" -ForegroundColor Cyan

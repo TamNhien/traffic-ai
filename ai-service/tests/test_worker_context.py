@@ -976,3 +976,146 @@ def test_v0557_consensus_proof_cannot_cross_vehicle_family() -> None:
         7, 130, "car", "car", .99, 20, "car", ("bicycle", .83),
     ) is None
     assert worker._class_refine_overrides == {}
+
+
+def _v0558_historical_bicycle_worker(confidence=.99):
+    worker = _v0557_consensus_worker()
+    worker._refine_consensus = RefineEvidenceAccumulator()
+    worker._class_refine_consensus_source_frame = {}
+    for frame, source in ((100, "domain"), (110, "general"), (120, "domain"), (130, "general")):
+        worker._refine_consensus.update(7, frame, "bicycle", confidence, source)
+    worker._refine_crossing_label = lambda *_args, **_kwargs: ("motorcycle", .10)
+    return worker
+
+
+def test_v0558_expired_bicycle_consensus_cannot_restart_override_or_rescue() -> None:
+    worker = _v0558_historical_bicycle_worker()
+    worker._class_refine_overrides[7] = ("bicycle", .99, 130)
+    refined, inferred = worker._observe_class_refiner(
+        7, 200, object(), object(), "motorcycle", "cpu", False, force=True,
+    )
+    assert inferred and refined is None
+    assert worker._class_refine_overrides[7] == ("bicycle", .99, 130)
+    assert worker._class_refine_consensus_proof == {}
+    assert worker.state.class_consensus_rescues == 0
+    assert worker._resolve_crossing_class_refinement(
+        7, 200, "motorcycle", "motorcycle", .99, 20, "motorcycle", refined,
+    )[0] == "motorcycle"
+    assert worker.state.bicycle_class_rescues == 0
+
+
+def test_v0558_eligible_historical_consensus_keeps_last_winning_source_deadline() -> None:
+    worker = _v0558_historical_bicycle_worker(.50)
+    refined, inferred = worker._observe_class_refiner(
+        7, 140, object(), object(), "motorcycle", "cpu", False, force=True,
+    )
+    assert inferred and refined is not None and refined[0] == "bicycle"
+    assert .78 <= refined[1] < .90
+    assert worker._resolve_crossing_class_refinement(
+        7, 140, "motorcycle", "motorcycle", .99, 20, "motorcycle", refined,
+    )[0] == "bicycle"
+    assert worker._class_refine_overrides[7][2] == 130
+    assert worker._class_override_for(7, 190, "motorcycle")[0] == "bicycle"
+    assert worker._class_override_for(7, 191, "motorcycle") is None
+
+
+def test_v0558_current_losing_bicycle_opinion_cannot_renew_consensus_clock() -> None:
+    worker = _v0558_historical_bicycle_worker()
+    worker._refine_crossing_label = lambda *_args, **kwargs: (
+        ("bicycle", .30) if kwargs["model"] is worker._refiner_model else ("motorcycle", .40)
+    )
+    refined, _inferred = worker._observe_class_refiner(
+        7, 140, object(), object(), "motorcycle", "cpu", False, force=True,
+    )
+    assert refined is not None and refined[0] == "bicycle"
+    worker._remember_class_refinement(7, 140, "motorcycle", "motorcycle", .99, 20, "motorcycle", refined)
+    assert worker._class_refine_overrides[7][2] == 130
+
+
+def test_v0558_new_winning_bicycle_opinion_can_renew_expired_history() -> None:
+    worker = _v0558_historical_bicycle_worker()
+    worker._refine_crossing_label = lambda *_args, **kwargs: (
+        ("bicycle", .99) if kwargs["model"] is worker._refiner_model else ("motorcycle", .10)
+    )
+    refined, inferred = worker._observe_class_refiner(
+        7, 200, object(), object(), "motorcycle", "cpu", False, force=True,
+    )
+    assert inferred and refined is not None and refined[0] == "bicycle"
+    assert worker._resolve_crossing_class_refinement(
+        7, 200, "motorcycle", "motorcycle", .99, 20, "motorcycle", refined,
+    )[0] == "bicycle"
+    assert worker._class_refine_overrides[7][2] == 200
+    assert worker._class_override_for(7, 260, "motorcycle")[0] == "bicycle"
+    assert worker._class_override_for(7, 261, "motorcycle") is None
+
+
+def test_v0558_expired_truck_consensus_obeys_configured_override_lifetime() -> None:
+    worker = _class_worker()
+    worker.heavy_override_ttl_frames = 30
+    for frame, source in ((90, "domain"), (95, "general")):
+        worker._refine_consensus.update(7, frame, "truck", .50, source)
+    worker._refine_crossing_label = lambda *_args, **_kwargs: ("car", .10)
+    refined, inferred = worker._observe_class_refiner(
+        7, 140, object(), object(), "car", "cpu", False, force=True,
+    )
+    assert inferred and refined is None
+    assert worker._resolve_crossing_class_refinement(
+        7, 140, "car", "car", .99, 20, "car", refined,
+    )[0] == "car"
+    assert worker.state.class_consensus_rescues == 0
+    assert worker._class_refine_overrides == {}
+
+
+def test_v0558_expired_certificate_cannot_fall_through_as_high_one_shot_score() -> None:
+    worker = _class_worker()
+    worker._class_refine_consensus_proof[7] = (200, ("bicycle", .95))
+    worker._class_refine_consensus_source_frame = {7: (200, 130)}
+    assert worker._resolve_crossing_class_refinement(
+        7, 200, "motorcycle", "motorcycle", .99, 20, "motorcycle", ("bicycle", .95),
+    )[0] == "motorcycle"
+    assert worker._class_refine_overrides == {}
+    assert worker.state.bicycle_class_rescues == 0
+
+
+def test_v0558_ordinary_high_one_shot_refinement_keeps_current_source_clock() -> None:
+    worker = _class_worker()
+    assert worker._resolve_crossing_class_refinement(
+        7, 200, "motorcycle", "motorcycle", .99, 20, "motorcycle", ("bicycle", .95),
+    )[0] == "bicycle"
+    assert worker._class_refine_overrides[7] == ("bicycle", .99, 200)
+
+
+def test_v0558_older_consensus_source_cannot_replace_newer_class_override() -> None:
+    worker = _class_worker()
+    worker._class_refine_overrides[7] = ("motorcycle", .99, 150)
+    worker._class_refine_consensus_proof[7] = (160, ("bicycle", .95))
+    worker._class_refine_consensus_source_frame = {7: (160, 130)}
+    assert worker._remember_class_refinement(
+        7, 160, "motorcycle", "motorcycle", .99, 20, "motorcycle", ("bicycle", .95),
+    ) == ("motorcycle", .99)
+    assert worker._class_refine_overrides[7] == ("motorcycle", .99, 150)
+
+
+def test_v0558_canonical_merge_carries_consensus_source_clock_with_decision_proof() -> None:
+    worker = _class_worker()
+    worker._class_refine_consensus_proof = {7: (150, ("truck", .83)), 8: (140, ("bus", .81))}
+    worker._class_refine_consensus_source_frame = {7: (150, 130), 8: (140, 135)}
+    worker._labels = SimpleNamespace(merge_track=lambda *_args: None)
+    for name in (
+        "_seen_track_ids", "_truck_crossing_tracks", "_bicycle_tracks_seen",
+        "_heavy_anchor_tracks", "_heavy_center_rescue_tracks",
+    ):
+        setattr(worker, name, set())
+    worker._merge_canonical_track_state(7, 8, SimpleNamespace(merge_track=lambda *_args: None), None)
+    assert worker._class_refine_consensus_proof[8] == (150, ("truck", .83))
+    assert worker._class_refine_consensus_source_frame == {8: (150, 130)}
+
+
+def test_v0558_future_consensus_source_cannot_create_current_correction() -> None:
+    worker = _class_worker()
+    worker._class_refine_consensus_proof[7] = (200, ("bicycle", .95))
+    worker._class_refine_consensus_source_frame = {7: (200, 201)}
+    assert worker._resolve_crossing_class_refinement(
+        7, 200, "motorcycle", "motorcycle", .99, 20, "motorcycle", ("bicycle", .95),
+    )[0] == "motorcycle"
+    assert worker._class_refine_overrides == {}

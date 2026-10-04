@@ -33,6 +33,11 @@ def _worker() -> PipelineWorker:
         human_guard_deferred_commits=0,
         human_guard_pending_crossings=1,
         human_guard_pending_drops=0,
+        benchmark_trace_warning=None,
+        benchmark_trace_snapshot_path=None,
+        benchmark_trace_snapshot_bytes=0,
+        benchmark_trace_snapshot_method=None,
+        last_error=None,
     )
     worker._committed_in_count = 0
     worker._committed_out_count = 0
@@ -393,10 +398,11 @@ def test_v0554_eof_trace_io_failure_still_revokes_every_pending_passage() -> Non
     assert worker._pending_guard_crossings == {}
     assert worker.state.total_count == 0
     assert worker._event_dispatcher.payloads == []
-    assert worker.state.last_error == "Benchmark trace shutdown failed: trace storage unavailable"
+    assert worker.state.benchmark_trace_warning == "Benchmark trace shutdown failed: trace storage unavailable"
+    assert worker.state.last_error is None
 
 
-def _execute_guard_frame(worker, frame_index, *, active=True):
+def _execute_guard_frame(worker, frame_index, *, active=True, velocity=(0, 2), anchor_velocity=(0, 2), stitched=False, raw_track_id=77):
     """Execute actual per-frame expiry and tracked follow-up in source order.
 
     Compiling these source blocks avoids importing inference/HTTP dependencies,
@@ -452,8 +458,9 @@ def _execute_guard_frame(worker, frame_index, *, active=True):
         "self": worker, "counter": _Counter(), "frame_index": frame_index,
         "track_id": 77, "confidence_f": .82, "display_label": "motorcycle",
         "analysis_frame": object(), "frame": object(), "rect": (40, 45, 60, 65), "anchor": (50, 65),
-        "center": (50, 55), "class_certainty": .9, "raw_track_id": 77,
-        "device": "cpu", "use_half": False, "velocity": (0, 2), "cv2": object(),
+        "center": (50, 55), "class_certainty": .9, "raw_track_id": raw_track_id,
+        "device": "cpu", "use_half": False, "velocity": velocity,
+        "anchor_velocity": anchor_velocity, "stitched": stitched, "cv2": object(),
         "line_a": (10, 50), "line_b": (90, 50), "width": 100, "height": 100,
         "gate_trace_tracks": [], "signed_distance": signed_distance,
         "TWO_WHEEL_LABELS": {"bicycle", "motorcycle"},
@@ -531,6 +538,9 @@ def test_v0556_pending_guard_trace_keeps_visible_geometry_without_committing() -
     assert tracks == [{
         "track_id": 77, "label": "motorcycle", "anchor_signed": .15,
         "center_signed": .05, "human_guard_status": "pending",
+        "raw_track_id": 77, "stitched": False, "rect": [40.0, 45.0, 60.0, 65.0],
+        "anchor": [50.0, 65.0], "center": [50.0, 55.0],
+        "measured_velocity": [0.0, 2.0], "anchor_velocity": [0.0, 2.0],
     }]
     assert worker.state.total_count == 0
     assert worker._event_dispatcher.payloads == []
@@ -731,3 +741,263 @@ def test_v0557_failed_snapshot_writer_does_not_return_nonexistent_event_path(tmp
     assert len(calls) == 1
     assert snapshot is None
     assert list(tmp_path.rglob("*.jpg")) == []
+
+
+def _run_method_ast():
+    import ast
+    from pathlib import Path
+
+    source_path = Path(__file__).resolve().parents[1] / "app/worker.py"
+    module = ast.parse(source_path.read_text(encoding="utf-8"))
+    cls = next(node for node in module.body if isinstance(node, ast.ClassDef) and node.name == "PipelineWorker")
+    run = next(node for node in cls.body if isinstance(node, ast.FunctionDef) and node.name == "run")
+    return ast, source_path, run
+
+
+def _execute_trace_dispatch(worker, writer):
+    """Execute actual trace and ordinary dispatch branches in production order."""
+    import json
+
+    ast, source_path, run = _run_method_ast()
+    trace = next(node for node in ast.walk(run) if isinstance(node, ast.If)
+        and isinstance(node.test, ast.Compare) and isinstance(node.test.left, ast.Name)
+        and node.test.left.id == "trace_file"
+        and any(isinstance(child, ast.Dict) and any(isinstance(key, ast.Constant)
+            and key.value == "crossing_events" for key in child.keys) for child in ast.walk(node)))
+    dispatch = next(node for node in ast.walk(run) if isinstance(node, ast.If)
+        and isinstance(node.test, ast.Name) and node.test.id == "pending_crossing_events")
+    for node in ast.walk(trace):
+        if (isinstance(node, ast.Attribute) and isinstance(node.value, ast.Attribute)
+            and isinstance(node.value.value, ast.Name) and node.value.value.id == "self"
+            and node.value.attr == "state" and not hasattr(worker.state, node.attr)):
+            setattr(worker.state, node.attr, 0)
+    worker.state.source_fps = 25.0
+    worker._bicycle_xframe_audit_this_frame = []
+    counter_fields = {
+        node.attr: 0 for node in ast.walk(trace)
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
+        and node.value.id == "counter"
+    }
+    env = {
+        "self": worker, "trace_file": writer, "frame_index": 522,
+        "counter": SimpleNamespace(**counter_fields), "anchor_span_rescuer": SimpleNamespace(approach_span_candidates=0, approach_span_rescues=0),
+        "frame_start_deferred_commits": 0, "gate_trace_tracks": [], "json": json,
+        "pending_crossing_events": [(77, "motorcycle", "in", .82, 519, 20.72, "direct", .51, .62)],
+        "cv2": object(), "frame": object(),
+    }
+    exec(compile(ast.fix_missing_locations(ast.Module(body=[trace, dispatch], type_ignores=[])), str(source_path), "exec"), env)
+    return env
+
+
+def test_v0558_trace_write_failure_still_dispatches_original_crossing_once() -> None:
+    worker = _worker()
+    worker.state.last_error = "existing inference error"
+
+    class BrokenTrace:
+        closed = False
+
+        def write(self, _value):
+            raise OSError("No space left on device")
+
+        def close(self):
+            self.closed = True
+
+    writer = BrokenTrace()
+
+    env = _execute_trace_dispatch(worker, writer)
+
+    assert env["trace_file"] is None
+    assert writer.closed
+    assert worker.state.last_error == "existing inference error"
+    assert worker.state.benchmark_trace_warning == "Benchmark trace write failed: No space left on device"
+    assert len(worker._event_dispatcher.payloads) == 1
+    event = worker._event_dispatcher.payloads[0]
+    assert event["tracking_id"] == 77 and event["direction"] == "in"
+    assert event["source_frame_index"] == 519 and event["source_time_seconds"] == 20.72
+    assert event["crossing_x"] == .51 and event["crossing_y"] == .62
+
+
+def test_v0558_trace_write_close_failure_cannot_interrupt_event_dispatch() -> None:
+    worker = _worker()
+
+    class BrokenTrace:
+        def write(self, _value):
+            raise OSError("trace write unavailable")
+
+        def close(self):
+            raise OSError("trace flush unavailable")
+
+    env = _execute_trace_dispatch(worker, BrokenTrace())
+
+    assert env["trace_file"] is None
+    assert worker.state.benchmark_trace_snapshot_path is None
+    assert worker.state.last_error is None
+    assert len(worker._event_dispatcher.payloads) == 1
+
+
+def test_v0558_healthy_trace_keeps_source_clock_and_session_identity() -> None:
+    import io
+    import json
+
+    worker = _worker()
+    writer = io.StringIO()
+    env = _execute_trace_dispatch(worker, writer)
+    row = json.loads(writer.getvalue())
+
+    assert env["trace_file"] is writer and not writer.closed
+    assert row["camera_id"] == 1 and row["session_id"] == 2
+    assert row["frame_index"] == 522 and row["source_time_seconds"] == 20.84
+    assert len(worker._event_dispatcher.payloads) == 1
+    assert worker.state.benchmark_trace_warning is None
+
+
+def _execute_trace_startup(worker, path):
+    ast, source_path, run = _run_method_ast()
+    startup = next(node for node in ast.walk(run) if isinstance(node, ast.If)
+        and any(isinstance(child, ast.Assign) and any(isinstance(target, ast.Name)
+            and target.id == "path" for target in child.targets) for child in ast.walk(node))
+        and any(isinstance(child, ast.Attribute) and child.attr == "benchmark_trace_enabled" for child in ast.walk(node)))
+    warming = next(node for node in ast.walk(run) if isinstance(node, ast.Assign)
+        and isinstance(node.value, ast.Constant) and node.value.value == "warming")
+    worker.payload.source_type = "video"
+    worker.benchmark_trace_enabled = True
+    worker.state.source_fps = 25.0
+    worker.state.frame_policy = "all-frames"
+    env = {
+        "self": worker, "trace_file": None, "source_frame_count": 23650,
+        "trace_path": lambda _session_id: path,
+    }
+    exec(compile(ast.fix_missing_locations(ast.Module(body=[startup, warming], type_ignores=[])), str(source_path), "exec"), env)
+    return env
+
+
+def test_v0558_trace_open_failure_allows_video_warmup() -> None:
+    worker = _worker()
+
+    def failed_open(*_args, **_kwargs):
+        raise OSError("trace permission denied")
+
+    path = SimpleNamespace(parent=SimpleNamespace(mkdir=lambda **_kwargs: None), open=failed_open)
+
+    env = _execute_trace_startup(worker, path)
+
+    assert env["trace_file"] is None
+    assert worker.state.status == "warming"
+    assert worker.state.last_error is None
+    assert worker.state.benchmark_trace_warning == "Benchmark trace open failed: trace permission denied"
+
+
+def test_v0558_session_trace_header_contains_no_synthetic_observation_or_secrets() -> None:
+    import io
+    import json
+
+    worker = _worker()
+    worker.payload.source_url = "rtsp://user:secret@example/camera?token=secret"
+    writer = io.StringIO()
+    path = SimpleNamespace(parent=SimpleNamespace(mkdir=lambda **_kwargs: None), open=lambda *_args, **_kwargs: writer)
+
+    env = _execute_trace_startup(worker, path)
+    header = json.loads(writer.getvalue())
+
+    assert env["trace_file"] is writer
+    assert header == {
+        "kind": "session_metadata", "audit_only": True, "camera_id": 1, "session_id": 2,
+        "source_fps": 25.0, "source_frame_count": 23650, "frame_policy": "all-frames",
+    }
+    assert "source_time_seconds" not in header and "frame_index" not in header
+    assert "secret" not in writer.getvalue()
+
+
+def test_v0558_camera_trace_publication_waits_for_successful_close(tmp_path, monkeypatch) -> None:
+    import app.worker as worker_module
+
+    worker = _worker()
+    worker.snapshot_root = tmp_path
+    calls = []
+    writer = SimpleNamespace(closed=False)
+    writer.close = lambda: setattr(writer, "closed", True)
+
+    def publish(camera_id, session_id, *, snapshot_root):
+        assert writer.closed
+        calls.append((camera_id, session_id, snapshot_root))
+        return {"path": "camera_1/session_2_benchmark-trace.jsonl", "bytes": 41, "method": "hardlink"}
+
+    monkeypatch.setattr(worker_module, "publish_closed_trace", publish)
+
+    worker._close_and_publish_benchmark_trace(writer)
+
+    assert calls == [(1, 2, tmp_path)]
+    assert worker.state.benchmark_trace_snapshot_path == "camera_1/session_2_benchmark-trace.jsonl"
+    assert worker.state.benchmark_trace_snapshot_bytes == 41
+    assert worker.state.benchmark_trace_snapshot_method == "hardlink"
+
+
+def test_v0558_close_failure_never_publishes_camera_trace(tmp_path, monkeypatch) -> None:
+    import app.worker as worker_module
+
+    worker = _worker()
+    worker.snapshot_root = tmp_path
+    worker.state.last_error = "existing delivery error"
+    calls = []
+    monkeypatch.setattr(worker_module, "publish_closed_trace", lambda *_args, **_kwargs: calls.append(1))
+
+    def failed_close():
+        raise OSError("trace flush unavailable")
+
+    worker._close_and_publish_benchmark_trace(SimpleNamespace(close=failed_close))
+
+    assert calls == [] and worker.state.benchmark_trace_snapshot_path is None
+    assert worker.state.last_error == "existing delivery error"
+    assert worker.state.benchmark_trace_warning == "Benchmark trace close failed: trace flush unavailable"
+
+
+def test_v0558_eof_audit_failure_disables_artifact_publication(tmp_path, monkeypatch) -> None:
+    import app.worker as worker_module
+
+    worker = _worker()
+    _enable_context_commit(worker)
+    worker.snapshot_root = tmp_path
+    pending = _pending()
+    pending.bicycle_context_audit = {"kind": "bicycle_context", "track_id": 77, "frame_index": 522, "commit_status": "pending"}
+    worker._pending_guard_crossings[77] = pending
+    calls = []
+    monkeypatch.setattr(worker_module, "publish_closed_trace", lambda *_args, **_kwargs: calls.append(1))
+
+    class BrokenTrace:
+        closed = False
+
+        def write(self, _value):
+            raise OSError("trace storage unavailable")
+
+        def close(self):
+            self.closed = True
+
+    writer = BrokenTrace()
+    ast, source_path, run = _run_method_ast()
+    outer_try = next(node for node in run.body if isinstance(node, ast.Try))
+    close = next(node for node in outer_try.finalbody if isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Attribute)
+        and node.value.func.attr == "_close_and_publish_benchmark_trace")
+    prefix = outer_try.finalbody[:outer_try.finalbody.index(close) + 1]
+    counter = _Counter()
+    exec(compile(ast.fix_missing_locations(ast.Module(body=prefix, type_ignores=[])), str(source_path), "exec"),
+        {"self": worker, "counter": counter, "trace_file": writer})
+
+    assert writer.closed and calls == []
+    assert worker._pending_guard_crossings == {} and counter.revoked == [(77, "in")]
+    assert worker.state.total_count == 0
+
+
+def test_v0558_gate_trace_distinguishes_bbox_geometry_and_heading_evidence() -> None:
+    worker = _deadline_worker(action="pending")
+
+    _, _, tracks = _execute_guard_frame(
+        worker, 523, velocity=(.01, -.04), anchor_velocity=(0, 2), stitched=True, raw_track_id=88,
+    )
+
+    track = tracks[0]
+    assert track["track_id"] == 77 and track["raw_track_id"] == 88 and track["stitched"] is True
+    assert track["rect"] == [40, 45, 60, 65] and track["anchor"] == [50, 65] and track["center"] == [50, 55]
+    assert track["measured_velocity"] == [.01, -.04] and track["anchor_velocity"] == [0, 2]
+    assert track["human_guard_status"] == "pending"
+    assert worker.state.total_count == 0 and worker._event_dispatcher.payloads == []

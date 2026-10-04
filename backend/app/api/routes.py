@@ -5,7 +5,7 @@ import json
 import re
 import time
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -140,22 +140,22 @@ def _ground_truth_payload(row: GroundTruthCrossing) -> dict:
 class SessionFinish(BaseModel):
     status: str
     total_vehicles: int = 0
-    average_fps: float | None = None
+    average_fps: float | None = Field(default=None, allow_inf_nan=False)
     human_guard_rejections: int = 0
-    source_fps: float | None = None
-    source_duration_seconds: float | None = None
+    source_fps: float | None = Field(default=None, allow_inf_nan=False)
+    source_duration_seconds: float | None = Field(default=None, allow_inf_nan=False)
     last_error: str | None = None
 
 
 class BenchmarkCreate(BaseModel):
     session_id: int
     name: str | None = None
-    tolerance_seconds: float = 0.75
+    tolerance_seconds: float = Field(default=0.75, allow_inf_nan=False)
     clone_marks_from_benchmark_id: int | None = None
 
 
 class BenchmarkUpdate(BaseModel):
-    tolerance_seconds: float
+    tolerance_seconds: float = Field(allow_inf_nan=False)
 
 
 class BenchmarkCloneMarks(BaseModel):
@@ -163,7 +163,7 @@ class BenchmarkCloneMarks(BaseModel):
 
 
 class GroundTruthMarkCreate(BaseModel):
-    source_time_seconds: float
+    source_time_seconds: float = Field(allow_inf_nan=False)
     direction: Direction = Direction.unknown
     vehicle_type: VehicleType = VehicleType.motorcycle
     note: str | None = None

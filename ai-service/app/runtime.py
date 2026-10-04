@@ -134,6 +134,10 @@ class PipelineState:
     device: str = "unknown"
     frame_width: int | None = None
     frame_height: int | None = None
+    benchmark_trace_warning: str | None = None
+    benchmark_trace_snapshot_path: str | None = None
+    benchmark_trace_snapshot_bytes: int = 0
+    benchmark_trace_snapshot_method: str | None = None
     last_error: str | None = None
 
 

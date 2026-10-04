@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './styles.css'
 
-const APP_VERSION = '0.5.57'
+const APP_VERSION = '0.5.58'
 const vehicleLabels = {
   motorcycle: 'Xe máy', bicycle: 'Xe đạp', car: 'Ô tô', bus: 'Xe buýt', truck: 'Xe tải', other: 'Khác'
 }
@@ -277,6 +277,41 @@ function AnnotationEditor({ dataset, onChanged }) {
   const [message, setMessage] = useState('')
   const stageRef = useRef(null)
   const drawRef = useRef(null)
+  const scopeRef = useRef(null)
+  const selectionRef = useRef(null)
+  const indexRequestRef = useRef(0)
+  const annotationRequestRef = useRef(0)
+  const loadedIndexRef = useRef(null)
+  const loadedSelectionRef = useRef(null)
+  const saveRef = useRef(null)
+  const bulkRef = useRef(null)
+  // Object identity also invalidates requests after an A -> B -> A selection.
+  if (!scopeRef.current || scopeRef.current.id !== dataset?.id || scopeRef.current.updatedAt !== dataset?.updated_at || scopeRef.current.reviewMode !== reviewMode) {
+    scopeRef.current = {id:dataset?.id, updatedAt:dataset?.updated_at, reviewMode}
+  }
+  const scope = scopeRef.current
+  if (!selectionRef.current || selectionRef.current.scope !== scope || selectionRef.current.name !== currentName) {
+    selectionRef.current = {scope, name:currentName}
+    loadedSelectionRef.current = null
+    saveRef.current = null
+    drawRef.current = null
+  }
+  const selection = selectionRef.current
+  const currentAnnotation = loadedSelectionRef.current === selection ? annotation : null
+  const currentBoxes = currentAnnotation ? boxes : []
+  const currentIndexData = loadedIndexRef.current === scope ? indexData : null
+  const canEdit = () => selection === selectionRef.current && loadedSelectionRef.current === selection && !saveRef.current
+  const selectImage = name => {
+    if (scope !== scopeRef.current) return
+    if (selectionRef.current.name !== name) {
+      selectionRef.current = {scope, name}
+      loadedSelectionRef.current = null
+      saveRef.current = null
+      drawRef.current = null
+      setAnnotation(null); setBoxes([]); setSelectedBox(-1); setSaving(false); setMessage('')
+    }
+    setCurrentName(name)
+  }
 
   const readBody = async response => {
     const text = await response.text()
@@ -284,44 +319,69 @@ function AnnotationEditor({ dataset, onChanged }) {
     try { return JSON.parse(text) } catch { return { detail:text } }
   }
 
-  const loadIndex = async preferred => {
-    if (!dataset?.id) { setIndexData(null); setCurrentName(''); setAnnotation(null); setBoxes([]); return '' }
-    const response = await fetch(`/api/datasets/${dataset.id}/annotations?limit=1000&review_mode=${encodeURIComponent(reviewMode)}`, {cache:'no-store'})
-    const body = await readBody(response)
-    if (!response.ok) throw new Error(body.detail || 'Không tải được danh sách annotation')
-    setIndexData(body)
-    const names = body.items || []
-    const next = preferred && names.some(i=>i.image_name===preferred) ? preferred : (currentName && names.some(i=>i.image_name===currentName) ? currentName : names[0]?.image_name || '')
-    setCurrentName(next)
-    if (!next) { setAnnotation(null); setBoxes([]); setSelectedBox(-1) }
-    return next
+  const loadIndex = async (preferred, expectedSelection = null) => {
+    if (scope !== scopeRef.current) return null
+    const request = ++indexRequestRef.current
+    const isCurrent = () => scope === scopeRef.current && request === indexRequestRef.current && (!expectedSelection || expectedSelection === selectionRef.current)
+    if (!scope.id) { loadedIndexRef.current = null; setIndexData(null); selectImage(''); return '' }
+    try {
+      const response = await fetch(`/api/datasets/${scope.id}/annotations?limit=1000&review_mode=${encodeURIComponent(scope.reviewMode)}`, {cache:'no-store'})
+      const body = await readBody(response)
+      if (!isCurrent()) return null
+      if (!response.ok) throw new Error(body.detail || 'Không tải được danh sách annotation')
+      loadedIndexRef.current = scope
+      setIndexData(body)
+      const names = body.items || []
+      const selectedName = selectionRef.current.name
+      const next = preferred && names.some(i=>i.image_name===preferred) ? preferred : (selectedName && names.some(i=>i.image_name===selectedName) ? selectedName : names[0]?.image_name || '')
+      selectImage(next)
+      return next
+    } catch (err) { if (isCurrent()) throw err; return null }
   }
 
   const loadAnnotation = async name => {
-    if (!dataset?.id || !name) { setAnnotation(null); setBoxes([]); return }
-    const response = await fetch(`/api/datasets/${dataset.id}/annotations/${encodeURIComponent(name)}`, {cache:'no-store'})
-    const body = await readBody(response)
-    if (!response.ok) throw new Error(body.detail || 'Không tải được annotation')
-    setAnnotation(body); setBoxes(body.boxes || []); setSelectedBox(-1); setMessage('')
+    const ticket = selectionRef.current
+    if (scope !== scopeRef.current || ticket.scope !== scope || ticket.name !== name || saveRef.current) return
+    const request = ++annotationRequestRef.current
+    const isCurrent = () => ticket === selectionRef.current && request === annotationRequestRef.current
+    loadedSelectionRef.current = null
+    setAnnotation(null); setBoxes([]); setSelectedBox(-1)
+    if (!scope.id || !name) return
+    try {
+      const response = await fetch(`/api/datasets/${scope.id}/annotations/${encodeURIComponent(name)}`, {cache:'no-store'})
+      const body = await readBody(response)
+      if (!isCurrent()) return
+      if (!response.ok) throw new Error(body.detail || 'Không tải được annotation')
+      if (body.image_name && body.image_name !== name) throw new Error('Annotation không thuộc ảnh đang chọn')
+      loadedSelectionRef.current = ticket
+      setAnnotation(body); setBoxes(body.boxes || []); setSelectedBox(-1); setMessage('')
+    } catch (err) { if (isCurrent()) throw err }
   }
 
   useEffect(() => {
     let cancelled = false
+    setSaving(false); setBulkBusy(false); setMessage(''); setSelectedBox(-1)
+    bulkRef.current = null
     ;(async()=>{
       try {
-        const name = await loadIndex('')
-        if (!cancelled && name) await loadAnnotation(name)
+        await loadIndex('')
       } catch (err) { if (!cancelled) setMessage(err.message) }
     })()
     return ()=>{ cancelled = true }
   }, [dataset?.id, dataset?.updated_at, reviewMode])
 
   useEffect(() => {
-    if (currentName) loadAnnotation(currentName).catch(err=>setMessage(err.message))
-  }, [currentName])
+    let cancelled = false
+    // One automatic loader: a late index cannot reload an image already edited.
+    if (currentName && currentIndexData?.items?.some(item=>item.image_name === currentName) && loadedSelectionRef.current !== selection) {
+      loadAnnotation(currentName).catch(err=>{ if (!cancelled && selection === selectionRef.current) setMessage(err.message) })
+    }
+    return ()=>{ cancelled = true }
+  }, [currentName, dataset?.id, dataset?.updated_at, reviewMode, currentIndexData])
 
   useEffect(() => {
     const onKey = event => {
+      if (!canEdit()) return
       if (event.target?.matches?.('input,select,textarea')) return
       if (selectedBox >= 0 && /^[1-5]$/.test(event.key)) {
         const classId = Number(event.key) - 1
@@ -334,22 +394,22 @@ function AnnotationEditor({ dataset, onChanged }) {
     }
     window.addEventListener('keydown', onKey)
     return ()=>window.removeEventListener('keydown', onKey)
-  }, [selectedBox])
+  }, [selectedBox, selection, saving])
 
   const pointFromEvent = event => {
     const rect = stageRef.current.getBoundingClientRect()
     return {x:clamp01((event.clientX-rect.left)/rect.width), y:clamp01((event.clientY-rect.top)/rect.height)}
   }
   const beginDraw = event => {
-    if (!annotation) return
+    if (!canEdit()) return
     setSelectedBox(-1)
     const point = pointFromEvent(event)
-    drawRef.current = point
+    drawRef.current = {point, selection}
     event.currentTarget.setPointerCapture?.(event.pointerId)
   }
   const finishDraw = event => {
-    if (!drawRef.current || !annotation) return
-    const start = drawRef.current; drawRef.current = null
+    if (!drawRef.current || drawRef.current.selection !== selection || !canEdit()) return
+    const start = drawRef.current.point; drawRef.current = null
     const end = pointFromEvent(event)
     const w = Math.abs(end.x-start.x), h = Math.abs(end.y-start.y)
     if (w < 0.01 || h < 0.01) return
@@ -357,71 +417,86 @@ function AnnotationEditor({ dataset, onChanged }) {
     setBoxes(prev=>[...prev,box]); setSelectedBox(boxes.length)
   }
   const changeSelectedClass = classId => {
+    if (!canEdit()) return
     setNewClassId(classId)
     if (selectedBox >= 0) setBoxes(prev=>prev.map((b,i)=>i===selectedBox?{...b,class_id:classId,class_name:['motorcycle','bicycle','car','bus','truck'][classId]}:b))
   }
   const save = async () => {
-    if (!dataset?.id || !currentName || !annotation) return
+    if (!scope.id || !currentName || !currentAnnotation || !canEdit()) return
+    const operation = {selection}
+    const isCurrent = () => saveRef.current === operation && selectionRef.current === selection
+    saveRef.current = operation
+    ++annotationRequestRef.current
     setSaving(true); setMessage('')
     try {
-      const response = await fetch(`/api/datasets/${dataset.id}/annotations/${encodeURIComponent(currentName)}`, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({boxes:boxes.map(({class_id,x,y,w,h})=>({class_id,x,y,w,h})),reviewed:annotation.reviewed,difficult:annotation.difficult})})
+      const response = await fetch(`/api/datasets/${scope.id}/annotations/${encodeURIComponent(selection.name)}`, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({boxes:boxes.map(({class_id,x,y,w,h})=>({class_id,x,y,w,h})),reviewed:currentAnnotation.reviewed,difficult:currentAnnotation.difficult})})
       const body = await readBody(response)
+      if (!isCurrent()) return
       if (!response.ok) throw new Error(body.detail || 'Không lưu được annotation')
+      if (body.image_name && body.image_name !== selection.name) throw new Error('Annotation không thuộc ảnh đang lưu')
       setAnnotation(body); setBoxes(body.boxes || []); setMessage('Đã lưu nhãn ground-truth cho ảnh này.')
-      const next = await loadIndex(currentName)
-      if (next && next !== currentName) await loadAnnotation(next)
-      onChanged?.()
-    } catch (err) { setMessage(err.message) } finally { setSaving(false) }
+      const next = await loadIndex(selection.name, selection)
+      if (next === null || scope !== scopeRef.current) return
+      if (scope === scopeRef.current && selectionRef.current.name === next) onChanged?.()
+    } catch (err) { if (isCurrent()) setMessage(err.message) } finally {
+      if (saveRef.current === operation) { saveRef.current = null; setSaving(false) }
+    }
   }
   const acceptSafe = async () => {
-    if (!dataset?.id || bulkBusy) return
-    const count = Number(indexData?.safe_auto_accept_images || 0)
+    if (!scope.id || scope !== scopeRef.current || bulkRef.current?.scope === scope) return
+    const count = Number(currentIndexData?.safe_auto_accept_images || 0)
     if (!count) { setMessage('Không có ảnh đủ điều kiện duyệt nhanh an toàn.'); return }
     if (!window.confirm(`Đánh dấu ${count} ảnh auto-label độ tin cậy cao là đã duyệt? Xe máy/xe đạp và ảnh không có detection KHÔNG được tự duyệt.`)) return
     setBulkBusy(true); setMessage('')
+    const operation = {scope}
+    bulkRef.current = operation
+    const isCurrent = () => scope === scopeRef.current && bulkRef.current === operation
     try {
-      const response = await fetch(`/api/datasets/${dataset.id}/annotations/accept-safe`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({min_confidence:0.70})})
+      const response = await fetch(`/api/datasets/${scope.id}/annotations/accept-safe`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({min_confidence:0.70})})
       const body = await readBody(response)
+      if (!isCurrent()) return
       if (!response.ok) throw new Error(body.detail || 'Không duyệt nhanh được annotation')
       setMessage(`Đã duyệt nhanh ${body.accepted_images || 0} ảnh tin cậy. Xe máy/xe đạp vẫn để lại cho bạn kiểm tra.`)
-      await loadIndex(''); onChanged?.()
-    } catch (err) { setMessage(err.message) } finally { setBulkBusy(false) }
+      await loadIndex(''); if (isCurrent()) onChanged?.()
+    } catch (err) { if (isCurrent()) setMessage(err.message) } finally {
+      if (bulkRef.current === operation) { bulkRef.current = null; setBulkBusy(false) }
+    }
   }
   const move = delta => {
-    const items = indexData?.items || []
+    const items = currentIndexData?.items || []
     const idx = items.findIndex(i=>i.image_name===currentName)
     if (idx < 0 || !items.length) return
     const next = items[Math.min(items.length-1,Math.max(0,idx+delta))]
-    if (next) setCurrentName(next.image_name)
+    if (next) selectImage(next.image_name)
   }
   if (!dataset) return <section className="panel annotation-panel" id="annotation"><div className="empty">Chọn dataset để mở Annotation Studio.</div></section>
-  const items = indexData?.items || []
+  const items = currentIndexData?.items || []
   const currentIndex = Math.max(0, items.findIndex(i=>i.image_name===currentName))
   const imageUrl = currentName ? `/api/datasets/${dataset.id}/images/${encodeURIComponent(currentName)}?v=${encodeURIComponent(dataset.updated_at || '')}` : ''
   return <section className="panel annotation-panel" id="annotation">
     <div className="panel-head"><div><span className="panel-kicker">ANNOTATION STUDIO · SMART REVIEW</span><h2>3. Chỉ rà soát ảnh cần thiết trước khi train lại</h2></div><span className="lock-state">V{APP_VERSION}</span></div>
     <p className="hint"><strong>Không cần sửa tay cả 1.200 ảnh.</strong> Chế độ mặc định đưa ảnh xe máy/xe đạp, confidence thấp, ảnh đông xe hoặc ảnh không detection lên trước. Ảnh ô tô/bus/truck rõ và confidence cao có thể duyệt nhanh sau khi bạn spot-check.</p>
-    <div className="annotation-summary"><span>Tổng ảnh: <strong>{indexData?.total ?? 0}</strong></span><span>Đang hiện: <strong>{indexData?.filtered_total ?? 0}</strong></span><span>Cần ưu tiên: <strong>{indexData?.priority_images ?? 0}</strong></span><span>Có thể duyệt nhanh: <strong>{indexData?.safe_auto_accept_images ?? 0}</strong></span><span>Đã duyệt: <strong>{indexData?.reviewed_images ?? dataset.reviewed_images ?? 0}</strong></span><span>Ảnh khó: <strong>{indexData?.difficult_images ?? dataset.difficult_images ?? 0}</strong></span><span>Mất cân bằng: <strong>{indexData?.imbalance_ratio ? `x${indexData.imbalance_ratio}` : '—'}</strong></span></div>
-    <div className="smart-review-bar"><label>Lọc ảnh<select value={reviewMode} onChange={e=>setReviewMode(e.target.value)}><option value="priority">🔥 Ưu tiên cần kiểm tra</option><option value="unreviewed">Chưa duyệt</option><option value="difficult">Ảnh khó</option><option value="all">Tất cả ảnh</option></select></label><button className="secondary" disabled={bulkBusy || !(indexData?.safe_auto_accept_images>0)} onClick={acceptSafe}>{bulkBusy?'Đang duyệt...':'Duyệt nhanh ảnh tin cậy'}</button></div>
+    <div className="annotation-summary"><span>Tổng ảnh: <strong>{currentIndexData?.total ?? 0}</strong></span><span>Đang hiện: <strong>{currentIndexData?.filtered_total ?? 0}</strong></span><span>Cần ưu tiên: <strong>{currentIndexData?.priority_images ?? 0}</strong></span><span>Có thể duyệt nhanh: <strong>{currentIndexData?.safe_auto_accept_images ?? 0}</strong></span><span>Đã duyệt: <strong>{currentIndexData?.reviewed_images ?? dataset.reviewed_images ?? 0}</strong></span><span>Ảnh khó: <strong>{currentIndexData?.difficult_images ?? dataset.difficult_images ?? 0}</strong></span><span>Mất cân bằng: <strong>{currentIndexData?.imbalance_ratio ? `x${currentIndexData.imbalance_ratio}` : '—'}</strong></span></div>
+    <div className="smart-review-bar"><label>Lọc ảnh<select value={reviewMode} onChange={e=>setReviewMode(e.target.value)}><option value="priority">🔥 Ưu tiên cần kiểm tra</option><option value="unreviewed">Chưa duyệt</option><option value="difficult">Ảnh khó</option><option value="all">Tất cả ảnh</option></select></label><button className="secondary" disabled={bulkBusy || !(currentIndexData?.safe_auto_accept_images>0)} onClick={acceptSafe}>{bulkBusy?'Đang duyệt...':'Duyệt nhanh ảnh tin cậy'}</button></div>
     <div className="annotation-workspace">
       <div className="annotation-list">
         <div className="annotation-nav"><button className="secondary" disabled={currentIndex<=0 || !items.length} onClick={()=>move(-1)}>← Trước</button><span>{items.length ? `${currentIndex+1}/${items.length}` : '0/0'}</span><button className="secondary" disabled={!items.length || currentIndex>=items.length-1} onClick={()=>move(1)}>Sau →</button></div>
-        <div className="annotation-frame-list" role="listbox" aria-label="Danh sách frame cần rà soát">{items.map(item=><button type="button" role="option" aria-selected={currentName===item.image_name} className={`annotation-frame-item ${currentName===item.image_name?'active':''}`} onClick={()=>setCurrentName(item.image_name)} key={item.image_name}><span className="frame-status">{item.reviewed?'✓':item.difficult?'⚠':item.priority_score>=35?'🔥':'•'}</span><span className="frame-copy"><strong title={item.image_name}>{item.image_name}</strong><small>{item.box_count} box · ưu tiên P{item.priority_score}{item.reviewed?' · đã duyệt':''}{item.difficult?' · ảnh khó':''}</small></span><span className={`frame-priority ${item.priority_score>=35?'hot':''}`}>P{item.priority_score}</span></button>)}</div>
+        <div className="annotation-frame-list" role="listbox" aria-label="Danh sách frame cần rà soát">{items.map(item=><button type="button" role="option" aria-selected={currentName===item.image_name} className={`annotation-frame-item ${currentName===item.image_name?'active':''}`} onClick={()=>selectImage(item.image_name)} key={item.image_name}><span className="frame-status">{item.reviewed?'✓':item.difficult?'⚠':item.priority_score>=35?'🔥':'•'}</span><span className="frame-copy"><strong title={item.image_name}>{item.image_name}</strong><small>{item.box_count} box · ưu tiên P{item.priority_score}{item.reviewed?' · đã duyệt':''}{item.difficult?' · ảnh khó':''}</small></span><span className={`frame-priority ${item.priority_score>=35?'hot':''}`}>P{item.priority_score}</span></button>)}</div>
         {!items.length && <div className="empty">Không còn ảnh trong bộ lọc này. Có thể chuyển sang “Chưa duyệt” hoặc “Tất cả ảnh”.</div>}
-        <div className="class-balance">{Object.entries(indexData?.per_class || {}).map(([name,count])=><span key={name}>{vehicleLabels[name] || name}: <strong>{count}</strong></span>)}</div>
+        <div className="class-balance">{Object.entries(currentIndexData?.per_class || {}).map(([name,count])=><span key={name}>{vehicleLabels[name] || name}: <strong>{count}</strong></span>)}</div>
       </div>
       <div className="annotation-editor-wrap">
-        {annotation && <div className="review-reason"><strong>Ưu tiên P{annotation.priority_score ?? 0}</strong> · {(annotation.priority_reasons || []).join(' · ') || 'Không có cảnh báo'}{annotation.min_confidence!=null ? ` · conf thấp nhất ${Number(annotation.min_confidence).toFixed(2)}` : ''}</div>}
+        {currentAnnotation && <div className="review-reason"><strong>Ưu tiên P{currentAnnotation.priority_score ?? 0}</strong> · {(currentAnnotation.priority_reasons || []).join(' · ') || 'Không có cảnh báo'}{currentAnnotation.min_confidence!=null ? ` · conf thấp nhất ${Number(currentAnnotation.min_confidence).toFixed(2)}` : ''}</div>}
         <div className="annotation-stage" ref={stageRef} onPointerDown={beginDraw} onPointerUp={finishDraw}>
-          {imageUrl ? <img src={imageUrl} alt={currentName} draggable="false" /> : <div className="empty">Không có ảnh trong bộ lọc hiện tại.</div>}
-          <svg viewBox="0 0 1 1" preserveAspectRatio="none">{boxes.map((box,index)=><g key={`${index}-${box.x}-${box.y}`} onPointerDown={e=>{e.stopPropagation();setSelectedBox(index);setNewClassId(box.class_id);setMessage('')}}><rect className={`annotation-box ${selectedBox===index?'selected':''}`} x={box.x-box.w/2} y={box.y-box.h/2} width={box.w} height={box.h}/><text className="annotation-label" fontSize="0.025" x={Math.max(0.002,box.x-box.w/2)} y={Math.max(0.025,box.y-box.h/2)}>Box {index+1} · {annotationClasses[box.class_id]}</text></g>)}</svg>
+          {imageUrl ? <img key={imageUrl} src={imageUrl} alt={currentName} draggable="false" /> : <div className="empty">Không có ảnh trong bộ lọc hiện tại.</div>}
+          <svg viewBox="0 0 1 1" preserveAspectRatio="none">{currentBoxes.map((box,index)=><g key={`${index}-${box.x}-${box.y}`} onPointerDown={e=>{e.stopPropagation();if (!canEdit()) return;setSelectedBox(index);setNewClassId(box.class_id);setMessage('')}}><rect className={`annotation-box ${selectedBox===index?'selected':''}`} x={box.x-box.w/2} y={box.y-box.h/2} width={box.w} height={box.h}/><text className="annotation-label" fontSize="0.025" x={Math.max(0.002,box.x-box.w/2)} y={Math.max(0.025,box.y-box.h/2)}>Box {index+1} · {annotationClasses[box.class_id]}</text></g>)}</svg>
         </div>
         <div className={`annotation-selection ${selectedBox>=0?'has-selection':''}`}>
           {selectedBox>=0
-            ? <>Đang chọn: <strong>Box {selectedBox+1} · {annotationClasses[boxes[selectedBox]?.class_id] || 'Không xác định'}</strong>. Dropdown bên dưới sẽ đổi class của box này.</>
+            ? <>Đang chọn: <strong>Box {selectedBox+1} · {annotationClasses[currentBoxes[selectedBox]?.class_id] || 'Không xác định'}</strong>. Dropdown bên dưới sẽ đổi class của box này.</>
             : <>Chưa chọn box. <strong>Kéo chuột trên ảnh để tạo box mới</strong>; class của box mới được lấy từ dropdown bên dưới.</>}
         </div>
-        <div className="annotation-toolbar"><label>{selectedBox>=0?'Đổi class box đã chọn':'Class cho box mới'}<select value={selectedBox>=0 ? boxes[selectedBox]?.class_id ?? newClassId : newClassId} onChange={e=>changeSelectedClass(Number(e.target.value))}>{annotationClasses.map((name,id)=><option value={id} key={name}>{name}</option>)}</select></label><button className="danger" disabled={selectedBox<0} onClick={()=>{setBoxes(prev=>prev.filter((_,i)=>i!==selectedBox));setSelectedBox(-1)}}>Xóa box đã chọn</button><label className="check"><input type="checkbox" checked={!!annotation?.reviewed} onChange={e=>setAnnotation({...annotation,reviewed:e.target.checked})}/> Đã rà soát</label><label className="check"><input type="checkbox" checked={!!annotation?.difficult} onChange={e=>setAnnotation({...annotation,difficult:e.target.checked})}/> Ảnh khó</label><button disabled={saving || !annotation} onClick={save}>{saving?'Đang lưu...':'Lưu nhãn'}</button></div>
+        <div className="annotation-toolbar"><label>{selectedBox>=0?'Đổi class box đã chọn':'Class cho box mới'}<select disabled={saving || !currentAnnotation} value={selectedBox>=0 ? currentBoxes[selectedBox]?.class_id ?? newClassId : newClassId} onChange={e=>changeSelectedClass(Number(e.target.value))}>{annotationClasses.map((name,id)=><option value={id} key={name}>{name}</option>)}</select></label><button className="danger" disabled={saving || !currentAnnotation || selectedBox<0} onClick={()=>{if (!canEdit()) return; setBoxes(prev=>prev.filter((_,i)=>i!==selectedBox));setSelectedBox(-1)}}>Xóa box đã chọn</button><label className="check"><input type="checkbox" disabled={saving || !currentAnnotation} checked={!!currentAnnotation?.reviewed} onChange={e=>{if (canEdit()) setAnnotation({...currentAnnotation,reviewed:e.target.checked})}}/> Đã rà soát</label><label className="check"><input type="checkbox" disabled={saving || !currentAnnotation} checked={!!currentAnnotation?.difficult} onChange={e=>{if (canEdit()) setAnnotation({...currentAnnotation,difficult:e.target.checked})}}/> Ảnh khó</label><button disabled={saving || !currentAnnotation} onClick={save}>{saving?'Đang lưu...':'Lưu nhãn'}</button></div>
         <p className="hint"><strong>Trên ảnh:</strong> “Box 1 · Xe đạp” nghĩa là box số 1 hiện đang mang class Xe đạp, không phải phím 1 = Xe đạp. <strong>Phím tắt:</strong> khi đã chọn box, nhấn 1 Xe máy, 2 Xe đạp, 3 Ô tô, 4 Xe buýt, 5 Xe tải; Delete để xóa.</p>
         {message && <div className={message.startsWith('Đã')?'annotation-message ok-text':'annotation-message bad-text'}>{message}</div>}
       </div>
@@ -1177,6 +1252,8 @@ const activateTraining = async run => {
           {activePipeline && (activePipeline.active_tracks ?? 0) > 0 && (activePipeline.road_tracks_current_frame ?? 0) === 0 && <div className="source-status bad"><strong>⚠ Có track nhưng Road Zone chưa phủ luồng xe</strong><span>Dừng AI rồi kéo vùng xanh bao phần lòng đường mà xe thực sự chạy; chỉ vùng xanh mới được phép đếm.</span></div>}
           {selected && !activePipeline && <div className={`source-status ${sourceStatus?.valid ? 'ok' : 'bad'}`}><strong>{sourceStatus?.valid ? '✓ Nguồn sẵn sàng' : '⚠ Nguồn chưa sẵn sàng'}</strong><span>{sourceStatus?.message || 'Đang kiểm tra nguồn...'}</span>{sourceStatus?.suggested_source_url && <><small>Gợi ý: {sourceStatus.suggested_source_url}</small><button type="button" className="inline-action" onClick={applySuggestedSource}>Dùng nguồn gợi ý</button></>}</div>}
           {latestPipeline && !activePipeline && <div className="pipeline-result">Lần chạy gần nhất: <strong>{latestPipeline.status}</strong> · {latestPipeline.processed_frames} frame · worker {latestPipeline.total_count} crossing · DB mới {latestPipeline.persisted_events ?? latestPipeline.delivered_events ?? 0} event · dedup {latestPipeline.deduplicated_events ?? 0} · Class refine {latestPipeline.class_refine_checks ?? 0} · Refiner chung {latestPipeline.general_refine_checks ?? 0} · Consensus {latestPipeline.class_consensus_rescues ?? 0} · Xe đạp cứu {latestPipeline.bicycle_class_rescues ?? 0} · Xe đạp thấy {latestPipeline.bicycle_tracks_seen ?? 0} · Xe tải cứu {latestPipeline.truck_class_rescues ?? 0} · Xe tải xác nhận {latestPipeline.truck_tracks_seen ?? 0} · Khóa class tải {latestPipeline.truck_semantic_locks ?? 0} · Xe tải cắt vạch {latestPipeline.truck_crossing_tracks ?? 0} · Xe lớn anchor {latestPipeline.heavy_anchor_tracks ?? 0} · Xe lớn cứu center {latestPipeline.heavy_center_rescues ?? 0} · Nối track xe lớn {latestPipeline.heavy_stitch_recoveries ?? 0} · Gộp canonical 4W {latestPipeline.four_wheel_duplicate_suppressed ?? 0} · Video-start {latestPipeline.video_start_rescues ?? 0} · Time-sync {latestPipeline.crossing_time_corrections ?? 0} · Time-clamp {latestPipeline.crossing_time_clamps ?? 0} · Replay {latestPipeline.deterministic_video_replay ? 'ổn định' : 'live'} · Human Guard {latestPipeline.human_guard_rejections ?? 0} · Rider giữ {latestPipeline.rider_guard_rescues ?? 0} · Guard xác nhận {latestPipeline.human_guard_deferred_commits ?? 0} · Guard timeout {latestPipeline.human_guard_pending_drops ?? 0}{latestPipeline.last_error ? ` · ${latestPipeline.last_error}` : ''}</div>}
+          {sessionPipeline?.benchmark_trace_warning && <div className="source-status bad"><strong>⚠ Hồ sơ trace bị gián đoạn</strong><span>Bộ đếm vẫn xử lý event; hồ sơ chẩn đoán có thể thiếu dữ liệu. {sessionPipeline.benchmark_trace_warning}</span></div>}
+          {sessionPipeline?.benchmark_trace_snapshot_path && <div className="source-status ok"><strong>✓ Đã lưu trace cùng ảnh camera</strong><span>Khi gửi ảnh để phân tích, giữ kèm file {sessionPipeline.benchmark_trace_snapshot_path.split('/').pop()} trong thư mục camera.</span></div>}
         </article>
         <article className="panel"><div className="panel-head"><div><span className="panel-kicker">VEHICLE COUNT</span><h2>Theo loại phương tiện · phiên hiện tại</h2></div></div><div className="counting-summary"><div><span>Tổng lượt cắt vạch</span><strong>{sessionPipeline?.total_count ?? 0}</strong></div><div><span>IN</span><strong>{sessionPipeline?.in_count ?? 0}</strong></div><div><span>OUT</span><strong>{sessionPipeline?.out_count ?? 0}</strong></div></div><div className="crossing-quality"><span>Trực tiếp <strong>{sessionPipeline?.direct_crossings ?? 0}</strong></span><span>Nội suy <strong>{sessionPipeline?.interpolated_crossings ?? 0}</strong></span><span>Cứu qua gap <strong>{sessionPipeline?.rescued_crossings ?? 0}</strong></span><span>Fast-confirm <strong>{sessionPipeline?.fast_confirm_rescues ?? 0}</strong></span><span>Bracket-confirm <strong>{sessionPipeline?.bracket_confirm_rescues ?? 0}</strong></span><span>Late-confirm <strong>{sessionPipeline?.late_geometry_confirms ?? 0}</strong></span><span>Rescue bị loại <strong>{sessionPipeline?.rescue_validation_rejections ?? 0}</strong></span><span>Rescue dài loại <strong>{sessionPipeline?.long_gap_rescue_rejections ?? 0}</strong></span><span>Lineage rescue loại <strong>{sessionPipeline?.lineage_rescue_rejections ?? 0}</strong></span><span>Road Zone loại <strong>{sessionPipeline?.rejected_outside_road ?? 0}</strong></span><span>Class refine <strong>{sessionPipeline?.class_refine_checks ?? 0}</strong></span><span>Refiner miền <strong>{sessionPipeline?.domain_refine_checks ?? 0}</strong></span><span>Refiner chung <strong>{sessionPipeline?.general_refine_checks ?? 0}</strong></span><span>Consensus <strong>{sessionPipeline?.class_consensus_rescues ?? 0}</strong></span><span>Xe đạp cứu <strong>{sessionPipeline?.bicycle_class_rescues ?? 0}</strong></span><span>Bike context <strong>{sessionPipeline?.bicycle_context_rescues ?? 0}</strong></span><span>Bike ctx match <strong>{sessionPipeline?.bicycle_context_target_matches ?? 0}</strong></span><span>Bike trail <strong>{sessionPipeline?.bicycle_context_temporal_rescues ?? 0}</strong></span><span>Bike weak-MC <strong>{sessionPipeline?.bicycle_context_weak_motor_rescues ?? 0}</strong></span><span>Bike margin <strong>{sessionPipeline?.bicycle_context_competitive_rescues ?? 0}</strong></span><span>Bike near-M <strong>{sessionPipeline?.bicycle_context_near_margin_rescues ?? 0}</strong></span><span>Bike X-scan <strong>{sessionPipeline?.bicycle_context_xframe_scans ?? 0}</strong></span><span>Bike X-prio <strong>{sessionPipeline?.bicycle_context_xframe_priority_scans ?? 0}</strong></span><span>Bike X-frame <strong>{sessionPipeline?.bicycle_context_xframe_rescues ?? 0}</strong></span><span>Anchor-span <strong>{sessionPipeline?.verified_anchor_span_rescues ?? 0}</strong></span><span>Post-close <strong>{sessionPipeline?.post_confirm_closures ?? 0}</strong></span><span>Post-jitter <strong>{sessionPipeline?.post_confirm_jitter_holds ?? 0}</strong></span><span>Anchor road-edge <strong>{sessionPipeline?.road_edge_span_rescues ?? 0}</strong></span><span>Span cùng hướng + <strong>{sessionPipeline?.anchor_span_same_direction_overrides ?? 0}</strong></span><span>Cooldown span + <strong>{sessionPipeline?.anchor_span_cooldown_overrides ?? 0}</strong></span><span>Track mất finalize <strong>{sessionPipeline?.anchor_span_lost_finalizations ?? 0}</strong></span><span>Span tức thời giữ <strong>{sessionPipeline?.anchor_span_immediate_overrides ?? 0}</strong></span><span>Span tức thời loại <strong>{sessionPipeline?.anchor_span_immediate_rejections ?? 0}</strong></span><span>Passage re-arm <strong>{sessionPipeline?.passage_cycle_rearms ?? 0}</strong></span><span>2W center <strong>{sessionPipeline?.two_wheel_center_rescues ?? 0}</strong></span><span>2W dedup <strong>{sessionPipeline?.two_wheel_signature_duplicates ?? 0}</strong></span><span>2W spatial <strong>{sessionPipeline?.two_wheel_spatial_signature_duplicates ?? 0}</strong></span><span>2W ultra <strong>{sessionPipeline?.two_wheel_ultra_spatial_signature_duplicates ?? 0}</strong></span><span>FP track lặp <strong>{sessionPipeline?.same_track_repeat_duplicates ?? 0}</strong></span><span>FP đảo hướng <strong>{sessionPipeline?.direction_flip_duplicates ?? 0}</strong></span><span>FP shadow <strong>{sessionPipeline?.secondary_shadow_duplicates ?? 0}</strong></span><span>FP direct-shadow <strong>{sessionPipeline?.direct_shadow_duplicates ?? 0}</strong></span><span>FP cross-method <strong>{sessionPipeline?.cross_method_shadow_duplicates ?? 0}</strong></span><span>FP semantic-shadow <strong>{sessionPipeline?.semantic_shadow_duplicates ?? 0}</strong></span><span>FP reverse shadow <strong>{sessionPipeline?.reverse_shadow_duplicates ?? 0}</strong></span><span>Gate cùng hướng loại <strong>{sessionPipeline?.same_direction_cycle_rejections ?? 0}</strong></span><span>Xe đạp thấy <strong>{sessionPipeline?.bicycle_tracks_seen ?? 0}</strong></span><span>Xe tải cứu <strong>{sessionPipeline?.truck_class_rescues ?? 0}</strong></span><span>Xe tải xác nhận <strong>{sessionPipeline?.truck_tracks_seen ?? 0}</strong></span><span>Khóa class tải <strong>{sessionPipeline?.truck_semantic_locks ?? 0}</strong></span><span>Xe tải cắt vạch <strong>{sessionPipeline?.truck_crossing_tracks ?? 0}</strong></span><span>Xe lớn anchor <strong>{sessionPipeline?.heavy_anchor_tracks ?? 0}</strong></span><span>Xe lớn cứu center <strong>{sessionPipeline?.heavy_center_rescues ?? 0}</strong></span><span>Nối track xe lớn <strong>{sessionPipeline?.heavy_stitch_recoveries ?? 0}</strong></span><span>Gộp canonical 4W <strong>{sessionPipeline?.four_wheel_duplicate_suppressed ?? 0}</strong></span><span>Video-start <strong>{sessionPipeline?.video_start_rescues ?? 0}</strong></span><span>Time-sync <strong>{sessionPipeline?.crossing_time_corrections ?? 0}</strong></span><span>Time-clamp <strong>{sessionPipeline?.crossing_time_clamps ?? 0}</strong></span><span>Replay <strong>{sessionPipeline?.deterministic_video_replay ? 'ổn định' : 'live'}</strong></span><span>Aux sẵn từ đầu <strong>{sessionPipeline?.video_aux_models_ready_at_start ? 'có' : 'không'}</strong></span><span>Human Guard <strong>{sessionPipeline?.human_guard_rejections ?? 0}</strong></span><span>Rider giữ <strong>{sessionPipeline?.rider_guard_rescues ?? 0}</strong></span><span>Guard chờ <strong>{sessionPipeline?.human_guard_pending_crossings ?? 0}</strong></span><span>Guard xác nhận <strong>{sessionPipeline?.human_guard_deferred_commits ?? 0}</strong></span><span>Guard timeout <strong>{sessionPipeline?.human_guard_pending_drops ?? 0}</strong></span></div><div className="vehicle-list">{vehicleRows.map(row => <div className="vehicle-row" key={row.label}><span>{row.label}</span><strong>{row.value}</strong></div>)}</div>{sessionPipeline?.status === 'completed' && (sessionPipeline?.truck_semantic_locks ?? 0) > 0 && (sessionPipeline?.counts_by_type?.truck ?? 0) === 0 && <div className="source-status bad"><strong>⚠ Van/xe tải đã được xác nhận nhưng event cuối chưa mang class xe tải</strong><span>Đã khóa semantic cho {sessionPipeline?.truck_semantic_locks ?? 0} track xe tải sau khi gộp ID; geometry truck crossing={(sessionPipeline?.truck_crossing_tracks ?? 0)}. “Gộp canonical 4W” là số canonical state merge thật, không phải số xe tải. V0.5.30 giữ class TRUCK qua đoạn áp sát vạch để tránh cùng một van đổi truck → car ngay lúc crossing.</span></div>}</article>
       </section>

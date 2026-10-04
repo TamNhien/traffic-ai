@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import hypot
+from math import hypot, nextafter
 
 Point = tuple[float, float]
 Rect = tuple[float, float, float, float]
@@ -83,6 +83,10 @@ class TrackContinuityResolver:
         # its measured velocity. Deceleration must not move a previously leading
         # contact point back through the box to the stationary bottom fallback.
         self._anchor_velocities: dict[int, tuple[int, Point]] = {}
+        # A slow reversal needs two distinct, locally consecutive observations
+        # beyond the existing .75 moving boundary. Keep the first center so a
+        # velocity filter's residual cannot substitute for actual reverse travel.
+        self._anchor_reversals: dict[int, tuple[int, int, Point]] = {}
         # V0.5.49 Precision Recovery Closure 9.5: remember every raw ByteTrack
         # ID that has contributed to one canonical identity.  The crossing gate
         # uses only the *size* of this lineage as a risk signal for long-gap
@@ -191,6 +195,10 @@ class TrackContinuityResolver:
             ):
                 self._anchor_velocities[canonical_id] = displaced_heading
             self._states.pop(displaced, None)
+            self._anchor_reversals.pop(displaced, None)
+            # Unconfirmed direction evidence belongs to its observed trajectory;
+            # alias fusion cannot combine two single-frame hints into a turn.
+            self._anchor_reversals.pop(canonical_id, None)
         return displaced
 
     def lineage_size(self, canonical_id: int) -> int:
@@ -211,13 +219,20 @@ class TrackContinuityResolver:
         boundary retains the latest reliable heading; an identity without one
         keeps the original stationary/startup blend. Stitch prediction and the
         Human Guard continue to use ``velocity_for`` and its actual velocity.
-        A reversal updates the heading once it supplies reliable motion again.
+        A slow reversal can establish a new heading through two distinct local
+        observations above .75, with at least 1.5 pixels of actual reverse travel.
+        Its retained vector is normalized to the existing full-heading boundary,
+        so stopping after that turn does not restart the stationary blend.
         """
         heading = self._anchor_velocities.get(int(canonical_id))
         return heading[1] if heading is not None else self.velocity_for(canonical_id)
 
     def _update_state(self, canonical: int, raw_id: int, point: Point, label: str, frame_index: int) -> None:
         previous = self._states.get(canonical)
+        if previous is not None and frame_index <= previous.frame_index:
+            # A duplicated or stale source clock supplies no new motion evidence
+            # and must not rewrite the center used by the next real observation.
+            return
         velocity = (0.0, 0.0)
         if previous is not None:
             gap = max(1, frame_index - previous.frame_index)
@@ -227,8 +242,42 @@ class TrackContinuityResolver:
                 previous.velocity[1] * 0.45 + observed[1] * 0.55,
             )
         self._states[canonical] = _IdentityState(point, frame_index, str(label), raw_id, velocity)
-        if abs(velocity[0]) + abs(velocity[1]) >= 1.5:
+        speed = abs(velocity[0]) + abs(velocity[1])
+        if speed >= 1.5:
             self._anchor_velocities[canonical] = (int(frame_index), velocity)
+            self._anchor_reversals.pop(canonical, None)
+            return
+
+        heading = self._anchor_velocities.get(canonical)
+        gap_limit = self.heavy_max_gap_frames if _vehicle_family(label) == "four-wheel" else self.max_gap_frames
+        if (
+            previous is None or heading is None or speed <= .75
+            or frame_index - previous.frame_index > gap_limit
+            or velocity[0] * heading[1][0] + velocity[1] * heading[1][1] >= 0.0
+            or (point[0] - previous.point[0]) * heading[1][0]
+               + (point[1] - previous.point[1]) * heading[1][1] >= 0.0
+        ):
+            self._anchor_reversals.pop(canonical, None)
+            return
+        pending = self._anchor_reversals.get(canonical)
+        if pending is not None and 0 < frame_index - pending[0] <= gap_limit:
+            observations, start = pending[1] + 1, pending[2]
+        else:
+            observations, start = 1, previous.point
+        self._anchor_reversals[canonical] = (int(frame_index), observations, start)
+        heading_length = hypot(*heading[1])
+        reverse_travel = -(
+            (point[0] - start[0]) * heading[1][0]
+            + (point[1] - start[1]) * heading[1][1]
+        ) / heading_length
+        if observations >= 2 and reverse_travel >= 1.5:
+            # Round upward by one float step so normalization cannot fall just
+            # below 1.5 and leave a microscopic stationary-blend remainder.
+            full_speed = nextafter(1.5, float("inf"))
+            self._anchor_velocities[canonical] = (
+                int(frame_index), (velocity[0] * full_speed / speed, velocity[1] * full_speed / speed),
+            )
+            self._anchor_reversals.pop(canonical, None)
 
     def _cleanup(self, frame_index: int) -> None:
         expiry = max(self.max_gap_frames, self.heavy_max_gap_frames) * 8
@@ -239,6 +288,7 @@ class TrackContinuityResolver:
             self._states.pop(cid, None)
             self._canonical_raw_ids.pop(cid, None)
             self._anchor_velocities.pop(cid, None)
+            self._anchor_reversals.pop(cid, None)
         for raw_id, cid in list(self._raw_to_canonical.items()):
             if cid in stale:
                 self._raw_to_canonical.pop(raw_id, None)

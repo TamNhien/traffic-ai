@@ -1,65 +1,61 @@
-# Traffic AI V0.5.57 — Anchor lifecycle và bằng chứng benchmark
+# Traffic AI V0.5.58 — Trace lifecycle và source clock
 
-Nâng cấp từ full source V0.5.56. Đơn vị đếm là **lượt cắt vạch**: cùng phương tiện quay lại và cắt vạch lần nữa được tính thêm một lượt.
+Nâng cấp từ full source V0.5.57. Đơn vị đếm là **lượt cắt vạch**: cùng phương tiện quay lại và cắt vạch lần nữa được tính thêm một lượt.
 
-## Benchmark đầu vào V0.5.56
+## Benchmark đầu vào V0.5.57
 
-Screenshot mới: session160 / benchmark39, sao chép149 GT từ benchmark38.
+Screenshot: session161 / benchmark40, sao chép149 GT từ benchmark39.
 
-| Chỉ số | V0.5.55 | V0.5.56 |
+| Chỉ số | V0.5.56 | V0.5.57 |
 |---|---:|---:|
 | Ground truth | 149 | 149 |
-| AI đếm | 152 | 152 |
-| Khớp | 136 | 135 |
-| Lọt không đếm | 13 | 14 |
-| Đếm dư | 16 | 17 |
-| Recall | 91.3% | 90.6% |
-| Precision | 89.5% | 88.8% |
-| F1 | 90.4% | 89.7% |
+| AI đếm | 152 | 149 |
+| Khớp | 135 | 132 |
+| Lọt không đếm | 14 | 17 |
+| Đếm dư | 17 | 17 |
+| Recall | 90.6% | 88.6% |
+| Precision | 88.8% | 88.6% |
+| F1 | 89.7% | 88.6% |
 | Class đúng | 98.5% | 98.5% |
 | Sai loại | 2 | 2 |
 
-V0.5.56 giảm một lượt khớp; tổng AI không phản ánh mức chính xác từng lượt. Worker đề xuất 208, backend gộp 56, Human Guard loại 31; DB có 152 event có timecode. IN 75 / OUT 77; loại xe149 motorcycle, 1 bicycle, 2 truck. Các counter direct/interpolation/rescue là bước candidate, không cộng thành tổng DB cuối.
+Tổng AI bằng GT vẫn có17 lọt và17 dư. Ba lượt khớp giảm đều ở IN:75→72; OUT giữ77. Worker đề xuất198, backend gộp49, Human Guard loại32; DB149 event có timecode, integrityOK. Loại xe146 motorcycle,1 bicycle,2 truck. Counter direct43/interpolation82/rescue73 là bước candidate, không phải tổng DB cuối.
 
-RAR hiện tại có **429 JPG:222 ảnh cũ giống hệt từng byte từ lượt V0.5.55 và207 ảnh mới**. Không có JSONL/model scores. Đã xem toàn bộ11 contact sheet và các ảnh mục tiêu; không dùng overlay cũ để kết luận hành vi V0.5.56.
+RAR lần này có **197 JPG duy nhất, đều mang prefix session161**, không có ảnh trộn từ phiên cũ và không có JSONL/model scores. Đã xem cả5 contact sheet cùng ảnh mục tiêu. Rider#328328 vẫn có cyan anchor dao động ở754.36–754.96s; các tọa độ này giống hệt ảnh cùng frame của .56. Bbox thay đổi kích thước và raw ID phân mảnh vẫn cần trace để xác định tác động tới event. Chưa thể gắn ba IN bị mất với một nguyên nhân cụ thể.
 
-Ở lượt mới, passage scooter#19086 chỉ có frame 1648 với anchor chéo; năm frame nhảy cạnh ở lượt trước thuộc ảnh cũ. Gần289.68s, người áo xanh dắt xe đạp chưa có box, cạnh một scooter đã được box; tới292.36s, chiếc xe đạp được box motorcycle#110090(conf.47). Chưa có event/track export để xác định AI event nào đã ghép với GTbicycle289.450. Van gần641.96s vẫn rawtruck#254023(conf.80). Các ảnh không đủ để gắn từng chẩn đoán quanh timecode với phương tiện GT.
+Hai lỗi loại chưa thay đổi:04:49.450 IN bicycle→motorcycle và10:41.981 OUT car→truck. Ảnh289.68s có người dắt xe đạp chưa được box, cạnh scooter riêng; tới292.36s có box MC#110090 confidence.47. Van641.96s vẫn rawtruck#254023 confidence.80. Không đủ event/track provenance để kết luận các sửa class đã giải quyết hai GT này.
 
-**Chưa replay V0.5.57**. Các số trên là benchmark đầu vào; các source regression dưới đây không chứng minh đã cải thiện F1 hoặc sửa hai hàng sai loại của clip.
+**Chưa replay V0.5.58**. Các số trên là benchmark đầu vào; kiểm tra source không chứng minh đã tăng F1 hoặc sửa các hàng GT của clip. Giữ matching window, GT timestamp/class, finite gate, Road Zone, cooldown và threshold class/dedup.
 
-## Thay đổi V0.5.57
+## Thay đổi V0.5.58
 
-### Heading sống cùng canonical identity
+### Đảo chiều chậm có chứng cứ hữu hạn
 
-V0.5.56 loại bước nhảy ngang/dọc nhưng blend tốc độ có thể đưa anchor của xe đang đi lên từ cạnh trên trở lại đáy bbox khi giảm tốc. Regression tái hiện quỹ đạo center luôn đi lên nhưng phát thêm crossing IN giả sau OUT.
+Heading V0.5.57 được giữ khi xe giảm tốc, nhưng có thể giữ mãi khi xe thật sự đảo chiều dưới ngưỡng1.5. Repro source thật: sau khi xác lập đi lên, center đi xuống1px/frame liên tục; .56 có IN qua finite gate còn .57 không có dù cạnh trước đã qua vạch. Chiều ngược lại cũng tái hiện.
 
-Worker nay lấy heading đã xác lập từ `anchor_velocity_for()` riêng cho anchor. Heading được cập nhật khi |vx|+|vy| đạt ngưỡng full-leading 1.5 hiện có; khi chậm/đứng lại, giữ heading đó. `velocity_for()` vẫn trả vận tốc đo thực cho stitching và Human Guard. Track chưa có heading tin cậy giữ startup blend cũ; alias chuyển heading theo source frame, expiry xóa cùng identity. Cleanup chạy trước raw-ID lookup để ID quay lại sau expiry không hồi sinh vận tốc cũ.
+V0.5.58 xác nhận hướng mới bằng **hai observation liên tiếp khác source frame**, vận tốc đo trên.75 và chuyển động thực ngược heading cũ, tích lũy ít nhất1.5px theo hướng ngược. Gap phải trong giới hạn stitching hiện có. Dừng, chuyển động thuận, mạnh đủ ngưỡng, gap lớn, alias fusion hoặc expiry xóa chứng cứ chưa hoàn tất. Duplicate/stale frame không được sửa motion history. Sau xác nhận, heading được chuẩn hóa tới ngưỡng full-leading hiện có; vận tốc thực vẫn dùng cho stitching/Human Guard.
 
-Đảo chiều thật nhưng rất chậm dưới 1.5 vẫn giữ heading trước đến khi có chuyển động đủ tin cậy, nên thời điểm crossing có thể trễ. Cần replay để đánh giá; không mở gate hoặc giảm ngưỡng cooldown/Road Zone.
+Anchor đổi cạnh dẫn một lần khi đảo chiều chậm được xác nhận. Bbox biến dạng hoặc hướng mạnh thay đổi nhanh vẫn có thể làm anchor dao động; sửa này chưa được chứng minh giải quyết chuỗi ảnh#328328. Cần replay đầy đủ để đánh giá tradeoff và thời điểm crossing.
 
-### Pending sau merge và clock hình học
+### Consensus dùng tuổi bằng chứng thật
 
-Pending được xét lại same-direction eligibility theo passage mới nhất sau canonical merge. Proof từ alias không được mượn tuổi của passage cũ để tạo qualified override sát passage vừa đếm. Return ngược hướng hoặc cùng hướng đã đủ thời hạn vẫn giữ rule hiện có. Giá trị clock hình học NaN/infinity không còn bị clamp thành timestamp lùi giả; dùng frame quan sát nếu clock không hợp lệ.
+Một bicycle consensus cũ có thể vẫn thắng history khi frame hiện tại chỉ có opinion motorcycle yếu; trước đây worker dùng frame truy vấn để gia hạn override. Nay certificate vẫn ràng buộc đúng decision frame/tuple, nhưng TTL tính từ **frame cuối minority thực sự thắng**. History đã hết tuổi không được tăng rescue counter, gia hạn nhãn hoặc đổi thành one-shot mới. Opinion thắng mới có thể gia hạn; one-shot đủ điều kiện vẫn dùng frame hiện tại.
 
-### Consensus đã đạt điều kiện được áp dụng đúng
+`TrackLabelSmoother` nhận source frame từ worker. Canonical merge sắp xếp history theo frame thật, giữ opinion mạnh nhất mỗi frame và không đẩy24 nhãn truck cũ ra sau24 nhãn car mới để tạo truck consensus giả. Caller không truyền frame vẫn giữ ABI history hai phần tử. Không đổi ngưỡng confidence/TTL hoặc ép nhãn theo GT.
 
-Một bicycle consensus nhiều frame/nguồn đủ điều kiện có fused score khoảng.8277 trước đây bị xét lại như one-shot và mất vì ngưỡng .90. Worker lưu proof đúng canonical track, source frame và tuplelabel/score, rồi áp dụng quyết định consensus đã được kiểm chứng. Cache retry cùng frame không chạy model/tăng counter lại; tuple khác, frame khác hoặc chỉ có one-shot không được mượn proof. Giữ threshold one-shot .90, điều kiện winning-frame/source/hits/margin, truck semantic protection và TTL.
+### Trace lỗi không làm mất dispatch của frame
 
-Truck semantic lock dùng source frame của bằng chứng truck thắng mới nhất. Đọc lại cùng history không gia hạn lock theo frame truy vấn; primary truck đủ điều kiện vẫn cập nhật theo detector frame hiện tại. Ví dụ bằng chứng cuối frame 95 với TTL 450 không được giữ tới 600 chỉ vì đã đọc history ở frame 210. Không ép van thànhcar theoGT.
+Trước đây ghi JSONL trước dispatch có thể ném OSError và bỏ event đang chờ dù geometry đã commit. Nay lỗi mở/ghi/đóng trace chỉ tắt phần trace, ghi `benchmark_trace_warning`, và cho luồng event tiếp tục. Warning tách khỏi lỗi pipeline `last_error`; event giữ source frame/time gốc. Repro lỗi write .57 gửi0/1 event; .58 gửi1/1 và đóng writer lỗi.
 
-### Human Guard và trace đúng transaction
+Trace chỉ được đưa vào thư mục camera **sau khi writer đóng thành công**. Cùng filesystem dùng hardlink nguyên tử, filesystem không hỗ trợ dùng copy nguyên tử; publication lỗi không để lộ file dở hoặc ngắt shutdown. Canonical endpoint vẫn giữ nguyên. Lỗi ghi audit EOF không công bố camera artifact. Trace đang chạy hoặc bị lỗi chưa được coi là hồ sơ hoàn tất.
 
-Decision trung lập trả về trạng thái canonical: pedestrian đã xác nhận vẫn rejected đến khi có rider evidence hợp lệ. Xóa provisional strike chưa đủ điều kiện vẫn trảkeep. Action dùng để authorize event và status dùng trong overlay/trace nay thống nhất.
+Header phiên chỉ có camera/session/FPS/frame policy; không tạo frame giả hay chứa secrets. Mỗi gate observation bổ sung bbox, center/anchor, raw ID, stitched, vận tốc đo và heading giữ lại. Các trường này giúp phân biệt chuyển động thật với bbox/identity biến động; không đổi scoring/reason ranking.
 
-Trace cộng deferred commit đã dispatch trực tiếp vào `crossing_events` của frame xác nhận, không đếm đôi ordinary/lost queue và không mang lại sang frame tiếp theo. Event payload vẫn giữ source frame/time gốc; trace row là thời điểm quan sát/xác nhận.
+### Số hữu hạn và Annotation Studio đúng ảnh
 
-Snapshot mới có tên `session_<id>_<UTC>_frame_<n>.jpg` trong thư mục camera, giúp phân biệt các lượt chạy nếu nén chung. Writer thất bại trảNone, không đưa URL ảnh chưa được lưu vào event. Ảnh cũ giữ nguyên tên; không tự gán lại session cho archive hiện tại.
+Pydantic từ chối NaN/infinity ở event/GT timecode, session FPS/duration, benchmark tolerance và timecodes/window chẩn đoán. Giữ nullable fields, giới hạn và clamp hữu hạn hiện có. Validation chạy trước khi clock không hợp lệ đi vào database/scoring/JSON.
 
-### Chẩn đoán có scope và báo cáo đúng phiên
-
-`diagnosis_scope` phân biệt geometry của track đã xác định với dấu hiệu của các xe quanh timecode. DET/track/road/cooldown/confirmation là counter toàn khung, không được coi là nguyên nhân riêng của một xe GT. ID không có observation không được coi là track đã xác minh. Reason ranking và scoring giữ nguyên.
-
-Frontend hiển thị **Dấu hiệu quanh timecode** và ghi chưa gắn với xeGT khi evidence chưa xác định identity; report cũ thiếu scope cũng được coi là chưa xác định. Đổi benchmark/camera hoặc reload cùng ID vô hiệu hóa phản hồi cũ, kể cả chuyểnA→B→A; kết quả load/reconcile chậm không ghi đè phiên mới.
+Annotation Studio ràng buộc index, annotation, save và bulk accept với dataset/version/filter cùng selection/request hiện tại. ChuyểnA→B→A hoặc reload cùng ảnh vô hiệu hóa phản hồi trước. Box cũ bị ẩn và không được lưu lên ảnh mới; thao tác sửa box/flags được chặn khi chưa tải đúng annotation hoặc đang lưu. Phản hồi/error save đến muộn không ghi đè ảnh mới hay tải lại index của selection cũ. Một effect tải annotation sau khi index xác nhận ảnh; index đến muộn không tải lại ảnh đã được chỉnh sửa và làm mất sửa đổi.
 
 ## Hồ sơ benchmark để phân tích lần tiếp theo
 
@@ -77,20 +73,20 @@ Nút **Tải hồ sơ benchmark** trong Report tải `traffic-ai-benchmark-<id>-
 
 API: `GET /api/benchmarks/{id}/export`; AI nội bộ: `GET /benchmark-traces/{session_id}/download`. Nếu trace thiếu/quá lớn/timeout, manifest ghi lý do và report ZIP vẫn tải được. Export không sửa GT/event/tổng đếm, không cắt trace để giả thành đầy đủ. Với session đang chạy, trace/event có thể tiếp tục tăng; tải sau khi hoàn tất.
 
-URL metadata bỏ user/password/query/fragment; video chỉ giữ tên. Không lấy environment/settings, đường dẫn model hoặc video/model weights. Geometry camera hiện tại không được coi là cấu hình inference lịch sử. Gửi ZIP này cùng screenshot để có liên kết event/track; chỉRAR ảnh không cung cấp raw model scores hay provenance đầy đủ.
+URL metadata bỏ user/password/query/fragment; video chỉ giữ tên. Không lấy environment/settings, đường dẫn model hoặc video/model weights. Geometry camera hiện tại không được coi là cấu hình inference lịch sử. Gửi ZIP này cùng screenshot để có liên kết event/track. Sau khi trace đóng thành công, V0.5.58 còn lưu `session_<id>_benchmark-trace.jsonl` cùng JPG trong thư mục `camera_<id>`; khi nén ảnh, giữ kèm JSONL đó. Nếu trace lỗi, UI báo riêng và hồ sơ có thể thiếu dữ liệu; chỉ RAR JPG không cung cấp raw model scores hay provenance đầy đủ.
 
 ## Version, môi trường và database
 
 | Thành phần | Giá trị |
 |---|---|
-| VERSION / Frontend / Backend / AI Service | 0.5.57 |
-| Alembic head | `0071_anchor_lifecycle_v0557` |
-| Parent | `0070_benchmark_evidence_v0556` |
-| schema_version | 0.5.57 |
+| VERSION / Frontend / Backend / AI Service | 0.5.58 |
+| Alembic head | `0072_trace_lifecycle_v0558` |
+| Parent | `0071_anchor_lifecycle_v0557` |
+| schema_version | 0.5.58 |
 | npm trong Docker / CI / packageManager | 12.2.0 |
 | Node.js trong Docker / CI | 26.10.0 |
 
-Giữ pin npm/Node đã cập nhật và quy trình publish test→commit→push→tag→Release. Migration 0071 chỉ cập nhật schema version, giữ dữ liệu/GT. Camera Preview/Vehicle Count và GT/Report giữ bố cục 50/50. Chi tiết **459 offline assertions**, frontend timing checks và các giới hạn môi trường trong `VERIFICATION.md`.
+Giữ pin npm/Node đã cập nhật và quy trình publish test→commit→push→tag→Release. Migration 0072 chỉ cập nhật schema version, giữ dữ liệu/GT. Camera Preview/Vehicle Count và GT/Report giữ bố cục 50/50. Chi tiết **513 test functions offline**, frontend timing checks và các giới hạn môi trường trong `VERIFICATION.md`.
 
 ## Đầy đủ lệnh test, start và tự động publish
 
@@ -122,7 +118,7 @@ gh auth setup-git
 
 Nếu chưa cấu hình Git author, đặt `git config --global user.name` và `git config --global user.email` bằng thông tin của bạn.
 
-Publish tự đọc VERSION để tạo tag **v0.5.57**, mặc định repository `TamNhien/traffic-ai`. Script kiểm thử source đã chuẩn hóa, commit/push/tag, chờ đúng Actions run theo tag/SHA/push và tạo Release có ZIP, TAR.GZ, README, SHA256SUMS. Fallback CLI bổ sung đủ asset từ tag và hoàn tất Release tạo dở.
+Publish tự đọc VERSION để tạo tag **v0.5.58**, mặc định repository `TamNhien/traffic-ai`. Script kiểm thử source đã chuẩn hóa, commit/push/tag, chờ đúng Actions run theo tag/SHA/push và tạo Release có ZIP, TAR.GZ, README, SHA256SUMS. Fallback CLI bổ sung đủ asset từ tag và hoàn tất Release tạo dở.
 
 Nếu bị gián đoạn, xử lý lỗi mạng/quyền truy cập rồi chạy lại `publish.ps1` khi source không đổi. Thay đổi source sau tag đã có cần tăng version; script không di chuyển hoặc ghi đè tag. `-NoWait` chỉ đẩy source/tag rồi trả về khi Release còn đang chờ.
 
@@ -131,7 +127,7 @@ Nếu bị gián đoạn, xử lý lỗi mạng/quyền truy cập rồi chạy 
 ```powershell
 .\scripts\publish.ps1 -Owner TEN_GITHUB -Repository TEN_REPO
 
-gh workflow run release.yml --repo TamNhien/traffic-ai -f tag=v0.5.57
+gh workflow run release.yml --repo TamNhien/traffic-ai -f tag=v0.5.58
 ```
 
 Khi dùng npm ngoài Docker trên Windows, Node.js cần 26.10.0 trở lên:

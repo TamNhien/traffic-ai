@@ -254,3 +254,23 @@ def test_v0555_trace_schema_rejects_misaligned_tracking_ids():
     assert BenchmarkTraceDiagnoseRequest(times=[10, 20], tracking_ids=[4, None]).tracking_ids == [4, None]
     with pytest.raises(ValidationError):
         BenchmarkTraceDiagnoseRequest(times=[10, 20], tracking_ids=[4])
+
+
+def test_v0558_numeric_trace_schema_rejects_nonfinite_requested_times():
+    import pytest
+    from pydantic import ValidationError
+    from app.schemas import BenchmarkTraceDiagnoseRequest
+
+    for source_time in (float("nan"), float("inf"), float("-inf")):
+        with pytest.raises(ValidationError):
+            BenchmarkTraceDiagnoseRequest(times=[10.0, source_time], tracking_ids=[77, None])
+
+
+def test_v0558_numeric_trace_schema_preserves_finite_times_and_alignment():
+    from app.schemas import BenchmarkTraceDiagnoseRequest
+
+    assert BenchmarkTraceDiagnoseRequest().times == []
+    request = BenchmarkTraceDiagnoseRequest(times=[-1.0, 0.0, 10.6203], tracking_ids=[None, 3, 77])
+    assert request.times == [-1.0, 0.0, 10.6203]
+    assert request.tracking_ids == [None, 3, 77]
+    assert request.window_seconds == 0.60

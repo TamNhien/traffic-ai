@@ -8,6 +8,178 @@ def _anchor_velocity(resolver: TrackContinuityResolver, canonical: int):
     return getter(canonical)
 
 
+def _v0558_quiet_upward_identity(raw_id=101):
+    resolver = TrackContinuityResolver(max_gap_frames=10)
+    resolver.resolve(raw_id, (500., 400.), 'motorcycle', 10, 1000, 1000)
+    resolver.resolve(raw_id, (500., 388.), 'motorcycle', 11, 1000, 1000)
+    for frame in range(12, 28):
+        resolver.resolve(raw_id, (500., 388.), 'motorcycle', frame, 1000, 1000)
+    return resolver
+
+
+def test_v0558_sustained_slow_downward_reversal_keeps_real_finite_gate_crossing() -> None:
+    from app.counting import CountingLine, LineCrossingCounter, RoadZone
+
+    resolver = TrackContinuityResolver()
+    resolver.resolve(101, (500., 400.), 'motorcycle', 10, 1000, 1000)
+    resolver.resolve(101, (500., 388.), 'motorcycle', 11, 1000, 1000)
+    counter = LineCrossingCounter(CountingLine(.1, .5, .9, .5), road_zone=RoadZone(), startup_grace_frames=0)
+    directions = []
+    for offset in range(101):
+        cy, frame = 388. + offset, 11 + offset
+        if offset:
+            resolver.resolve(101, (500., cy), 'motorcycle', frame, 1000, 1000)
+        anchor = motion_leading_anchor((460., cy-40., 540., cy+40.), _anchor_velocity(resolver, 101))
+        result = counter.update(101, anchor, 1000, 1000, frame)
+        if result:
+            directions.append(result)
+    assert resolver.velocity_for(101) == (0., 1.)
+    assert _anchor_velocity(resolver, 101)[1] > 0
+    assert directions == ['in']
+
+
+def test_v0558_sustained_slow_upward_reversal_keeps_real_finite_gate_crossing() -> None:
+    from app.counting import CountingLine, LineCrossingCounter, RoadZone
+
+    resolver = TrackContinuityResolver()
+    resolver.resolve(102, (500., 600.), 'motorcycle', 10, 1000, 1000)
+    resolver.resolve(102, (500., 612.), 'motorcycle', 11, 1000, 1000)
+    counter = LineCrossingCounter(CountingLine(.1, .5, .9, .5), road_zone=RoadZone(), startup_grace_frames=0)
+    directions = []
+    for offset in range(145):
+        cy, frame = 612. - offset, 11 + offset
+        if offset:
+            resolver.resolve(102, (500., cy), 'motorcycle', frame, 1000, 1000)
+        anchor = motion_leading_anchor((460., cy-40., 540., cy+40.), _anchor_velocity(resolver, 102))
+        result = counter.update(102, anchor, 1000, 1000, frame)
+        if result:
+            directions.append(result)
+    assert resolver.velocity_for(102) == (0., -1.)
+    assert _anchor_velocity(resolver, 102)[1] < 0
+    assert directions == ['out']
+
+
+def test_v0558_one_opposite_frame_then_stop_cannot_rotate_retained_anchor() -> None:
+    resolver = _v0558_quiet_upward_identity()
+    before = _anchor_velocity(resolver, 101)
+    resolver.resolve(101, (500., 389.4), 'motorcycle', 28, 1000, 1000)
+    assert _anchor_velocity(resolver, 101) == before
+    for frame in range(29, 36):
+        resolver.resolve(101, (500., 389.4), 'motorcycle', frame, 1000, 1000)
+        assert _anchor_velocity(resolver, 101) == before
+
+
+def test_v0558_alternating_small_jitter_cannot_supply_sustained_reverse_travel() -> None:
+    from app.counting import CountingLine, LineCrossingCounter
+
+    resolver = _v0558_quiet_upward_identity()
+    before = _anchor_velocity(resolver, 101)
+    counter = LineCrossingCounter(CountingLine(.1, .35, .9, .35), startup_grace_frames=0)
+    for frame in range(28, 58):
+        cy = 389.4 if frame % 2 == 0 else 388.
+        resolver.resolve(101, (500., cy), 'motorcycle', frame, 1000, 1000)
+        assert _anchor_velocity(resolver, 101) == before
+        anchor = motion_leading_anchor((460., cy-40., 540., cy+40.), _anchor_velocity(resolver, 101))
+        assert counter.update(101, anchor, 1000, 1000, frame) is None
+    assert counter.total_crossings == 0
+
+
+def test_v0558_duplicate_and_stale_frame_cannot_confirm_or_rewrite_motion() -> None:
+    resolver = _v0558_quiet_upward_identity()
+    before = _anchor_velocity(resolver, 101)
+    resolver.resolve(101, (500., 389.4), 'motorcycle', 28, 1000, 1000)
+    velocity = resolver.velocity_for(101)
+    for frame in (28, 28, 27, 26):
+        resolver.resolve(101, (500., 390.8), 'motorcycle', frame, 1000, 1000)
+        assert _anchor_velocity(resolver, 101) == before
+        assert resolver.velocity_for(101) == velocity
+    resolver.resolve(101, (500., 390.8), 'motorcycle', 29, 1000, 1000)
+    assert 0 < resolver.velocity_for(101)[1] < 1.5
+    assert _anchor_velocity(resolver, 101)[1] >= 1.5
+
+
+def test_v0558_long_observation_gap_discards_unconfirmed_reversal() -> None:
+    resolver = _v0558_quiet_upward_identity()
+    before = _anchor_velocity(resolver, 101)
+    resolver.resolve(101, (500., 389.4), 'motorcycle', 28, 1000, 1000)
+    resolver.resolve(101, (500., 404.8), 'motorcycle', 39, 1000, 1000)
+    assert _anchor_velocity(resolver, 101) == before
+    resolver.resolve(101, (500., 406.2), 'motorcycle', 40, 1000, 1000)
+    assert _anchor_velocity(resolver, 101) == before
+    resolver.resolve(101, (500., 407.6), 'motorcycle', 41, 1000, 1000)
+    assert _anchor_velocity(resolver, 101)[1] >= 1.5
+
+
+def test_v0558_alias_fusion_does_not_merge_single_frame_turn_certificates() -> None:
+    resolver = _v0558_quiet_upward_identity()
+    resolver.resolve(202, (100., 400.), 'motorcycle', 10, 1000, 1000, {101})
+    resolver.resolve(202, (100., 388.), 'motorcycle', 11, 1000, 1000, {101})
+    for frame in range(12, 28):
+        resolver.resolve(202, (100., 388.), 'motorcycle', frame, 1000, 1000, {101})
+    resolver.resolve(101, (500., 389.4), 'motorcycle', 28, 1000, 1000)
+    resolver.resolve(202, (100., 389.4), 'motorcycle', 28, 1000, 1000, {101})
+    before = _anchor_velocity(resolver, 101)
+    assert resolver.alias_raw_id(202, 101) == 202
+    assert _anchor_velocity(resolver, 202) == (0., 0.)
+    assert _anchor_velocity(resolver, 101) == before
+    resolver.resolve(101, (500., 390.8), 'motorcycle', 29, 1000, 1000)
+    assert _anchor_velocity(resolver, 101) == before
+    resolver.resolve(101, (500., 392.2), 'motorcycle', 30, 1000, 1000)
+    assert _anchor_velocity(resolver, 101)[1] >= 1.5
+
+
+def test_v0558_expired_identity_cannot_reuse_unconfirmed_reversal() -> None:
+    resolver = _v0558_quiet_upward_identity()
+    resolver.resolve(101, (500., 389.4), 'motorcycle', 28, 1000, 1000)
+    resolver.resolve(101, (500., 390.8), 'motorcycle', 109, 1000, 1000)
+    assert resolver.velocity_for(101) == (0., 0.)
+    assert _anchor_velocity(resolver, 101) == (0., 0.)
+    resolver.resolve(101, (500., 392.2), 'motorcycle', 110, 1000, 1000)
+    assert _anchor_velocity(resolver, 101) == resolver.velocity_for(101)
+    assert 0 < _anchor_velocity(resolver, 101)[1] < 1.5
+
+
+def test_v0558_confirmed_slow_turn_keeps_cardinal_inset_while_coasting() -> None:
+    resolver = _v0558_quiet_upward_identity()
+    for frame, cy in ((28, 389.4), (29, 390.8), (30, 390.8), (31, 390.8)):
+        resolver.resolve(101, (500., cy), 'truck', frame, 1000, 1000)
+    assert 0 < resolver.velocity_for(101)[1] < .75
+    assert motion_leading_anchor((460., 350.8, 540., 430.8), _anchor_velocity(resolver, 101), .16) == (500., 418.)
+
+
+def test_v0558_confirmed_slow_reversal_cannot_cross_outside_finite_gate() -> None:
+    from app.counting import CountingLine, LineCrossingCounter
+
+    resolver = TrackContinuityResolver()
+    resolver.resolve(103, (950., 400.), 'motorcycle', 10, 1000, 1000)
+    resolver.resolve(103, (950., 388.), 'motorcycle', 11, 1000, 1000)
+    counter = LineCrossingCounter(CountingLine(.1, .5, .9, .5), startup_grace_frames=0)
+    for offset in range(101):
+        cy, frame = 388. + offset, 11 + offset
+        if offset:
+            resolver.resolve(103, (950., cy), 'motorcycle', frame, 1000, 1000)
+        anchor = motion_leading_anchor((910., cy-40., 990., cy+40.), _anchor_velocity(resolver, 103))
+        assert counter.update(103, anchor, 1000, 1000, frame) is None
+    assert counter.total_crossings == 0
+
+
+def test_v0558_confirmed_slow_reversal_cannot_cross_outside_road_zone() -> None:
+    from app.counting import CountingLine, LineCrossingCounter, RoadZone
+
+    resolver = TrackContinuityResolver()
+    resolver.resolve(104, (850., 400.), 'motorcycle', 10, 1000, 1000)
+    resolver.resolve(104, (850., 388.), 'motorcycle', 11, 1000, 1000)
+    zone = RoadZone(.2, .2, .8, .2, .8, .8, .2, .8)
+    counter = LineCrossingCounter(CountingLine(.1, .5, .9, .5), road_zone=zone, startup_grace_frames=0)
+    for offset in range(101):
+        cy, frame = 388. + offset, 11 + offset
+        if offset:
+            resolver.resolve(104, (850., cy), 'motorcycle', frame, 1000, 1000)
+        anchor = motion_leading_anchor((810., cy-40., 890., cy+40.), _anchor_velocity(resolver, 104))
+        assert counter.update(104, anchor, 1000, 1000, frame) is None
+    assert counter.total_crossings == 0
+
+
 def test_v0557_decelerating_upward_track_cannot_invent_opposite_crossing() -> None:
     from app.counting import CountingLine, LineCrossingCounter
 
