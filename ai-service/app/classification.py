@@ -1006,6 +1006,7 @@ class TruckSemanticLock:
         stable_label: str,
         certainty: float,
         hits: int,
+        primary_frame_index: int | None = None,
         refiner_hits: int = 0,
         refiner_confidence: float = 0.0,
         refiner_frame_index: int | None = None,
@@ -1018,22 +1019,29 @@ class TruckSemanticLock:
         previous = self._locks.get(int(track_id))
         if previous is not None and int(frame_index) < previous[1]:
             return None
+        primary_source_frame = int(frame_index) if primary_frame_index is None else int(primary_frame_index)
         strong_primary = (
             str(stable_label) == "truck"
             and int(hits) >= self.primary_hits
             and float(certainty) >= self.primary_certainty
+            and 0 <= int(frame_index) - primary_source_frame <= self.ttl_frames
         )
         refiner_source_frame = int(frame_index) if refiner_frame_index is None else int(refiner_frame_index)
         strong_refiner = (
             int(refiner_hits) >= self.min_refiner_hits
             and float(refiner_confidence) >= self.min_refiner_confidence
-            and refiner_source_frame <= int(frame_index)
+            and 0 <= int(frame_index) - refiner_source_frame <= self.ttl_frames
         )
         if strong_primary or strong_refiner:
-            # Reading eligible refiner history is not another truck observation.
-            # A qualified primary truck is new evidence on the current frame;
-            # refiner-only refreshes retain their actual winning source clock.
-            observed_frame = int(frame_index) if strong_primary else refiner_source_frame
+            # A stable primary label may still be supported by old truck pixels
+            # while the current detector sees car. Both evidence paths retain
+            # their actual source clocks; the newest qualified path owns TTL.
+            qualified_clocks = []
+            if strong_primary:
+                qualified_clocks.append(primary_source_frame)
+            if strong_refiner:
+                qualified_clocks.append(refiner_source_frame)
+            observed_frame = max(qualified_clocks)
             if previous is None or observed_frame >= previous[1]:
                 confidence = max(
                     float(certainty) if strong_primary else 0.0,
@@ -1057,6 +1065,22 @@ class TruckSemanticLock:
             self._locks.pop(int(track_id), None)
             return None
         return "truck", float(confidence)
+
+    def snapshot_for(self, track_id: int, frame_index: int, primary_label: str) -> dict | None:
+        """Read an eligible lock and its source clock without changing state."""
+        if vehicle_family(primary_label) != "four-wheel":
+            return None
+        entry = self._locks.get(int(track_id))
+        if entry is None:
+            return None
+        confidence, observed_frame = entry
+        if not isfinite(float(confidence)) or not 0 <= int(frame_index) - int(observed_frame) <= self.ttl_frames:
+            return None
+        return {
+            "label": "truck", "confidence": float(confidence),
+            "source_frame_index": int(observed_frame),
+            "expires_after_frame_index": int(observed_frame) + self.ttl_frames,
+        }
 
     def rebind(self, source_track_id: int, target_track_id: int) -> None:
         source = int(source_track_id)
@@ -1135,6 +1159,23 @@ class TrackLabelSmoother:
         label = max(scores, key=lambda item: (scores[item], hits.get(item, 0)))
         total = sum(scores.values()) or 1.0
         return label, scores[label] / total, hits.get(label, 0)
+
+    def source_frame_for(self, track_id: int, label: str) -> int | None:
+        """Return the last retained detector observation of one actual label.
+
+        Read-only lookup never turns smoothing into a new observation. Fully
+        clocked production histories retain source order through canonical
+        merges. Legacy or mixed clockless callers keep their existing ABI.
+        """
+        tid = int(track_id)
+        samples = list(self._samples.get(tid, ()))
+        frames = list(self._source_frames.get(tid, ()))
+        if len(frames) != len(samples) or any(frame is None for frame in frames):
+            return None
+        return max(
+            (int(frame) for frame, opinion in zip(frames, samples) if opinion[0] == str(label)),
+            default=None,
+        )
 
     def merge_track(self, source_track_id: int, target_track_id: int) -> None:
         source = int(source_track_id)

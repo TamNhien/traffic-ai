@@ -1202,3 +1202,114 @@ def test_v0558_clockless_label_callers_keep_legacy_two_tuple_history() -> None:
     assert list(smoother._samples[8]) == [("car", .80), ("truck", .90)]
     smoother.update(8, "car", .90, frame_index=200)
     assert list(smoother._samples[8]) == [("car", .80), ("truck", .90), ("car", .90)]
+
+
+def test_v0559_stable_primary_truck_does_not_renew_from_current_car_pixels() -> None:
+    smoother = TrackLabelSmoother(history=24)
+    lock = TruckSemanticLock(ttl_frames=30)
+    for frame in range(77, 126):
+        current_label = "truck" if frame <= 100 else "car"
+        smoother.update(7, current_label, .90 if current_label == "truck" else .10, frame_index=frame)
+        label, certainty, hits = smoother.stable_label(7, current_label)
+        lock.observe(
+            7, frame, stable_label=label, certainty=certainty, hits=hits,
+            primary_frame_index=smoother.source_frame_for(7, "truck"),
+        )
+    assert lock.resolve(7, 130, "car")[0] == "truck"
+    assert lock.resolve(7, 131, "car") is None
+
+
+def test_v0559_new_actual_primary_truck_can_renew_source_deadline() -> None:
+    lock = TruckSemanticLock(ttl_frames=30)
+    lock.observe(7, 110, stable_label="truck", certainty=.90, hits=6, primary_frame_index=100)
+    assert lock.observe(7, 120, stable_label="truck", certainty=.90, hits=6, primary_frame_index=120)
+    assert lock.resolve(7, 150, "car")
+    assert lock.resolve(7, 151, "car") is None
+
+
+def test_v0559_newer_refiner_clock_wins_over_retained_primary_truck_clock() -> None:
+    lock = TruckSemanticLock(ttl_frames=30)
+    assert lock.observe(
+        7, 120, stable_label="truck", certainty=.90, hits=6, primary_frame_index=100,
+        refiner_hits=2, refiner_confidence=.80, refiner_frame_index=110,
+    )
+    assert lock.resolve(7, 140, "car")
+    assert lock.resolve(7, 141, "car") is None
+
+
+def test_v0559_newer_primary_clock_wins_over_retained_refiner_clock() -> None:
+    lock = TruckSemanticLock(ttl_frames=30)
+    assert lock.observe(
+        7, 120, stable_label="truck", certainty=.90, hits=6, primary_frame_index=115,
+        refiner_hits=2, refiner_confidence=.80, refiner_frame_index=110,
+    )
+    assert lock.resolve(7, 145, "car")
+    assert lock.resolve(7, 146, "car") is None
+
+
+def test_v0559_future_primary_clock_cannot_block_or_inflate_current_refiner_lock() -> None:
+    lock = TruckSemanticLock(ttl_frames=30)
+    assert lock.observe(
+        7, 120, stable_label="truck", certainty=.99, hits=6, primary_frame_index=121,
+        refiner_hits=2, refiner_confidence=.80, refiner_frame_index=110,
+    ) == ("truck", .80)
+    assert lock.resolve(7, 140, "car")
+    assert lock.resolve(7, 141, "car") is None
+
+
+def test_v0559_expired_primary_clock_cannot_block_or_inflate_current_refiner_lock() -> None:
+    lock = TruckSemanticLock(ttl_frames=30)
+    assert lock.observe(
+        7, 120, stable_label="truck", certainty=.99, hits=6, primary_frame_index=89,
+        refiner_hits=2, refiner_confidence=.80, refiner_frame_index=110,
+    ) == ("truck", .80)
+
+
+def test_v0559_expired_refiner_clock_cannot_inflate_current_primary_lock() -> None:
+    lock = TruckSemanticLock(ttl_frames=30)
+    assert lock.observe(
+        7, 120, stable_label="truck", certainty=.90, hits=6, primary_frame_index=120,
+        refiner_hits=2, refiner_confidence=.99, refiner_frame_index=89,
+    ) == ("truck", .90)
+
+
+def test_v0559_future_and_expired_primary_clocks_cannot_create_truck_lock() -> None:
+    for clock in (121, 89):
+        lock = TruckSemanticLock(ttl_frames=30)
+        assert lock.observe(7, 120, stable_label="truck", certainty=.99, hits=6, primary_frame_index=clock) is None
+        assert lock.active_count(120) == 0
+
+
+def test_v0559_old_primary_clock_cannot_replace_newer_lock_observation() -> None:
+    lock = TruckSemanticLock(ttl_frames=30)
+    lock.observe(7, 115, stable_label="truck", certainty=.90, hits=6, primary_frame_index=115)
+    assert lock.observe(7, 120, stable_label="truck", certainty=.99, hits=6, primary_frame_index=100) == ("truck", .90)
+    assert lock.resolve(7, 145, "car")
+    assert lock.resolve(7, 146, "car") is None
+
+
+def test_v0559_primary_clock_lookup_preserves_label_identity_and_merged_chronology() -> None:
+    smoother = TrackLabelSmoother(history=24)
+    for frame in (100, 110, 120):
+        smoother.update(7, "truck", .90, frame_index=frame)
+    for frame in (121, 122):
+        smoother.update(8, "car", .90, frame_index=frame)
+    smoother.merge_track(7, 8)
+    assert smoother.source_frame_for(8, "truck") == 120
+    assert smoother.source_frame_for(8, "car") == 122
+    assert smoother.source_frame_for(7, "truck") is None
+    assert smoother.source_frame_for(8, "bus") is None
+    smoother.update(8, "truck", .90, frame_index=90)
+    assert smoother.source_frame_for(8, "truck") == 120
+
+
+def test_v0559_clockless_primary_lock_and_smoother_keep_legacy_behavior() -> None:
+    smoother = TrackLabelSmoother()
+    smoother.update(7, "truck", .90)
+    assert smoother.source_frame_for(7, "truck") is None
+    smoother.update(7, "car", .90, frame_index=120)
+    assert smoother.source_frame_for(7, "truck") is None
+    lock = TruckSemanticLock(ttl_frames=30)
+    assert lock.observe(7, 120, stable_label="truck", certainty=.90, hits=6) == ("truck", .90)
+    assert lock.resolve(7, 150, "car")
+    assert lock.resolve(7, 151, "car") is None

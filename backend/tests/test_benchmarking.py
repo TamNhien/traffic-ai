@@ -15,6 +15,61 @@ def test_benchmark_exact_match() -> None:
     assert result["counting_recall"] == 1.0
 
 
+def test_v0559_gzip_export_keeps_original_metadata_without_inflating_trace() -> None:
+    from datetime import datetime, timezone
+    from hashlib import sha256
+    from io import BytesIO
+    import gzip
+    import json
+    from zipfile import ZIP_STORED, ZipFile
+    from app.benchmarking import BenchmarkTraceArchive, build_benchmark_export
+    original = b'{"frame_index":1,"detections":12}\n' * 1000
+    compressed = gzip.compress(original, mtime=0)
+    payload = BenchmarkTraceArchive(compressed, len(original), sha256(original).hexdigest(), sha256(compressed).hexdigest())
+    archive = build_benchmark_export(report={"benchmark":{"id":1},"session_id":2}, marks=[], events=[],
+                                     session={}, config={}, exported_at=datetime.now(timezone.utc), trace=payload)
+    with ZipFile(BytesIO(archive)) as zipped:
+        assert "benchmark-trace.jsonl" not in zipped.namelist()
+        data = zipped.read("benchmark-trace.jsonl.gz")
+        assert data == compressed and gzip.decompress(data) == original
+        assert zipped.getinfo("benchmark-trace.jsonl.gz").compress_type == ZIP_STORED
+        trace = json.loads(zipped.read("manifest.json"))["trace"]
+        assert trace["closed"] is True and trace["encoding"] == "gzip"
+        assert trace["bytes"] == len(compressed) and trace["source_bytes"] == len(original)
+        assert trace["source_sha256"] == sha256(original).hexdigest()
+        assert trace["compressed_sha256"] == sha256(compressed).hexdigest()
+
+
+def test_v0559_gzip_export_transport_cap_applies_to_representation(monkeypatch) -> None:
+    from datetime import datetime, timezone
+    from hashlib import sha256
+    import gzip
+    import pytest
+    import app.benchmarking as bt
+    original = b"many repetitive trace rows\n" * 1000
+    compressed = gzip.compress(original, mtime=0)
+    trace = bt.BenchmarkTraceArchive(compressed, len(original), sha256(original).hexdigest(), sha256(compressed).hexdigest())
+    args = dict(report={"benchmark":{"id":1},"session_id":2}, marks=[], events=[], session={}, config={},
+                exported_at=datetime.now(timezone.utc), trace=trace)
+    monkeypatch.setattr(bt, "BENCHMARK_TRACE_EXPORT_MAX_BYTES", len(compressed))
+    assert bt.build_benchmark_export(**args)
+    monkeypatch.setattr(bt, "BENCHMARK_TRACE_EXPORT_MAX_BYTES", len(compressed) - 1)
+    with pytest.raises(bt.BenchmarkTraceTooLarge):
+        bt.build_benchmark_export(**args)
+
+
+def test_v0559_gzip_export_rejects_wrong_compressed_hash() -> None:
+    from datetime import datetime, timezone
+    import gzip
+    import pytest
+    from app.benchmarking import BenchmarkTraceArchive, build_benchmark_export
+    compressed = gzip.compress(b"complete evidence\n", mtime=0)
+    trace = BenchmarkTraceArchive(compressed, 18, "1" * 64, "2" * 64)
+    with pytest.raises(ValueError):
+        build_benchmark_export(report={"benchmark":{"id":1},"session_id":2}, marks=[], events=[], session={}, config={},
+                               exported_at=datetime.now(timezone.utc), trace=trace)
+
+
 def test_v0555_equal_timestamp_report_is_independent_of_input_order() -> None:
     from itertools import permutations
 

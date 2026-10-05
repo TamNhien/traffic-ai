@@ -14,7 +14,7 @@ from app.core.config import settings
 from app.db.session import get_db
 from app.geometry import validate_counting_geometry
 from app.benchmarking import (
-    BENCHMARK_TRACE_EXPORT_MAX_BYTES, BenchmarkTraceTooLarge,
+    BENCHMARK_TRACE_EXPORT_MAX_BYTES, BenchmarkTraceArchive, BenchmarkTraceTooLarge,
     build_benchmark_export, match_crossings, read_benchmark_trace_chunks,
 )
 from app.models.all_models import AIModel, Camera, CameraStatus, CountingBenchmark, CountingSession, DatasetRecord, Direction, GroundTruthCrossing, SessionStatus, TrainingRun, VehicleCount, VehicleEvent, VehicleType
@@ -419,7 +419,7 @@ def start_camera(camera_id: int, db: Session = Depends(get_db)) -> dict:
             probe = httpx.get(f"{settings.ai_service_url}/pipelines/{camera_id}", timeout=2.0)
             if probe.is_success:
                 ai_state = probe.json()
-                ai_is_running = ai_state.get("status") in {"starting", "warming", "running"}
+                ai_is_running = ai_state.get("status") in {"starting", "warming", "running", "draining"}
         except Exception:
             ai_is_running = False
         if ai_is_running:
@@ -513,6 +513,19 @@ def start_camera(camera_id: int, db: Session = Depends(get_db)) -> dict:
     return {"session_id": session.id, "camera_id": camera_id, "source_repaired": source_repaired, "source_url": camera.source_url, "pipeline": response.json()}
 
 
+def _stop_completion_matches_session(ai_state: dict, camera_id: int, session_id: int | None) -> bool:
+    """A stop acknowledgment cannot finish a different or still-draining run."""
+    if not isinstance(ai_state, dict):
+        return False
+    if ai_state.get("camera_id") != camera_id or (session_id is not None and ai_state.get("session_id") != session_id):
+        return False
+    status_value = ai_state.get("status")
+    if status_value not in {"completed", "stopped", "error"}:
+        return False
+    # Older services can expose a terminal state while HTTP delivery is active.
+    return status_value == "error" or ai_state.get("pending_events", 0) == 0
+
+
 @router.post("/cameras/{camera_id}/stop")
 def stop_camera(camera_id: int, db: Session = Depends(get_db)) -> dict:
     camera = db.get(Camera, camera_id)
@@ -522,23 +535,40 @@ def stop_camera(camera_id: int, db: Session = Depends(get_db)) -> dict:
         CountingSession.camera_id == camera_id,
     ).order_by(CountingSession.id.desc()))
     session = expected_session if expected_session is not None and expected_session.status == SessionStatus.running else None
+    ai_state = None
     try:
         response = httpx.post(f"{settings.ai_service_url}/pipelines/{camera_id}/stop", timeout=12.0)
         if response.status_code not in (200, 404):
             response.raise_for_status()
+        if response.status_code == 200:
+            json_reader = getattr(response, "json", None)
+            if callable(json_reader):
+                ai_state = json_reader()
+                if not isinstance(ai_state, dict):
+                    raise ValueError("AI stop response must be an object")
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"AI service could not stop pipeline: {exc}") from exc
+    if ai_state is not None and not _stop_completion_matches_session(
+        ai_state, camera_id, expected_session.id if expected_session is not None else None,
+    ):
+        return {"status": "draining", "camera_id": camera_id,
+                "session_id": ai_state.get("session_id"), "pending_events": ai_state.get("pending_events", 0)}
     if session:
-        session.status = SessionStatus.stopped
-        if session.ended_at is None:
-            session.ended_at = datetime.now(timezone.utc)
+        # The worker finish callback may have committed while this RPC waited.
+        db.refresh(session)
+        if session.status == SessionStatus.running:
+            session.status = {
+                "completed": SessionStatus.completed, "error": SessionStatus.error,
+            }.get((ai_state or {}).get("status"), SessionStatus.stopped)
+            if session.ended_at is None:
+                session.ended_at = datetime.now(timezone.utc)
     latest_session = db.scalar(select(CountingSession).where(
         CountingSession.camera_id == camera_id,
     ).order_by(CountingSession.id.desc()))
     if _session_finish_owns_camera(expected_session, latest_session):
         camera.status = CameraStatus.inactive
     db.commit()
-    return {"status": "stopped", "camera_id": camera_id}
+    return {"status": (ai_state or {}).get("status", "stopped"), "camera_id": camera_id}
 
 
 @router.get("/pipelines")
@@ -1676,33 +1706,66 @@ def _benchmark_export_metadata(session: CountingSession | None, camera: Camera |
     return session_payload, config_payload
 
 
-def _fetch_benchmark_export_trace(session_id: int) -> tuple[bytes | None, str]:
+def _fetch_benchmark_export_trace(session_id: int) -> tuple[bytes | BenchmarkTraceArchive | None, str]:
     """Optional trace failures leave a usable report ZIP with their status."""
     try:
         deadline = time.monotonic() + 20.0
-        with httpx.stream(
-            "GET", f"{settings.ai_service_url}/benchmark-traces/{int(session_id)}/download",
-            timeout=8.0, follow_redirects=False,
-        ) as response:
-            if response.status_code == 404:
-                return None, "not_found"
-            if not response.is_success:
-                return None, f"http_error_{response.status_code}"
-            try:
-                announced_bytes = int(response.headers.get("Content-Length", "0"))
-            except (TypeError, ValueError):
-                announced_bytes = 0
-            if announced_bytes > BENCHMARK_TRACE_EXPORT_MAX_BYTES:
-                return None, "too_large"
+        for encoding, endpoint in (("gzip", "download-gzip"), ("identity", "download")):
+            if time.monotonic() > deadline:
+                raise TimeoutError("Benchmark trace download timed out")
+            with httpx.stream(
+                "GET", f"{settings.ai_service_url}/benchmark-traces/{int(session_id)}/{endpoint}",
+                timeout=8.0, follow_redirects=False,
+            ) as response:
+                if response.status_code == 404:
+                    if encoding == "gzip":
+                        continue  # Legacy service or no certified closed gzip yet.
+                    return None, "not_found"
+                if not response.is_success:
+                    return None, f"http_error_{response.status_code}"
+                # Never let HTTP automatic content decoding expand gzip before
+                # the transport cap; this endpoint serves application/gzip.
+                if encoding == "gzip" and response.headers.get("Content-Encoding", "identity").lower() != "identity":
+                    return None, "invalid_metadata"
+                try:
+                    announced_bytes = int(response.headers.get("Content-Length", "0"))
+                except (TypeError, ValueError):
+                    announced_bytes = 0
+                if announced_bytes > BENCHMARK_TRACE_EXPORT_MAX_BYTES:
+                    return None, "too_large"
 
-            def chunks():
-                for chunk in response.iter_bytes(chunk_size=64 * 1024):
-                    if time.monotonic() > deadline:
-                        raise TimeoutError("Benchmark trace download timed out")
-                    yield chunk
+                def chunks():
+                    for chunk in response.iter_bytes(chunk_size=64 * 1024):
+                        if time.monotonic() > deadline:
+                            raise TimeoutError("Benchmark trace download timed out")
+                        yield chunk
 
-            trace = read_benchmark_trace_chunks(chunks(), max_bytes=BENCHMARK_TRACE_EXPORT_MAX_BYTES)
-            return (trace, "available") if trace else (None, "empty")
+                trace = read_benchmark_trace_chunks(chunks(), max_bytes=BENCHMARK_TRACE_EXPORT_MAX_BYTES)
+                if time.monotonic() > deadline:
+                    raise TimeoutError("Benchmark trace download timed out")
+                if announced_bytes > 0 and len(trace) != announced_bytes:
+                    return None, "incomplete"
+                if not trace:
+                    return None, "empty"
+                if encoding == "identity":
+                    return trace, "available"
+                try:
+                    source_bytes = int(response.headers.get("X-Traffic-AI-Trace-Source-Bytes", "-1"))
+                    source_sha256 = response.headers.get("X-Traffic-AI-Trace-Source-SHA256", "")
+                    compressed_sha256 = response.headers.get("X-Traffic-AI-Trace-Compressed-SHA256", "")
+                    from hashlib import sha256
+                    if (response.headers.get("X-Traffic-AI-Trace-Closed") != "true"
+                            or source_bytes < 0 or not re.fullmatch(r"[0-9a-f]{64}", source_sha256)
+                            or not re.fullmatch(r"[0-9a-f]{64}", compressed_sha256)
+                            or not trace.startswith(b"\x1f\x8b") or sha256(trace).hexdigest() != compressed_sha256):
+                        return None, "invalid_metadata"
+                except (TypeError, ValueError):
+                    return None, "invalid_metadata"
+                if source_bytes == 0:
+                    return None, "empty"
+                if time.monotonic() > deadline:
+                    raise TimeoutError("Benchmark trace download timed out")
+                return BenchmarkTraceArchive(trace, source_bytes, source_sha256, compressed_sha256), "available"
     except BenchmarkTraceTooLarge:
         return None, "too_large"
     except (httpx.TimeoutException, TimeoutError):

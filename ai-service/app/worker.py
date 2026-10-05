@@ -12,7 +12,7 @@ from typing import Callable
 import httpx2 as httpx
 
 from app.async_tasks import EventDispatcher, LatestFrameEncoder
-from app.benchmark_trace import publish_closed_trace, trace_path
+from app.benchmark_trace import publish_closed_trace, publish_compressed_trace, trace_path
 from app.classification import (
     RefineCandidate,
     RefineEvidenceAccumulator,
@@ -645,6 +645,39 @@ class PipelineWorker(threading.Thread):
                 self.state.benchmark_trace_snapshot_method = artifact["method"]
         except Exception as exc:
             self._warn_benchmark_trace("publish", exc)
+        # Gzip is an optional bounded export representation. Keep the closed
+        # camera JSONL and raw download usable if compression cannot finish.
+        try:
+            publish_compressed_trace(self.payload.session_id)
+        except Exception as exc:
+            self._warn_benchmark_trace("compression", exc)
+
+    def _benchmark_geometry_metadata(self, counter: LineCrossingCounter, width: int, height: int, source_shape) -> dict:
+        """Record actual canonical geometry after processing dimensions exist."""
+        line = counter.line
+        return {
+            "kind": "geometry_metadata", "audit_only": True,
+            "camera_id": self.payload.camera_id, "session_id": self.payload.session_id,
+            "coordinate_system": "normalized_processed_frame",
+            "frame_width": int(width), "frame_height": int(height),
+            "source_frame_width": int(source_shape[1]), "source_frame_height": int(source_shape[0]),
+            "line": [[line.x1, line.y1], [line.x2, line.y2]],
+            "road_zone": counter.road_zone.normalized_points() if counter.road_zone is not None else None,
+        }
+
+    def _drain_events_before_finish(self, terminal_status: str | None = None) -> None:
+        """Keep this worker/session owned until accepted delivery work ends."""
+        if terminal_status is None:
+            terminal_status = self.state.status
+        self.state.status = "draining"
+        try:
+            if not self._event_dispatcher.stop_and_flush(timeout=None):
+                raise RuntimeError("Event dispatcher stopped with unfinished accepted events")
+        except Exception as exc:
+            self.state.status = "error"
+            self.state.last_error = self.state.last_error or f"Event dispatcher shutdown failed: {exc}"
+            return
+        self.state.status = terminal_status
 
     def _expire_guard_crossings(self, counter: LineCrossingCounter, trace_file=None) -> bool:
         """Persist EOF context status without inventing another analyzed frame."""
@@ -685,12 +718,18 @@ class PipelineWorker(threading.Thread):
         truck_hits, truck_fused, _strongest, truck_source_frame = self._refine_consensus.four_wheel_support_snapshot(
             track_id, frame_index, "truck"
         )
+        labels = getattr(self, "_labels", None)
+        primary_clock_lookup = getattr(labels, "source_frame_for", None)
+        primary_source_frame = (
+            primary_clock_lookup(track_id, "truck") if primary_clock_lookup is not None else None
+        )
         locked = self._truck_semantic_lock.observe(
             track_id,
             frame_index,
             stable_label=stable_label,
             certainty=certainty,
             hits=hits,
+            primary_frame_index=primary_source_frame,
             refiner_hits=truck_hits,
             refiner_confidence=truck_fused,
             refiner_frame_index=truck_source_frame,
@@ -976,6 +1015,71 @@ class PipelineWorker(threading.Thread):
             return None
         return best
 
+    def _class_semantic_snapshot_for(self, track_id: int, frame_index: int, primary_label: str) -> dict:
+        """Read class evidence clocks for trace without renewing or expiring it."""
+        from math import isfinite
+
+        override = None
+        entry = self._class_refine_overrides.get(int(track_id))
+        if entry is not None:
+            label, confidence, observed_frame = entry
+            ttl = self._class_refinement_ttl(label)
+            if (
+                vehicle_family(label) == vehicle_family(primary_label)
+                and isfinite(float(confidence))
+                and 0 <= int(frame_index) - int(observed_frame) <= ttl
+            ):
+                override = {
+                    "label": str(label), "confidence": float(confidence),
+                    "source_frame_index": int(observed_frame),
+                    "expires_after_frame_index": int(observed_frame) + ttl,
+                }
+        semantic_lock = getattr(self, "_truck_semantic_lock", None)
+        lock = semantic_lock.snapshot_for(track_id, frame_index, primary_label) if semantic_lock is not None else None
+        return {"class_override": override, "truck_semantic_lock": lock}
+
+    def _record_class_refinement_audit(
+        self, track_id: int, frame_index: int, target_label: str, rect,
+        opinions: dict[str, tuple[str, float] | None], refined: tuple[str, float] | None,
+        *, consensus: bool = False, winning_source_frame: int | None = None,
+        ttl_eligible: bool = False, attempted_sources: tuple[str, ...] | list[str] = (),
+    ) -> None:
+        """Record bounded, target-specific inference evidence without a decision."""
+        from math import isfinite
+
+        rows = getattr(self, "_class_refine_decision_audit_this_frame", None)
+        if rows is None:
+            rows = self._class_refine_decision_audit_this_frame = []
+        limit = min(8, max(1, int(getattr(self, "refine_max_per_frame", 8))))
+        if len(rows) >= limit:
+            return
+        target_rect = None
+        if isinstance(rect, (tuple, list)) and len(rect) == 4:
+            try:
+                values = [float(value) for value in rect]
+                if all(isfinite(value) for value in values):
+                    target_rect = values
+            except (TypeError, ValueError, OverflowError):
+                pass
+        rows.append({
+            "kind": "class_refinement", "track_id": int(track_id),
+            "frame_index": int(frame_index), "target_label": str(target_label),
+            "target_rect": target_rect,
+            "attempted_sources": [str(source) for source in attempted_sources],
+            "opinions": {
+                source: None if opinion is None else {
+                    "label": str(opinion[0]), "confidence": float(opinion[1]),
+                    "source_frame_index": int(frame_index),
+                }
+                for source, opinion in opinions.items()
+            },
+            "refined": None if refined is None else {"label": str(refined[0]), "confidence": float(refined[1])},
+            "consensus": bool(consensus),
+            "winning_source_frame_index": None if winning_source_frame is None else int(winning_source_frame),
+            "ttl_eligible": bool(ttl_eligible),
+            "semantic_state": self._class_semantic_snapshot_for(track_id, frame_index, target_label),
+        })
+
     def _observe_class_refiner(
         self,
         track_id: int,
@@ -1031,9 +1135,12 @@ class PipelineWorker(threading.Thread):
         clocks.pop(tid, None)
         self.state.class_refine_checks += 1
         observations: list[tuple[str, float]] = []
+        audit_opinions: dict[str, tuple[str, float] | None] = {"domain": None, "general": None}
+        audit_attempted_sources: list[str] = []
         did_infer = False
 
         if self._refiner_model is not None and self._refine_ids:
+            audit_attempted_sources.append("domain")
             self.state.domain_refine_checks += 1
             did_infer = True
             domain = self._refine_crossing_label(
@@ -1041,10 +1148,12 @@ class PipelineWorker(threading.Thread):
                 target_label=target_label, model=self._refiner_model,
             )
             if usable_observation(domain):
+                audit_opinions["domain"] = domain
                 observations.append(domain)
                 self._refine_consensus.update(tid, frame_idx, domain[0], domain[1], "domain")
 
         if self._general_refiner_model is not None and self._general_refine_ids:
+            audit_attempted_sources.append("general")
             self.state.general_refine_checks += 1
             did_infer = True
             general = self._refine_crossing_label(
@@ -1052,6 +1161,7 @@ class PipelineWorker(threading.Thread):
                 target_label=target_label, model=self._general_refiner_model,
             )
             if usable_observation(general):
+                audit_opinions["general"] = general
                 observations.append(general)
                 self._refine_consensus.update(tid, frame_idx, general[0], general[1], "general")
 
@@ -1060,6 +1170,11 @@ class PipelineWorker(threading.Thread):
             # not a new semantic observation. Reading old consensus here would
             # relabel a cache hit as fresh and restart its override lifetime.
             self._class_refine_last_observation[tid] = (frame_idx, None)
+            if did_infer:
+                self._record_class_refinement_audit(
+                    tid, frame_idx, target_label, rect, audit_opinions, None,
+                    attempted_sources=audit_attempted_sources,
+                )
             return None, did_infer
 
         consensus = self._refine_consensus.minority_consensus(
@@ -1087,6 +1202,11 @@ class PipelineWorker(threading.Thread):
                 # A competing current opinion does not renew old minority
                 # evidence. Leave the existing correction's clock unchanged.
                 self._class_refine_last_observation[tid] = (frame_idx, None)
+                self._record_class_refinement_audit(
+                    tid, frame_idx, target_label, rect, audit_opinions, None,
+                    consensus=True, winning_source_frame=source_frame, ttl_eligible=False,
+                    attempted_sources=audit_attempted_sources,
+                )
                 return None, did_infer
             self._class_refine_consensus_proof[tid] = (frame_idx, consensus)
             clocks[tid] = (frame_idx, int(source_frame))
@@ -1098,6 +1218,13 @@ class PipelineWorker(threading.Thread):
             refined = self._prefer_refinement_candidate(target_label, observations)
 
         self._class_refine_last_observation[tid] = (frame_idx, refined)
+        self._record_class_refinement_audit(
+            tid, frame_idx, target_label, rect, audit_opinions, refined,
+            consensus=consensus is not None,
+            winning_source_frame=source_frame if consensus is not None else (frame_idx if refined is not None else None),
+            ttl_eligible=refined is not None,
+            attempted_sources=audit_attempted_sources,
+        )
         return refined, did_infer
 
     @staticmethod
@@ -1365,6 +1492,10 @@ class PipelineWorker(threading.Thread):
                 self.state.frame_width = width
                 self.state.frame_height = height
                 frame_index = self.state.processed_frames + 1
+                if frame_index == 1:
+                    trace_file = self._write_benchmark_trace(
+                        trace_file, self._benchmark_geometry_metadata(counter, width, height, source_frame.shape),
+                    )
 
                 roi = None
                 # V0.5.14 decouples detection from counting geometry. The default
@@ -1415,6 +1546,7 @@ class PipelineWorker(threading.Thread):
                 crossing_class_refine_track_ids: set[int] = set()
                 gate_trace_tracks = []
                 self._bicycle_xframe_audit_this_frame = []
+                self._class_refine_decision_audit_this_frame = []
                 frame_start_deferred_commits = self.state.human_guard_deferred_commits
                 # Expire a provisional passage before any returning detection
                 # can commit it. The observed-frame deadline applies equally to
@@ -1471,6 +1603,7 @@ class PipelineWorker(threading.Thread):
                             width,
                             height,
                             claimed_canonical_ids,
+                            rect=rect,
                         )
                         claimed_canonical_ids.add(track_id)
                         for duplicate_index in duplicate_aliases.get(item_index, []):
@@ -1560,6 +1693,12 @@ class PipelineWorker(threading.Thread):
                         center_signed = signed_distance(center, line_a, line_b) / max(1.0, min(width, height))
                         gate_trace_track = {
                             "track_id": int(track_id), "label": str(display_label),
+                            "primary_label": str(current_label),
+                            "primary_confidence": round(confidence_f, 6),
+                            "stable_label": str(stable_label),
+                            "class_certainty": round(float(class_certainty), 6),
+                            "class_hits": int(class_hits),
+                            **self._class_semantic_snapshot_for(track_id, frame_index, current_label),
                             "raw_track_id": int(raw_track_id), "stitched": bool(stitched),
                             "rect": [round(float(value), 3) for value in rect],
                             "anchor": [round(float(value), 3) for value in anchor],
@@ -2054,6 +2193,7 @@ class PipelineWorker(threading.Thread):
                         "bicycle_context_xframe_rescues": self.state.bicycle_context_xframe_rescues,
                         "bicycle_context_xframe_priority_scans": self.state.bicycle_context_xframe_priority_scans,
                         "bicycle_xframe_decision_audit": self._bicycle_xframe_audit_this_frame,
+                        "class_refine_decision_audit": self._class_refine_decision_audit_this_frame,
                         "verified_anchor_span_rescues": self.state.verified_anchor_span_rescues,
                         "anchor_span_approach_candidates": anchor_span_rescuer.approach_span_candidates,
                         "anchor_span_approach_rescues": anchor_span_rescuer.approach_span_rescues,
@@ -2126,6 +2266,10 @@ class PipelineWorker(threading.Thread):
             self.state.status = "error"
             self.state.last_error = str(exc)
         finally:
+            # EOF is not persistence completion. Keep this camera/session
+            # active while optional artifacts and accepted event work settle.
+            terminal_status = self.state.status
+            self.state.status = "draining"
             # No ambiguous two-wheel crossing may leak into persistence at
             # shutdown. If the source ended before a second semantic frame,
             # revoke the provisional geometry crossing and record a timeout drop.
@@ -2140,11 +2284,7 @@ class PipelineWorker(threading.Thread):
                     self._jpeg_encoder.stop_and_join(timeout=4.0)
             except Exception:
                 pass
-            try:
-                if self._event_dispatcher.is_alive():
-                    self._event_dispatcher.stop_and_flush(timeout=20.0)
-            except Exception as exc:
-                self.state.last_error = self.state.last_error or f"Event dispatcher shutdown failed: {exc}"
+            self._drain_events_before_finish(terminal_status=terminal_status)
             self._notify_finished()
             self.on_finished(self.payload.camera_id)
 

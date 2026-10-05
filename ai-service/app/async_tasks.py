@@ -71,22 +71,43 @@ class EventDispatcher(threading.Thread):
         self.state = state
         self._queue: queue.Queue[dict] = queue.Queue(maxsize=max_queue)
         self._stop_event = threading.Event()
+        self._admission_lock = threading.Lock()
+
+    def _refresh_pending_events(self) -> int:
+        # qsize excludes the request currently being retried. Accepted work
+        # stays pending until its final attempt reaches task_done().
+        with self._queue.mutex:
+            pending = self._queue.unfinished_tasks
+            self.state.pending_events = pending
+            return pending
 
     def submit(self, payload: dict) -> None:
-        try:
-            self._queue.put(payload, timeout=1.0)
-            self.state.pending_events = self._queue.qsize()
-        except queue.Full as exc:
-            self.state.delivery_failures += 1
-            self.state.last_error = "Event queue full; backend persistence is too slow"
-            raise RuntimeError(self.state.last_error) from exc
+        # Once shutdown closes admission, a producer cannot enqueue work
+        # behind the consumer's final empty-queue check.
+        with self._admission_lock:
+            if self._stop_event.is_set():
+                raise RuntimeError("Event dispatcher is stopping; event was not accepted")
+            try:
+                self._queue.put(payload, timeout=1.0)
+                self._refresh_pending_events()
+            except queue.Full as exc:
+                self.state.delivery_failures += 1
+                self.state.last_error = "Event queue full; backend persistence is too slow"
+                raise RuntimeError(self.state.last_error) from exc
 
-    def stop_and_flush(self, timeout: float = 20.0) -> None:
-        deadline = time.monotonic() + timeout
-        while not self._queue.empty() and time.monotonic() < deadline:
-            time.sleep(0.05)
-        self._stop_event.set()
-        self.join(timeout=max(1.0, deadline - time.monotonic()))
+    def stop_and_flush(self, timeout: float | None = 20.0) -> bool:
+        """Close admission and report whether all accepted work terminated.
+
+        A bounded caller may time out while a request is in flight; that is
+        not a successful flush. The worker uses None so session finish follows
+        the existing finite delivery retry policy for every accepted event.
+        """
+        with self._admission_lock:
+            self._stop_event.set()
+        if self.ident is not None:
+            self.join(timeout=None if timeout is None else max(0.0, float(timeout)))
+        pending = self._refresh_pending_events()
+        return not self.is_alive() and pending == 0
 
     def run(self) -> None:
         with httpx.Client(headers={"X-AI-Token": self.token}, timeout=4.0) as client:
@@ -145,4 +166,4 @@ class EventDispatcher(threading.Thread):
                         self.state.last_error = None
                 finally:
                     self._queue.task_done()
-                    self.state.pending_events = self._queue.qsize()
+                    self._refresh_pending_events()

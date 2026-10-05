@@ -23,6 +23,7 @@ def _worker() -> PipelineWorker:
     worker = PipelineWorker.__new__(PipelineWorker)
     worker.payload = SimpleNamespace(camera_id=1, session_id=2, model_id=3)
     worker.state = SimpleNamespace(
+        status="running",
         total_count=0,
         counts_by_type={"motorcycle": 0, "bicycle": 0, "car": 0, "bus": 0, "truck": 0, "other": 0},
         in_count=0,
@@ -43,6 +44,8 @@ def _worker() -> PipelineWorker:
     worker._committed_out_count = 0
     worker._pending_guard_crossings = {}
     worker._heavy_center_rescue_tracks = set()
+    worker._class_refine_overrides = {}
+    worker._class_refine_decision_audit_this_frame = []
     worker._event_dispatcher = _Dispatcher()
     worker._save_crossing_snapshot = lambda _cv2, _frame, frame_index: f"frame_{frame_index}.jpg"
     return worker
@@ -457,6 +460,7 @@ def _execute_guard_frame(worker, frame_index, *, active=True, velocity=(0, 2), a
     env = {
         "self": worker, "counter": _Counter(), "frame_index": frame_index,
         "track_id": 77, "confidence_f": .82, "display_label": "motorcycle",
+        "current_label": "motorcycle", "stable_label": "motorcycle", "class_hits": 4,
         "analysis_frame": object(), "frame": object(), "rect": (40, 45, 60, 65), "anchor": (50, 65),
         "center": (50, 55), "class_certainty": .9, "raw_track_id": raw_track_id,
         "device": "cpu", "use_half": False, "velocity": velocity,
@@ -537,6 +541,9 @@ def test_v0556_pending_guard_trace_keeps_visible_geometry_without_committing() -
     assert calls == [523] and counter.revoked == []
     assert tracks == [{
         "track_id": 77, "label": "motorcycle", "anchor_signed": .15,
+        "primary_label": "motorcycle", "primary_confidence": .82,
+        "stable_label": "motorcycle", "class_certainty": .9, "class_hits": 4,
+        "class_override": None, "truck_semantic_lock": None,
         "center_signed": .05, "human_guard_status": "pending",
         "raw_track_id": 77, "stitched": False, "rect": [40.0, 45.0, 60.0, 65.0],
         "anchor": [50.0, 65.0], "center": [50.0, 55.0],
@@ -908,6 +915,38 @@ def test_v0558_session_trace_header_contains_no_synthetic_observation_or_secrets
     assert "secret" not in writer.getvalue()
 
 
+def test_v0559_geometry_metadata_records_canonical_line_road_and_actual_dimensions() -> None:
+    from app.counting import CountingLine, LineCrossingCounter, RoadZone
+    worker = _worker()
+    counter = LineCrossingCounter(CountingLine(0.9, 0.5, 0.1, 0.3), road_zone=RoadZone())
+    metadata = worker._benchmark_geometry_metadata(counter, 1440, 810, (1080, 1920, 3))
+    assert metadata["line"] == [[0.1, 0.3], [0.9, 0.5]]
+    assert metadata["road_zone"] == counter.road_zone.normalized_points()
+    assert metadata["frame_width"] == 1440 and metadata["frame_height"] == 810
+    assert metadata["source_frame_width"] == 1920 and metadata["source_frame_height"] == 1080
+    assert metadata["camera_id"] == 1 and metadata["session_id"] == 2
+    assert metadata["audit_only"] is True
+    assert "source_time_seconds" not in metadata and "frame_index" not in metadata
+
+
+def test_v0559_compression_failure_preserves_raw_camera_publication(tmp_path, monkeypatch) -> None:
+    import app.worker as worker_module
+    worker = _worker()
+    worker.snapshot_root = tmp_path
+    monkeypatch.setattr(worker_module, "publish_closed_trace", lambda *_args, **_kwargs: {
+        "path":"camera_1/session_2_benchmark-trace.jsonl", "bytes":41, "method":"hardlink"})
+
+    def fail_compression(_session_id):
+        raise OSError("compression storage full")
+
+    monkeypatch.setattr(worker_module, "publish_compressed_trace", fail_compression)
+    worker._close_and_publish_benchmark_trace(SimpleNamespace(close=lambda: None))
+    assert worker.state.benchmark_trace_snapshot_path == "camera_1/session_2_benchmark-trace.jsonl"
+    assert worker.state.benchmark_trace_snapshot_bytes == 41
+    assert worker.state.benchmark_trace_warning == "Benchmark trace compression failed: compression storage full"
+    assert worker.state.last_error is None
+
+
 def test_v0558_camera_trace_publication_waits_for_successful_close(tmp_path, monkeypatch) -> None:
     import app.worker as worker_module
 
@@ -999,5 +1038,178 @@ def test_v0558_gate_trace_distinguishes_bbox_geometry_and_heading_evidence() -> 
     assert track["track_id"] == 77 and track["raw_track_id"] == 88 and track["stitched"] is True
     assert track["rect"] == [40, 45, 60, 65] and track["anchor"] == [50, 65] and track["center"] == [50, 55]
     assert track["measured_velocity"] == [.01, -.04] and track["anchor_velocity"] == [0, 2]
+    assert track["primary_label"] == track["stable_label"] == "motorcycle"
+    assert track["primary_confidence"] == .82 and track["class_certainty"] == .9 and track["class_hits"] == 4
+    assert track["class_override"] is None and track["truck_semantic_lock"] is None
     assert track["human_guard_status"] == "pending"
     assert worker.state.total_count == 0 and worker._event_dispatcher.payloads == []
+
+
+def test_v0559_worker_drains_accepted_events_before_restoring_completed_status() -> None:
+    worker = _worker()
+    worker.state.status = "completed"
+    calls = []
+
+    def flush(*, timeout):
+        calls.append((timeout, worker.state.status))
+        worker.state.persisted_events = 1
+        return True
+
+    worker._event_dispatcher = SimpleNamespace(stop_and_flush=flush)
+    worker._drain_events_before_finish()
+
+    assert calls == [(None, "draining")]
+    assert worker.state.status == "completed" and worker.state.persisted_events == 1
+    assert worker.state.last_error is None
+
+
+def test_v0559_worker_drain_preserves_explicit_stopped_terminal_status() -> None:
+    worker = _worker()
+    worker.state.status = "stopped"
+    worker._event_dispatcher = SimpleNamespace(stop_and_flush=lambda **_kwargs: True)
+
+    worker._drain_events_before_finish()
+
+    assert worker.state.status == "stopped" and worker.state.last_error is None
+
+
+def test_v0559_worker_drain_marks_dead_dispatcher_unfinished_work_as_error() -> None:
+    worker = _worker()
+    worker.state.status = "completed"
+    worker._event_dispatcher = SimpleNamespace(stop_and_flush=lambda **_kwargs: False)
+
+    worker._drain_events_before_finish()
+
+    assert worker.state.status == "error"
+    assert worker.state.last_error == "Event dispatcher shutdown failed: Event dispatcher stopped with unfinished accepted events"
+
+
+def test_v0559_worker_drain_keeps_original_fatal_error() -> None:
+    worker = _worker()
+    worker.state.status = "error"
+    worker.state.last_error = "original inference failure"
+    worker._event_dispatcher = SimpleNamespace(stop_and_flush=lambda **_kwargs: False)
+
+    worker._drain_events_before_finish()
+
+    assert worker.state.status == "error" and worker.state.last_error == "original inference failure"
+
+
+def test_v0559_worker_drain_exception_is_reported_before_finish() -> None:
+    worker = _worker()
+    worker.state.status = "stopped"
+
+    def flush(**_kwargs):
+        raise RuntimeError("local shutdown failure")
+
+    worker._event_dispatcher = SimpleNamespace(stop_and_flush=flush)
+    worker._drain_events_before_finish()
+
+    assert worker.state.status == "error"
+    assert worker.state.last_error == "Event dispatcher shutdown failed: local shutdown failure"
+
+
+def test_v0559_run_finishes_and_releases_camera_only_after_event_drain() -> None:
+    worker = _worker()
+    worker.state.status = "completed"
+    calls = []
+
+    def flush(*, timeout):
+        assert timeout is None and worker.state.status == "draining"
+        calls.append("drain")
+        worker.state.persisted_events = 1
+        return True
+
+    worker._event_dispatcher = SimpleNamespace(stop_and_flush=flush)
+    worker._notify_finished = lambda: calls.append(("finish", worker.state.status, worker.state.persisted_events))
+    worker.on_finished = lambda camera_id: calls.append(("release", camera_id))
+    ast, source_path, run = _run_method_ast()
+    outer_try = next(node for node in run.body if isinstance(node, ast.Try))
+    drain = next(node for node in outer_try.finalbody if isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Attribute)
+        and node.value.func.attr == "_drain_events_before_finish")
+    suffix = outer_try.finalbody[outer_try.finalbody.index(drain):]
+
+    exec(compile(ast.fix_missing_locations(ast.Module(body=suffix, type_ignores=[])), str(source_path), "exec"),
+        {"self": worker, "terminal_status": "completed"})
+
+    assert calls == ["drain", ("finish", "completed", 1), ("release", 1)]
+
+
+def test_v0559_run_enters_draining_before_optional_artifact_publication() -> None:
+    worker = _worker()
+    worker.state.status = "completed"
+    calls = []
+    worker._close_and_publish_benchmark_trace = lambda *_args, **_kwargs: calls.append(worker.state.status)
+    ast, source_path, run = _run_method_ast()
+    outer_try = next(node for node in run.body if isinstance(node, ast.Try))
+    close = next(node for node in outer_try.finalbody if isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Attribute)
+        and node.value.func.attr == "_close_and_publish_benchmark_trace")
+    prefix = outer_try.finalbody[:outer_try.finalbody.index(close) + 1]
+
+    env = {"self": worker, "counter": None, "trace_file": None}
+    exec(compile(ast.fix_missing_locations(ast.Module(body=prefix, type_ignores=[])), str(source_path), "exec"), env)
+
+    assert calls == ["draining"] and env["terminal_status"] == "completed"
+    assert worker.state.status == "draining"
+
+
+def test_v0559_worker_drain_restores_terminal_status_captured_before_artifacts() -> None:
+    worker = _worker()
+    worker.state.status = "draining"
+    worker._event_dispatcher = SimpleNamespace(stop_and_flush=lambda **_kwargs: True)
+
+    worker._drain_events_before_finish(terminal_status="completed")
+
+    assert worker.state.status == "completed"
+
+
+def _execute_registry_stop(state_status, *, alive):
+    import ast
+    from dataclasses import asdict, dataclass
+    from pathlib import Path
+    import threading
+
+    source_path = Path(__file__).resolve().parents[1] / "app" / "runtime.py"
+    tree = ast.parse(source_path.read_text(encoding="utf-8"))
+    registry_class = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "PipelineRegistry")
+    stop = next(node for node in registry_class.body if isinstance(node, ast.FunctionDef) and node.name == "stop")
+    code = compile(ast.fix_missing_locations(ast.Module(body=[stop], type_ignores=[])), str(source_path), "exec")
+    namespace = {"asdict": asdict}
+    exec(code, namespace)
+
+    @dataclass
+    class State:
+        status: str
+        pending_events: int = 1
+
+    state, calls = State(state_status), []
+    worker = SimpleNamespace(
+        stop=lambda: calls.append("stop"),
+        join=lambda **kwargs: calls.append(("join", kwargs["timeout"])),
+        is_alive=lambda: alive,
+    )
+    registry = SimpleNamespace(_lock=threading.Lock(), _workers={1: worker}, _states={1: state})
+    return namespace["stop"](registry, 1), state, calls
+
+
+def test_v0559_registry_stop_returns_draining_within_backend_request_budget() -> None:
+    result, state, calls = _execute_registry_stop("running", alive=True)
+
+    assert calls == ["stop", ("join", 1.0)]
+    assert result == {"status": "draining", "pending_events": 1}
+    assert state.status == "running"
+
+
+def test_v0559_registry_stop_preserves_captured_worker_error_during_drain() -> None:
+    result, state, _calls = _execute_registry_stop("error", alive=True)
+
+    assert result["status"] == "draining" and state.status == "error"
+
+
+def test_v0559_registry_stop_returns_settled_terminal_status() -> None:
+    result, state, calls = _execute_registry_stop("stopped", alive=False)
+
+    assert calls == ["stop", ("join", 1.0)]
+    assert result["status"] == state.status == "stopped"

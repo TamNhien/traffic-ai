@@ -1,6 +1,168 @@
 from app.tracking import TrackContinuityResolver, motion_leading_anchor
 
 
+def _resolve_v0559(resolver, raw_id, point, label, frame, rect, claimed=None):
+    # Exercise actual .58 behavior in differential runs, including its center
+    # based stitch decision; missing rectangle support must not be the failure.
+    from inspect import signature
+
+    kwargs = {'rect': rect} if 'rect' in signature(resolver.resolve).parameters else {}
+    return resolver.resolve(raw_id, point, label, frame, 1440, 811, claimed, **kwargs)
+
+
+def _v0559_recorded_upward_rider(resolver, label='motorcycle'):
+    # Session 163 trace: original rider before the photographed second rider
+    # hijacks canonical 328328 at frame 18860. No GT timestamp is involved.
+    for frame, point, rect in (
+        (18855, (927.970, 219.042), (888.743, 167.101, 967.198, 270.983)),
+        (18856, (926.332, 216.601), (888.837, 166.228, 963.826, 266.974)),
+        (18857, (922.803, 212.580), (885.804, 162.160, 959.802, 263.001)),
+    ):
+        _resolve_v0559(resolver, 328328, point, label, frame, rect)
+
+
+def test_v0559_recorded_two_wheel_reverse_teleport_cannot_hijack_canonical() -> None:
+    for label in ('motorcycle', 'bicycle'):
+        resolver = TrackContinuityResolver()
+        _v0559_recorded_upward_rider(resolver, label)
+        before = resolver.anchor_velocity_for(328328)
+        canonical, stitched = _resolve_v0559(
+            resolver, 331821, (927., 390.075), label, 18860,
+            (891.956, 327., 962.044, 453.150),
+        )
+        assert canonical == 331821
+        assert not stitched
+        assert resolver.lineage_size(328328) == 1
+        assert resolver.anchor_velocity_for(328328) == before
+        assert resolver.velocity_for(331821) == (0., 0.)
+
+
+def test_v0559_reverse_candidate_rejection_still_selects_compatible_rider() -> None:
+    resolver = TrackContinuityResolver()
+    _v0559_recorded_upward_rider(resolver)
+    for frame, cy in ((18856, 414.), (18857, 402.)):
+        _resolve_v0559(
+            resolver, 330000, (927., cy), 'motorcycle', frame,
+            (887., cy-60., 967., cy+60.), {328328},
+        )
+    canonical, stitched = _resolve_v0559(
+        resolver, 331821, (927., 390.075), 'motorcycle', 18860,
+        (891.956, 327., 962.044, 453.150),
+    )
+    assert canonical == 330000
+    assert stitched
+    assert resolver.lineage_size(328328) == 1
+    assert resolver.lineage_size(330000) == 2
+
+
+def test_v0559_recorded_local_box_fragment_remains_stitchable() -> None:
+    resolver = TrackContinuityResolver()
+    for frame, point, rect in (
+        (18870, (885.759, 315.570), (848.990, 252.808, 922.527, 378.332)),
+        (18871, (882.469, 311.098), (846.775, 250.456, 918.162, 371.741)),
+    ):
+        _resolve_v0559(resolver, 331821, point, 'motorcycle', frame, rect)
+    canonical, stitched = _resolve_v0559(
+        resolver, 332237, (886.950, 331.275), 'motorcycle', 18872,
+        (857.229, 295.950, 916.671, 366.600),
+    )
+    assert canonical == 331821
+    assert stitched
+    assert resolver.lineage_size(canonical) == 2
+
+
+def test_v0559_small_local_reverse_jitter_fits_rectangle_uncertainty() -> None:
+    resolver = TrackContinuityResolver()
+    for frame, cy in ((10, 500.), (11, 488.)):
+        _resolve_v0559(resolver, 10, (500., cy), 'motorcycle', frame, (460., cy-50., 540., cy+50.))
+    canonical, stitched = _resolve_v0559(resolver, 20, (500., 498.), 'motorcycle', 12, (470., 458., 530., 538.))
+    assert canonical == 10 and stitched
+
+
+def test_v0559_expected_gap_travel_allows_bounded_new_raw_reverse() -> None:
+    resolver = TrackContinuityResolver()
+    for frame, cy in ((10, 500.), (11, 488.)):
+        _resolve_v0559(resolver, 10, (500., cy), 'motorcycle', frame, (495., cy-5., 505., cy+5.))
+    canonical, stitched = _resolve_v0559(resolver, 20, (500., 508.), 'motorcycle', 21, (495., 503., 505., 513.))
+    assert canonical == 10 and stitched
+
+
+def test_v0559_same_raw_real_reversal_keeps_live_identity_and_heading() -> None:
+    resolver = TrackContinuityResolver()
+    _v0559_recorded_upward_rider(resolver)
+    canonical, stitched = _resolve_v0559(
+        resolver, 328328, (927., 390.075), 'motorcycle', 18860,
+        (891.956, 327., 962.044, 453.150),
+    )
+    assert canonical == 328328 and not stitched
+    assert resolver.anchor_velocity_for(canonical)[1] > 1.5
+
+
+def test_v0559_same_direction_fragment_keeps_finite_crossing_history() -> None:
+    from app.counting import CountingLine, LineCrossingCounter
+
+    resolver = TrackContinuityResolver()
+    counter = LineCrossingCounter(CountingLine(.1, .4, .9, .4), startup_grace_frames=0)
+    directions = []
+    for frame, raw_id, cy in ((10, 10, 410.), (11, 10, 390.), (12, 20, 330.)):
+        rect = (660., cy-20., 740., cy+20.)
+        canonical, _ = _resolve_v0559(resolver, raw_id, (700., cy), 'motorcycle', frame, rect)
+        anchor = motion_leading_anchor(rect, resolver.anchor_velocity_for(canonical))
+        direction = counter.update(canonical, anchor, 1440, 811, frame)
+        if direction:
+            directions.append(direction)
+    assert canonical == 10
+    assert directions == ['out']
+
+
+def test_v0559_four_wheel_reverse_stitch_keeps_perspective_contract() -> None:
+    resolver = TrackContinuityResolver()
+    _v0559_recorded_upward_rider(resolver, 'truck')
+    canonical, stitched = _resolve_v0559(
+        resolver, 331821, (927., 390.075), 'car', 18860,
+        (891.956, 327., 962.044, 453.150),
+    )
+    assert canonical == 328328 and stitched
+
+
+def test_v0559_center_only_callers_keep_legacy_stitch_behavior() -> None:
+    resolver = TrackContinuityResolver()
+    resolver.resolve(10, (922.803, 224.580), 'motorcycle', 18856, 1440, 811)
+    resolver.resolve(10, (922.803, 212.580), 'motorcycle', 18857, 1440, 811)
+    canonical, stitched = resolver.resolve(20, (927., 390.075), 'motorcycle', 18860, 1440, 811)
+    assert canonical == 10 and stitched
+
+
+def test_v0559_unestablished_motion_cannot_reject_new_raw_id() -> None:
+    resolver = TrackContinuityResolver()
+    for frame, cy in ((10, 500.), (11, 499.)):
+        _resolve_v0559(resolver, 10, (500., cy), 'motorcycle', frame, (499., cy-1., 501., cy+1.))
+    canonical, stitched = _resolve_v0559(resolver, 20, (500., 509.), 'motorcycle', 12, (499., 508., 501., 510.))
+    assert canonical == 10 and stitched
+
+
+def test_v0559_missing_either_rectangle_keeps_legacy_stitch_contract() -> None:
+    for missing_previous in (True, False):
+        resolver = TrackContinuityResolver()
+        for frame, cy in ((10, 500.), (11, 488.)):
+            rect = None if missing_previous else (495., cy-5., 505., cy+5.)
+            _resolve_v0559(resolver, 10, (500., cy), 'motorcycle', frame, rect)
+        rect = (495., 508., 505., 518.) if missing_previous else None
+        canonical, stitched = _resolve_v0559(resolver, 20, (500., 513.), 'motorcycle', 12, rect)
+        assert canonical == 10 and stitched
+
+
+def test_v0559_duplicate_clock_cannot_replace_rectangle_stitch_evidence() -> None:
+    resolver = TrackContinuityResolver()
+    _v0559_recorded_upward_rider(resolver)
+    _resolve_v0559(resolver, 328328, (927., 390.075), 'motorcycle', 18857, (500., 0., 1400., 811.))
+    canonical, stitched = _resolve_v0559(
+        resolver, 331821, (927., 390.075), 'motorcycle', 18860,
+        (891.956, 327., 962.044, 453.150),
+    )
+    assert canonical == 331821 and not stitched
+
+
 def _anchor_velocity(resolver: TrackContinuityResolver, canonical: int):
     # Differential runs against the delivered .56 ZIP exercise its actual
     # velocity-based anchor behavior before the dedicated heading API existed.

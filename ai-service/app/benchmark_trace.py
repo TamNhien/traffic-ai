@@ -3,16 +3,125 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import gzip
+from bisect import bisect_left, bisect_right
+from collections import deque
+from hashlib import sha256
+from math import inf, nextafter
 from pathlib import Path
 from typing import Iterable
 from uuid import uuid4
 
 SNAPSHOT_ROOT = Path(os.getenv("SNAPSHOT_DIR", "/tmp/traffic-ai-snapshots"))
 TRACE_ROOT = SNAPSHOT_ROOT / "benchmark-traces"
+TRACE_EXPORT_MAX_BYTES = 128 * 1024 * 1024
 
 
 def trace_path(session_id: int) -> Path:
     return TRACE_ROOT / f"session_{int(session_id)}.jsonl"
+
+
+def compressed_trace_path(session_id: int) -> Path:
+    return TRACE_ROOT / f"session_{int(session_id)}.jsonl.gz"
+
+
+def _closed_trace_metadata_path(session_id: int) -> Path:
+    return TRACE_ROOT / f"session_{int(session_id)}.closed.json"
+
+
+def _trace_signature(path: Path) -> list[int]:
+    status = path.stat()
+    return [status.st_dev, status.st_ino, status.st_size, status.st_mtime_ns, status.st_ctime_ns]
+
+
+class _BoundedCompressedWriter:
+    def __init__(self, handle) -> None:
+        self.handle = handle
+        self.size = 0
+        self.digest = sha256()
+
+    def write(self, data: bytes) -> int:
+        if self.size + len(data) > TRACE_EXPORT_MAX_BYTES:
+            raise OSError("Compressed benchmark trace exceeds the export limit")
+        written = self.handle.write(data)
+        if written != len(data):
+            raise OSError("Incomplete compressed benchmark trace write")
+        self.size += written
+        self.digest.update(data[:written])
+        return written
+
+    def flush(self) -> None:
+        self.handle.flush()
+
+
+def publish_compressed_trace(session_id: int) -> dict:
+    """Stream a closed writer's exact bytes into an atomic bounded artifact.
+
+    The certificate is published last. A live, replaced, or subsequently
+    appended raw trace cannot use an earlier certificate to appear closed.
+    Compression failure does not affect the raw endpoint or camera artifact.
+    """
+    source = trace_path(session_id)
+    target = compressed_trace_path(session_id)
+    metadata_path = _closed_trace_metadata_path(session_id)
+    metadata_path.unlink(missing_ok=True)
+    temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
+    temporary_metadata = metadata_path.with_name(f".{metadata_path.name}.{uuid4().hex}.tmp")
+    source_signature = _trace_signature(source)
+    digest = sha256()
+    source_bytes = 0
+    published = False
+    try:
+        with source.open("rb") as original, temporary.open("wb") as output:
+            bounded = _BoundedCompressedWriter(output)
+            with gzip.GzipFile(filename="", mode="wb", fileobj=bounded, mtime=0, compresslevel=6) as compressed:
+                while chunk := original.read(64 * 1024):
+                    digest.update(chunk)
+                    source_bytes += len(chunk)
+                    compressed.write(chunk)
+        if _trace_signature(source) != source_signature or source_bytes != source_signature[2]:
+            raise OSError("Benchmark trace changed during closed publication")
+        os.replace(temporary, target)
+        published = True
+        metadata = {
+            "schema_version": 1, "session_id": int(session_id), "closed": True,
+            "encoding": "gzip", "source_bytes": source_bytes, "source_sha256": digest.hexdigest(),
+            "compressed_bytes": bounded.size, "compressed_sha256": bounded.digest.hexdigest(),
+            "source_signature": source_signature, "compressed_signature": _trace_signature(target),
+        }
+        temporary_metadata.write_text(json.dumps(metadata, separators=(",", ":")) + "\n", encoding="utf-8")
+        os.replace(temporary_metadata, metadata_path)
+        return metadata
+    except Exception:
+        if published:
+            target.unlink(missing_ok=True)
+        raise
+    finally:
+        temporary.unlink(missing_ok=True)
+        temporary_metadata.unlink(missing_ok=True)
+
+
+def closed_compressed_trace(session_id: int) -> tuple[Path, dict] | None:
+    """Return only a certified artifact whose source and gzip are unchanged."""
+    try:
+        metadata = json.loads(_closed_trace_metadata_path(session_id).read_text(encoding="utf-8"))
+        target = compressed_trace_path(session_id)
+        if (not isinstance(metadata, dict) or metadata.get("schema_version") != 1
+                or metadata.get("session_id") != int(session_id) or metadata.get("closed") is not True
+                or metadata.get("encoding") != "gzip"
+                or metadata.get("source_signature") != _trace_signature(trace_path(session_id))
+                or metadata.get("compressed_signature") != _trace_signature(target)
+                or not 0 < metadata.get("compressed_bytes", 0) <= TRACE_EXPORT_MAX_BYTES
+                or metadata.get("compressed_bytes") != target.stat().st_size
+                or metadata.get("source_bytes") != trace_path(session_id).stat().st_size):
+            return None
+        for key in ("source_sha256", "compressed_sha256"):
+            value = metadata.get(key)
+            if not isinstance(value, str) or len(value) != 64 or any(c not in "0123456789abcdef" for c in value):
+                return None
+        return target, metadata
+    except (OSError, ValueError, TypeError):
+        return None
 
 
 def publish_closed_trace(camera_id: int, session_id: int, *, snapshot_root: Path) -> dict | None:
@@ -152,7 +261,120 @@ def _diagnosis_scope(reason: str, gate_audit: dict, tracking_id: int | None) -> 
     }
 
 
+class _TraceWindow:
+    def __init__(self, target, track):
+        self.target = target
+        self.track = track
+        self.geometry = {}
+        self.context = {}
+        self.legacy = deque(maxlen=8)
+        self.count = 0
+        self.maximum = {}
+        self.minimum = {}
+        self.events = 0
+
+    def observe(self, row):
+        for audit in row.get('bicycle_xframe_decision_audit', []) or []:
+            if not isinstance(audit, dict) or (self.track is not None and audit.get('track_id') != self.track):
+                continue
+            if audit.get('kind') == 'bicycle_context':
+                key = _context_decision_key(audit)
+                if key is not None:
+                    self.context.pop(key, None)
+                    self.context[key] = audit
+                    if len(self.context) > 8:
+                        self.context.pop(next(iter(self.context)))
+            else:
+                self.legacy.append(audit)
+        for item in row.get('gate_tracks', []) or []:
+            try:
+                tid = int(item.get('track_id'))
+                anchor = float(item.get('anchor_signed'))
+                center = float(item.get('center_signed'))
+            except (TypeError, ValueError):
+                continue
+            if self.track is not None and tid != self.track:
+                continue
+            values = self.geometry.get(tid)
+            if values is None:
+                self.geometry[tid] = [anchor, anchor, center, center, abs(anchor), str(item.get('label', ''))]
+            else:
+                values[0] = min(values[0], anchor)
+                values[1] = max(values[1], anchor)
+                values[2] = min(values[2], center)
+                values[3] = max(values[3], center)
+                values[4] = min(values[4], abs(anchor))
+        if row.get('audit_only'):
+            return
+        self.count += 1
+        self.events += int(row.get('crossing_events', 0))
+        for key in ('detections', 'tracks', 'road_tracks', 'rejected_outside_road',
+                    'rejected_unconfirmed_side', 'rejected_cooldown', 'road_edge_rescues'):
+            value = int(row.get(key, 0))
+            self.maximum[key] = max(self.maximum.get(key, value), value)
+            self.minimum[key] = min(self.minimum.get(key, value), value)
+
+    def finish(self):
+        gate = {'anchor_span': [], 'center_only_span': [], 'near_no_span': [],
+                'geometry_scope': ('matched_track' if self.track is not None else 'nearby_time_window')
+                if self.geometry else 'no_track_evidence',
+                'bicycle_xframe_audit': list(self.legacy),
+                'bicycle_context_audit': list(self.context.values())}
+        for tid, (amin, amax, cmin, cmax, anear, label) in self.geometry.items():
+            item = {'track_id': tid, 'label': label, 'anchor_min': round(amin, 6),
+                    'anchor_max': round(amax, 6), 'center_min': round(cmin, 6), 'center_max': round(cmax, 6)}
+            if amin < -0.006 and amax > 0.006:
+                gate['anchor_span'].append(item)
+            elif cmin < -0.006 and cmax > 0.006:
+                gate['center_only_span'].append(item)
+            elif anear <= 0.020:
+                gate['near_no_span'].append(item)
+        output = {'time': self.target, 'gate_span_audit': gate,
+                  'bicycle_xframe_audit': gate['bicycle_xframe_audit'],
+                  'bicycle_context_audit': gate['bicycle_context_audit']}
+        if not self.count:
+            reason = 'no_trace_window'
+            output.update(max_det=0, max_track=0, max_road=0)
+        else:
+            maximum = self.maximum
+            minimum = self.minimum
+            output.update(max_det=maximum['detections'], max_track=maximum['tracks'], max_road=maximum['road_tracks'],
+                          crossing_events_nearby=self.events,
+                          outside_road_delta=maximum['rejected_outside_road'] - minimum['rejected_outside_road'],
+                          confirmation_reject_delta=maximum['rejected_unconfirmed_side'] - minimum['rejected_unconfirmed_side'],
+                          cooldown_reject_delta=maximum['rejected_cooldown'] - minimum['rejected_cooldown'],
+                          road_edge_rescue_delta=maximum['road_edge_rescues'] - minimum['road_edge_rescues'])
+            if output['max_det'] <= 0:
+                reason = 'detector_miss'
+            elif output['max_track'] <= 0:
+                reason = 'tracker_miss'
+            elif output['max_road'] <= 0 or output['outside_road_delta'] > 0:
+                reason = 'road_zone_reject'
+            elif output['cooldown_reject_delta'] > 0:
+                reason = 'crossing_cooldown_reject'
+            elif output['confirmation_reject_delta'] > 0:
+                reason = 'crossing_confirmation_reject'
+            elif gate['anchor_span']:
+                reason = 'crossing_anchor_span_reject'
+            elif gate['center_only_span']:
+                reason = 'crossing_center_only_span'
+            elif gate['near_no_span']:
+                reason = 'crossing_near_no_span'
+            else:
+                reason = 'crossing_gate_miss'
+        output['reason'] = reason
+        output['diagnosis_scope'] = _diagnosis_scope(reason, gate, self.track)
+        return output
+
+
 def diagnose_trace(session_id: int, times: Iterable[float], window_seconds: float = 0.60, *, tracking_ids: Iterable[int | None] | None = None) -> dict:
+    """Aggregate requested windows without retaining the full JSONL in memory.
+
+    First pass captures counters, gate extrema and bounded source-order audits.
+    A second linear pass refreshes only selected context identities, preserving
+    delayed guard outcomes even with unordered source times. Both passes read
+    the same byte boundary; newly appended live rows belong to the next request.
+    """
     targets = list(times)
     target_tracks = list(tracking_ids) if tracking_ids is not None else [None] * len(targets)
     if len(target_tracks) != len(targets):
@@ -160,71 +382,61 @@ def diagnose_trace(session_id: int, times: Iterable[float], window_seconds: floa
     path = trace_path(session_id)
     if not path.exists():
         return {"available": False, "session_id": int(session_id), "items": []}
-    rows = []
-    with path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rows.append(json.loads(line))
-            except Exception:
-                continue
     window = max(0.05, min(2.0, float(window_seconds)))
-    result = []
+    groups = {}
+    requests = []
     for raw_time, tracking_id in zip(targets, target_tracks):
-        target = max(0.0, float(raw_time))
-        nearby = [row for row in rows if abs(float(row.get("source_time_seconds", -9999.0)) - target) <= window]
-        gate_audit = _gate_span_audit(nearby, tracking_id=tracking_id, context_updates=rows)
-        nearby = [row for row in nearby if not row.get("audit_only")]
-        if not nearby:
-            result.append({"time": target, "reason": "no_trace_window", "max_det": 0, "max_track": 0, "max_road": 0,
-                           "diagnosis_scope": _diagnosis_scope("no_trace_window", gate_audit, tracking_id),
-                           "gate_span_audit": gate_audit,
-                           "bicycle_xframe_audit": gate_audit["bicycle_xframe_audit"],
-                           "bicycle_context_audit": gate_audit["bicycle_context_audit"]})
-            continue
-        max_det = max(int(row.get("detections", 0)) for row in nearby)
-        max_track = max(int(row.get("tracks", 0)) for row in nearby)
-        max_road = max(int(row.get("road_tracks", 0)) for row in nearby)
-        event_frames = sum(int(row.get("crossing_events", 0)) for row in nearby)
-        outside_road_delta = max(int(row.get("rejected_outside_road", 0)) for row in nearby) - min(int(row.get("rejected_outside_road", 0)) for row in nearby)
-        confirm_delta = max(int(row.get("rejected_unconfirmed_side", 0)) for row in nearby) - min(int(row.get("rejected_unconfirmed_side", 0)) for row in nearby)
-        cooldown_delta = max(int(row.get("rejected_cooldown", 0)) for row in nearby) - min(int(row.get("rejected_cooldown", 0)) for row in nearby)
-        road_edge_rescue_delta = max(int(row.get("road_edge_rescues", 0)) for row in nearby) - min(int(row.get("road_edge_rescues", 0)) for row in nearby)
-        if max_det <= 0:
-            reason = "detector_miss"
-        elif max_track <= 0:
-            reason = "tracker_miss"
-        elif max_road <= 0 or outside_road_delta > 0:
-            reason = "road_zone_reject"
-        elif cooldown_delta > 0:
-            reason = "crossing_cooldown_reject"
-        elif confirm_delta > 0:
-            reason = "crossing_confirmation_reject"
-        else:
-            if gate_audit["anchor_span"]:
-                reason = "crossing_anchor_span_reject"
-            elif gate_audit["center_only_span"]:
-                reason = "crossing_center_only_span"
-            elif gate_audit["near_no_span"]:
-                reason = "crossing_near_no_span"
-            else:
-                reason = "crossing_gate_miss"
-        result.append({
-            "time": target,
-            "reason": reason,
-            "diagnosis_scope": _diagnosis_scope(reason, gate_audit, tracking_id),
-            "max_det": max_det,
-            "max_track": max_track,
-            "max_road": max_road,
-            "crossing_events_nearby": event_frames,
-            "outside_road_delta": outside_road_delta,
-            "confirmation_reject_delta": confirm_delta,
-            "cooldown_reject_delta": cooldown_delta,
-            "road_edge_rescue_delta": road_edge_rescue_delta,
-            "gate_span_audit": gate_audit,
-            "bicycle_xframe_audit": gate_audit["bicycle_xframe_audit"],
-            "bicycle_context_audit": gate_audit["bicycle_context_audit"],
-        })
-    return {"available": True, "session_id": int(session_id), "window_seconds": window, "items": result}
+        key = max(0.0, float(raw_time)), tracking_id
+        if key not in groups:
+            groups[key] = _TraceWindow(*key)
+        requests.append(groups[key])
+    windows = list(groups.values())
+    if not windows:
+        return {"available": True, "session_id": int(session_id), "window_seconds": window, "items": []}
+    ordered = sorted((item.target, index) for index, item in enumerate(windows))
+    target_times = [target for target, _index in ordered]
+    with path.open("rb") as handle:
+        byte_limit = os.fstat(handle.fileno()).st_size
+
+        def rows():
+            handle.seek(0)
+            remaining = byte_limit
+            while remaining:
+                line = handle.readline(remaining)
+                if not line:
+                    break
+                remaining -= len(line)
+                try:
+                    row = json.loads(line)
+                except (ValueError, UnicodeError):
+                    continue
+                if isinstance(row, dict):
+                    yield row
+
+        for row in rows():
+            try:
+                clock = float(row.get("source_time_seconds", -9999.0))
+            except (TypeError, ValueError):
+                continue
+            # Expand the search by one representable float, then retain the
+            # original abs-distance predicate at both inclusive boundaries.
+            lower = bisect_left(target_times, nextafter(clock - window, -inf))
+            upper = bisect_right(target_times, nextafter(clock + window, inf))
+            for position in range(lower, upper):
+                index = ordered[position][1]
+                if abs(clock - windows[index].target) <= window:
+                    windows[index].observe(row)
+        subscribers = {}
+        for item in windows:
+            for key in item.context:
+                subscribers.setdefault(key, []).append(item)
+        if subscribers:
+            for row in rows():
+                for audit in row.get("bicycle_xframe_decision_audit", []) or []:
+                    if not isinstance(audit, dict):
+                        continue
+                    key = _context_decision_key(audit)
+                    for item in subscribers.get(key, []):
+                        item.context[key] = audit
+    return {"available": True, "session_id": int(session_id), "window_seconds": window,
+            "items": [item.finish() for item in requests]}

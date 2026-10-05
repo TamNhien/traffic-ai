@@ -55,6 +55,7 @@ class _IdentityState:
     label: str
     last_raw_id: int
     velocity: Point = (0.0, 0.0)
+    rect: Rect | None = None
 
 
 class TrackContinuityResolver:
@@ -104,6 +105,8 @@ class TrackContinuityResolver:
         frame_width: int,
         frame_height: int,
         claimed_canonical_ids: set[int] | None = None,
+        *,
+        rect: Rect | None = None,
     ) -> tuple[int, bool]:
         # Expire the previous identity before an arriving raw ID can refresh it.
         # Otherwise a reused ID after a long silence revives stale motion state.
@@ -113,7 +116,7 @@ class TrackContinuityResolver:
         canonical = self._raw_to_canonical.get(raw_id)
         if canonical is not None and canonical not in claimed:
             self._canonical_raw_ids.setdefault(canonical, set()).add(raw_id)
-            self._update_state(canonical, raw_id, point, label, frame_index)
+            self._update_state(canonical, raw_id, point, label, frame_index, rect)
             self._cleanup(frame_index)
             return canonical, False
 
@@ -127,6 +130,9 @@ class TrackContinuityResolver:
             if gap <= 0 or gap > gap_limit or candidate_id in claimed:
                 continue
             if state_family != family:
+                continue
+
+            if self._opposite_two_wheel_stitch(state, point, rect, family, gap):
                 continue
 
             predicted = (
@@ -160,7 +166,7 @@ class TrackContinuityResolver:
         canonical = best[1] if best is not None else raw_id
         self._raw_to_canonical[raw_id] = canonical
         self._canonical_raw_ids.setdefault(canonical, set()).add(raw_id)
-        self._update_state(canonical, raw_id, point, label, frame_index)
+        self._update_state(canonical, raw_id, point, label, frame_index, rect)
         if stitched:
             self.stitch_count += 1
             if family == "four-wheel":
@@ -227,7 +233,41 @@ class TrackContinuityResolver:
         heading = self._anchor_velocities.get(int(canonical_id))
         return heading[1] if heading is not None else self.velocity_for(canonical_id)
 
-    def _update_state(self, canonical: int, raw_id: int, point: Point, label: str, frame_index: int) -> None:
+    @staticmethod
+    def _opposite_two_wheel_stitch(
+        state: _IdentityState, point: Point, rect: Rect | None, family: str, gap: int,
+    ) -> bool:
+        """Reject a new rider identity that teleports behind a moving rider.
+
+        V0.5.59 uses the established 1.5 full-heading boundary, rather than a
+        looser global stitch radius. Detector boxes may expand or shrink between
+        raw IDs, so allow backward center motion within either box's half
+        diagonal and the expected travel over the gap. Only a larger opposing
+        displacement contradicts that candidate. Existing raw-ID reversals and
+        four-wheel perspective recovery keep their previous behavior. Callers
+        without both rectangles keep the original center-only stitch contract.
+        """
+        velocity = state.velocity
+        if (
+            family != "two-wheel" or state.rect is None or rect is None
+            or abs(velocity[0]) + abs(velocity[1]) < 1.5
+        ):
+            return False
+        speed = hypot(*velocity)
+        reverse_travel = -(
+            (point[0] - state.point[0]) * velocity[0]
+            + (point[1] - state.point[1]) * velocity[1]
+        ) / speed
+        box_radius = max(
+            hypot(max(0.0, box[2] - box[0]), max(0.0, box[3] - box[1])) * .5
+            for box in (state.rect, rect)
+        )
+        return reverse_travel > max(speed * gap, box_radius, 1.5 * gap)
+
+    def _update_state(
+        self, canonical: int, raw_id: int, point: Point, label: str,
+        frame_index: int, rect: Rect | None = None,
+    ) -> None:
         previous = self._states.get(canonical)
         if previous is not None and frame_index <= previous.frame_index:
             # A duplicated or stale source clock supplies no new motion evidence
@@ -241,7 +281,7 @@ class TrackContinuityResolver:
                 previous.velocity[0] * 0.45 + observed[0] * 0.55,
                 previous.velocity[1] * 0.45 + observed[1] * 0.55,
             )
-        self._states[canonical] = _IdentityState(point, frame_index, str(label), raw_id, velocity)
+        self._states[canonical] = _IdentityState(point, frame_index, str(label), raw_id, velocity, rect)
         speed = abs(velocity[0]) + abs(velocity[1])
         if speed >= 1.5:
             self._anchor_velocities[canonical] = (int(frame_index), velocity)

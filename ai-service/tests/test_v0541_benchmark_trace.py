@@ -1,6 +1,64 @@
 import json
 
 
+def test_v0559_streaming_trace_skips_malformed_records_without_losing_valid_rows(monkeypatch, tmp_path):
+    import app.benchmark_trace as bt
+    monkeypatch.setattr(bt, "TRACE_ROOT", tmp_path)
+    bt.trace_path(90).write_text('null\n[]\n1\n{invalid\n{"source_time_seconds":10,"detections":1,"tracks":1,"road_tracks":1}\n')
+    item = bt.diagnose_trace(90, [10.0])["items"][0]
+    assert item["max_det"] == item["max_track"] == item["max_road"] == 1
+    assert item["reason"] == "crossing_gate_miss"
+
+
+def test_v0559_duplicate_windows_share_observation_work_and_return_independent_items(monkeypatch, tmp_path):
+    import app.benchmark_trace as bt
+    monkeypatch.setattr(bt, "TRACE_ROOT", tmp_path)
+    _write_trace_scope_rows(bt, 91, [{"source_time_seconds":10,"detections":1,"tracks":1,"road_tracks":1}])
+    original = bt._TraceWindow.observe
+    calls = []
+
+    def observe(self, row):
+        calls.append(self.target)
+        original(self, row)
+
+    monkeypatch.setattr(bt._TraceWindow, "observe", observe)
+    items = bt.diagnose_trace(91, [10.0] * 5000)["items"]
+    assert len(items) == 5000 and calls == [10.0]
+    assert items[0] == items[-1] and items[0] is not items[-1]
+    assert items[0]["gate_span_audit"] is not items[-1]["gate_span_audit"]
+
+
+def test_v0559_unordered_trace_refreshes_only_selected_context_keys_without_reordering(monkeypatch, tmp_path):
+    import app.benchmark_trace as bt
+    monkeypatch.setattr(bt, "TRACE_ROOT", tmp_path)
+    proposals = [{"kind":"bicycle_context", "track_id":i, "frame_index":250, "commit_status":"pending"} for i in range(10)]
+    latest = [{**proposals[2], "commit_status":"accepted"}, {**proposals[9], "commit_status":"expired"}]
+    rows = [{"source_time_seconds":12, "bicycle_xframe_decision_audit": [latest[0]]},
+            {"source_time_seconds":10, "detections":1, "tracks":1, "road_tracks":1,
+             "bicycle_xframe_decision_audit":proposals},
+            {"source_time_seconds":3, "audit_only":True, "bicycle_xframe_decision_audit":latest},
+            {"source_time_seconds":20, "bicycle_xframe_decision_audit":[{**proposals[0], "commit_status":"accepted"}]}]
+    _write_trace_scope_rows(bt, 92, rows)
+    item = bt.diagnose_trace(92, [10])["items"][0]
+    assert [a["track_id"] for a in item["bicycle_context_audit"]] == list(range(2, 10))
+    assert item["bicycle_context_audit"][0] == latest[0]
+    assert item["bicycle_context_audit"][-1] == latest[-1]
+    assert item["max_det"] == 1
+
+
+def test_v0559_streaming_trace_retains_first_label_and_exact_inclusive_window(monkeypatch, tmp_path):
+    import app.benchmark_trace as bt
+    monkeypatch.setattr(bt, "TRACE_ROOT", tmp_path)
+    rows = [{"source_time_seconds":time,"detections":1,"tracks":1,"road_tracks":1,
+             "gate_tracks":[{"track_id":4,"label":label,"anchor_signed":signed,"center_signed":signed}]}
+            for time, label, signed in [(9.5,"bicycle",-0.02),(10.5,"motorcycle",0.02),(10.6,"truck",1.0)]]
+    _write_trace_scope_rows(bt, 93, rows)
+    item = bt.diagnose_trace(93, [10], window_seconds=0.5, tracking_ids=[4])["items"][0]
+    geometry = item["gate_span_audit"]["anchor_span"][0]
+    assert geometry["label"] == "bicycle" and geometry["anchor_max"] == 0.02
+    assert item["reason"] == "crossing_anchor_span_reject"
+
+
 def _write_trace_scope_rows(bt, session_id, rows):
     bt.trace_path(session_id).write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
 

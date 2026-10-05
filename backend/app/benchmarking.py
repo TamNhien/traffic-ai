@@ -9,7 +9,7 @@ import json
 from math import inf
 from typing import Iterable, Mapping, Any
 from urllib.parse import urlsplit, urlunsplit
-from zipfile import ZIP_DEFLATED, ZipFile
+from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile
 
 
 BENCHMARK_TRACE_EXPORT_MAX_BYTES = 128 * 1024 * 1024
@@ -17,6 +17,15 @@ BENCHMARK_TRACE_EXPORT_MAX_BYTES = 128 * 1024 * 1024
 
 class BenchmarkTraceTooLarge(ValueError):
     """The trace cannot fit in one diagnostic download."""
+
+
+@dataclass(frozen=True, slots=True)
+class BenchmarkTraceArchive:
+    """Closed gzip bytes and source metadata; the backend never inflates them."""
+    content: bytes
+    source_bytes: int
+    source_sha256: str
+    compressed_sha256: str
 
 
 def read_benchmark_trace_chunks(chunks: Iterable[bytes], max_bytes: int = BENCHMARK_TRACE_EXPORT_MAX_BYTES) -> bytes:
@@ -70,10 +79,12 @@ def _benchmark_export_value(value: Any) -> Any:
 
 def build_benchmark_export(
     *, report: dict, marks: list[dict], events: list[dict], session: dict,
-    config: dict, exported_at: datetime, trace: bytes | None = None,
+    config: dict, exported_at: datetime, trace: bytes | BenchmarkTraceArchive | None = None,
     trace_reason: str = "not_found",
 ) -> bytes:
     """Build a read-only evidence ZIP, with explicit optional trace status."""
+    compressed_trace = trace if isinstance(trace, BenchmarkTraceArchive) else None
+    trace = compressed_trace.content if compressed_trace is not None else trace
     if trace is not None and len(trace) > BENCHMARK_TRACE_EXPORT_MAX_BYTES:
         raise BenchmarkTraceTooLarge("Benchmark trace exceeds the download limit")
     if trace == b"":
@@ -88,16 +99,30 @@ def build_benchmark_export(
             allow_nan=False, sort_keys=True, indent=2,
         ) + "\n").encode("utf-8")
     if trace is not None:
-        files["benchmark-trace.jsonl"] = trace
+        files["benchmark-trace.jsonl.gz" if compressed_trace is not None else "benchmark-trace.jsonl"] = trace
+    trace_metadata = {
+        "available": trace is not None, "reason": "available" if trace is not None else trace_reason,
+        "bytes": len(trace) if trace is not None else 0,
+        "max_bytes": BENCHMARK_TRACE_EXPORT_MAX_BYTES,
+        "encoding": "gzip" if compressed_trace is not None else "identity",
+        "closed": True if compressed_trace is not None else None,
+    }
+    if compressed_trace is not None and trace is not None:
+        # Only the compressed representation is retained in backend memory.
+        # Consumers can verify these certified original bytes after unpacking.
+        if (not trace.startswith(b"\x1f\x8b") or sha256(trace).hexdigest() != compressed_trace.compressed_sha256
+                or compressed_trace.source_bytes < 0
+                or len(compressed_trace.source_sha256) != 64
+                or any(c not in "0123456789abcdef" for c in compressed_trace.source_sha256)):
+            raise ValueError("Invalid compressed benchmark trace metadata")
+        trace_metadata.update(source_bytes=compressed_trace.source_bytes,
+                              source_sha256=compressed_trace.source_sha256,
+                              compressed_sha256=compressed_trace.compressed_sha256)
     manifest = {
         "format": "traffic-ai-benchmark-diagnostics", "schema_version": 1,
         "benchmark_id": report["benchmark"]["id"],
         "session_id": report["session_id"], "exported_at": exported_at.isoformat(),
-        "trace": {
-            "available": trace is not None, "reason": "available" if trace is not None else trace_reason,
-            "bytes": len(trace) if trace is not None else 0,
-            "max_bytes": BENCHMARK_TRACE_EXPORT_MAX_BYTES,
-        },
+        "trace": trace_metadata,
         "files": {
             name: {"bytes": len(data), "sha256": sha256(data).hexdigest()}
             for name, data in files.items()
@@ -105,6 +130,7 @@ def build_benchmark_export(
         "notes": [
             "Report and events use the same database event snapshot; no marks or counts were changed.",
             "A running session can append trace rows or deliver more events after this export.",
+            "The trace limit applies to transported bytes. Gzip originals are certified at closure; unpacking may require more disk space.",
             "Benchmark geometry is a stored snapshot; camera settings are current, not historical.",
             "Source credentials and URL queries are omitted; videos, snapshots and model weights are not included.",
         ],
@@ -113,7 +139,7 @@ def build_benchmark_export(
     output = BytesIO()
     with ZipFile(output, "w", compression=ZIP_DEFLATED, compresslevel=6) as archive:
         for filename, data in files.items():
-            archive.writestr(filename, data)
+            archive.writestr(filename, data, compress_type=ZIP_STORED if filename.endswith(".gz") else ZIP_DEFLATED)
     return output.getvalue()
 
 

@@ -944,6 +944,71 @@ def test_v0557_qualified_primary_truck_refresh_keeps_current_detector_clock() ->
     assert worker._truck_semantic_lock.resolve(7, 661, "car") is None
 
 
+def test_v0559_worker_smoothing_does_not_renew_primary_truck_from_car_observations() -> None:
+    from app.classification import TrackLabelSmoother, TruckSemanticLock
+
+    worker = _class_worker()
+    worker._labels = TrackLabelSmoother(history=24)
+    worker._truck_semantic_lock = TruckSemanticLock(ttl_frames=30)
+    for frame in range(77, 126):
+        current_label = "truck" if frame <= 100 else "car"
+        worker._labels.update(7, current_label, .90 if current_label == "truck" else .10, frame_index=frame)
+        stable_label, certainty, hits = worker._labels.stable_label(7, current_label)
+        worker._refresh_truck_semantic_lock(7, frame, stable_label, certainty, hits)
+    assert worker._truck_semantic_lock.resolve(7, 130, "car")
+    assert worker._truck_semantic_lock.resolve(7, 131, "car") is None
+
+
+def test_v0559_worker_merged_primary_history_keeps_actual_truck_clock() -> None:
+    from app.classification import TrackLabelSmoother, TruckSemanticLock
+
+    worker = _class_worker()
+    worker._labels = TrackLabelSmoother(history=24)
+    worker._truck_semantic_lock = TruckSemanticLock(ttl_frames=30)
+    for frame in (90, 95, 100):
+        worker._labels.update(7, "truck", .90, frame_index=frame)
+    worker._labels.update(8, "car", .10, frame_index=110)
+    worker._labels.merge_track(7, 8)
+    stable_label, certainty, hits = worker._labels.stable_label(8, "car")
+    assert worker._refresh_truck_semantic_lock(8, 110, stable_label, certainty, hits)
+    assert worker._truck_semantic_lock.resolve(8, 130, "car")
+    assert worker._truck_semantic_lock.resolve(8, 131, "car") is None
+
+
+def test_v0559_worker_new_refiner_source_outlives_retained_primary_source() -> None:
+    from app.classification import TrackLabelSmoother, TruckSemanticLock
+
+    worker = _class_worker()
+    worker._labels = TrackLabelSmoother(history=24)
+    worker._truck_semantic_lock = TruckSemanticLock(ttl_frames=30)
+    for frame in (90, 95, 100):
+        worker._labels.update(7, "truck", .90, frame_index=frame)
+    worker._labels.update(7, "car", .10, frame_index=120)
+    for frame in (105, 110):
+        worker._refine_consensus.update(7, frame, "truck", .80, "domain")
+    stable_label, certainty, hits = worker._labels.stable_label(7, "car")
+    assert worker._refresh_truck_semantic_lock(7, 120, stable_label, certainty, hits)
+    assert worker._truck_semantic_lock.resolve(7, 140, "car")
+    assert worker._truck_semantic_lock.resolve(7, 141, "car") is None
+
+
+def test_v0559_worker_future_primary_pixels_do_not_inflate_valid_refiner_lock() -> None:
+    from app.classification import TrackLabelSmoother, TruckSemanticLock
+
+    worker = _class_worker()
+    worker._labels = TrackLabelSmoother(history=24)
+    worker._truck_semantic_lock = TruckSemanticLock(ttl_frames=30)
+    for frame in (121, 122, 123):
+        worker._labels.update(7, "truck", .90, frame_index=frame)
+    for frame in (105, 110):
+        worker._refine_consensus.update(7, frame, "truck", .80, "domain")
+    stable_label, certainty, hits = worker._labels.stable_label(7, "car")
+    result = worker._refresh_truck_semantic_lock(7, 120, stable_label, certainty, hits)
+    assert result is not None and result[0] == "truck" and result[1] < 1.0
+    assert worker._truck_semantic_lock.resolve(7, 140, "car")
+    assert worker._truck_semantic_lock.resolve(7, 141, "car") is None
+
+
 def test_v0557_canonical_merge_carries_only_newest_consensus_proof() -> None:
     worker = _class_worker()
     worker._class_refine_consensus_proof = {7: (130, ("truck", .83)), 8: (125, ("bus", .81))}
@@ -1119,3 +1184,127 @@ def test_v0558_future_consensus_source_cannot_create_current_correction() -> Non
         7, 200, "motorcycle", "motorcycle", .99, 20, "motorcycle", ("bicycle", .95),
     )[0] == "motorcycle"
     assert worker._class_refine_overrides == {}
+
+
+def test_v0559_class_audit_records_actual_target_and_independent_model_opinions_once() -> None:
+    worker = _class_worker()
+    calls = []
+    def infer(*_args, **kwargs):
+        calls.append(kwargs["model"])
+        return ("truck", .40) if kwargs["model"] is worker._refiner_model else ("car", .90)
+    worker._refine_crossing_label = infer
+    rect = (10.0, 20.0, 30.0, 40.0)
+    result = worker._observe_class_refiner(7, 100, object(), rect, "car", "cpu", False, force=True)
+    assert result == (("car", .90), True)
+    audit = worker._class_refine_decision_audit_this_frame
+    assert len(audit) == 1 and len(calls) == 2
+    assert audit[0]["track_id"] == 7 and audit[0]["frame_index"] == 100
+    assert audit[0]["target_label"] == "car" and audit[0]["target_rect"] == list(rect)
+    assert audit[0]["attempted_sources"] == ["domain", "general"]
+    assert audit[0]["opinions"] == {
+        "domain": {"label": "truck", "confidence": .40, "source_frame_index": 100},
+        "general": {"label": "car", "confidence": .90, "source_frame_index": 100},
+    }
+    assert audit[0]["refined"] == {"label": "car", "confidence": .90}
+    assert audit[0]["winning_source_frame_index"] == 100
+    assert not audit[0]["consensus"] and audit[0]["ttl_eligible"]
+    checks = (worker.state.class_refine_checks, worker.state.domain_refine_checks, worker.state.general_refine_checks)
+    assert worker._observe_class_refiner(7, 100, object(), rect, "car", "cpu", False, force=True) == (("car", .90), False)
+    assert worker._observe_class_refiner(7, 99, object(), rect, "car", "cpu", False, force=True) == (None, False)
+    assert len(audit) == 1 and len(calls) == 2
+    assert checks == (worker.state.class_refine_checks, worker.state.domain_refine_checks, worker.state.general_refine_checks)
+
+
+def test_v0559_class_audit_no_target_opinion_does_not_read_or_renew_old_consensus() -> None:
+    worker = _v0558_historical_bicycle_worker()
+    worker._class_refine_overrides[7] = ("bicycle", .99, 130)
+    worker._refine_crossing_label = lambda *_args, **_kwargs: None
+    refined, inferred = worker._observe_class_refiner(7, 160, object(), object(), "motorcycle", "cpu", False, force=True)
+    assert inferred and refined is None
+    audit = worker._class_refine_decision_audit_this_frame[0]
+    assert audit["opinions"] == {"domain": None, "general": None}
+    assert audit["refined"] is None and audit["winning_source_frame_index"] is None
+    assert not audit["consensus"] and not audit["ttl_eligible"]
+    assert worker._class_refine_overrides[7][2] == 130
+    assert worker.state.class_consensus_rescues == 0
+
+
+def test_v0559_class_audit_keeps_expired_consensus_source_clock_without_returning_it() -> None:
+    worker = _v0558_historical_bicycle_worker()
+    worker._class_refine_overrides[7] = ("bicycle", .99, 130)
+    refined, inferred = worker._observe_class_refiner(7, 200, object(), object(), "motorcycle", "cpu", False, force=True)
+    assert inferred and refined is None
+    audit = worker._class_refine_decision_audit_this_frame[0]
+    assert audit["frame_index"] == 200 and audit["winning_source_frame_index"] == 130
+    assert audit["consensus"] and not audit["ttl_eligible"] and audit["refined"] is None
+    assert worker._class_refine_overrides[7][2] == 130
+    assert worker.state.class_consensus_rescues == 0
+
+
+def test_v0559_class_audit_keeps_eligible_consensus_source_distinct_from_decision() -> None:
+    worker = _v0558_historical_bicycle_worker()
+    worker._class_refine_overrides[7] = ("bicycle", .99, 130)
+    refined, inferred = worker._observe_class_refiner(7, 160, object(), object(), "motorcycle", "cpu", False, force=True)
+    assert inferred and refined is not None and refined[0] == "bicycle"
+    audit = worker._class_refine_decision_audit_this_frame[0]
+    assert audit["frame_index"] == 160 and audit["winning_source_frame_index"] == 130
+    assert audit["consensus"] and audit["ttl_eligible"]
+    assert audit["refined"] == {"label": refined[0], "confidence": refined[1]}
+    assert worker._class_refine_overrides[7][2] == 130
+
+
+def test_v0559_class_audit_storage_cap_does_not_change_inference_or_decisions() -> None:
+    worker = _class_worker()
+    calls = []
+    worker._refine_crossing_label = lambda *_args, **kwargs: calls.append(kwargs["model"]) or ("car", .90)
+    for tid in (7, 8):
+        assert worker._observe_class_refiner(tid, 100, object(), object(), "car", "cpu", False, force=True) == (("car", .90), True)
+    assert len(worker._class_refine_decision_audit_this_frame) == worker.refine_max_per_frame == 1
+    assert len(calls) == 4 and worker.state.class_refine_checks == 2
+    worker._class_refine_decision_audit_this_frame = []
+    assert worker._observe_class_refiner(7, 101, object(), object(), "car", "cpu", False, force=True) == (("car", .90), True)
+    assert worker._class_refine_decision_audit_this_frame[0]["frame_index"] == 101
+
+
+def test_v0559_semantic_trace_snapshot_reads_clocks_without_mutation_or_expiry() -> None:
+    from app.classification import TruckSemanticLock
+
+    worker = _class_worker()
+    worker._truck_semantic_lock = TruckSemanticLock(ttl_frames=30)
+    worker._truck_semantic_lock.observe(7, 100, stable_label="truck", certainty=.90, hits=6)
+    worker._class_refine_overrides[7] = ("truck", .80, 95)
+    before_overrides = dict(worker._class_refine_overrides)
+    before_locks = dict(worker._truck_semantic_lock._locks)
+    snapshot = worker._class_semantic_snapshot_for(7, 110, "car")
+    assert snapshot == {
+        "class_override": {"label": "truck", "confidence": .80, "source_frame_index": 95, "expires_after_frame_index": 335},
+        "truck_semantic_lock": {"label": "truck", "confidence": .90, "source_frame_index": 100, "expires_after_frame_index": 130},
+    }
+    assert worker._class_semantic_snapshot_for(7, 94, "car") == {"class_override": None, "truck_semantic_lock": None}
+    assert worker._class_semantic_snapshot_for(7, 110, "motorcycle") == {"class_override": None, "truck_semantic_lock": None}
+    assert worker._class_semantic_snapshot_for(7, 336, "car") == {"class_override": None, "truck_semantic_lock": None}
+    snapshot["class_override"]["confidence"] = .01
+    snapshot["truck_semantic_lock"]["source_frame_index"] = 999
+    assert worker._class_refine_overrides == before_overrides and worker._truck_semantic_lock._locks == before_locks
+
+
+def test_v0559_class_audit_invalid_rect_does_not_interrupt_semantic_result() -> None:
+    worker = _class_worker()
+    worker._refine_crossing_label = lambda *_args, **_kwargs: ("car", .90)
+    assert worker._observe_class_refiner(7, 100, object(), (10.0, float("nan"), 30.0, 40.0), "car", "cpu", False, force=True) == (("car", .90), True)
+    assert worker._class_refine_decision_audit_this_frame[0]["target_rect"] is None
+
+
+def test_v0559_class_audit_distinguishes_absent_model_from_no_matched_opinion() -> None:
+    worker = _class_worker()
+    worker._general_refiner_model = None
+    worker._general_refine_ids = []
+    worker._refine_crossing_label = lambda *_args, **_kwargs: None
+    assert worker._observe_class_refiner(7, 100, object(), object(), "car", "cpu", False, force=True) == (None, True)
+    audit = worker._class_refine_decision_audit_this_frame[0]
+    assert audit["attempted_sources"] == ["domain"]
+    assert audit["opinions"] == {"domain": None, "general": None}
+    worker._class_refine_decision_audit_this_frame = []
+    worker._refiner_model = None
+    assert worker._observe_class_refiner(8, 101, object(), object(), "car", "cpu", False, force=True) == (None, False)
+    assert worker._class_refine_decision_audit_this_frame == []

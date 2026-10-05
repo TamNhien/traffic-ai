@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './styles.css'
 
-const APP_VERSION = '0.5.58'
+const APP_VERSION = '0.5.60'
 const vehicleLabels = {
   motorcycle: 'Xe máy', bicycle: 'Xe đạp', car: 'Ô tô', bus: 'Xe buýt', truck: 'Xe tải', other: 'Khác'
 }
@@ -979,7 +979,7 @@ function App() {
   const selected = cameras.find(c => c.id === Number(selectedId))
   const selectedDataset = datasets.find(d => d.id === Number(selectedDatasetId))
   const latestTraining = trainingRuns.find(r => r.dataset_id === Number(selectedDatasetId))
-  const activePipeline = pipelines.find(p => p.camera_id === Number(selectedId) && ['starting', 'warming', 'running'].includes(p.status))
+  const activePipeline = pipelines.find(p => p.camera_id === Number(selectedId) && ['starting', 'warming', 'running', 'draining'].includes(p.status))
   const latestPipeline = pipelines.find(p => p.camera_id === Number(selectedId))
   const sessionPipeline = activePipeline || latestPipeline
   const sessionCounts = sessionPipeline?.counts_by_type || {}
@@ -1061,6 +1061,8 @@ function App() {
         setPipelines(prev => [fresh, ...prev.filter(p => p.camera_id !== selected.id)])
       }
       if (action === 'start' && body.source_repaired) setNotice(`Đã tự sửa nguồn thành ${body.source_url} và bắt đầu AI. Bộ đếm phiên mới đã reset về 0.`)
+      else if (action === 'stop' && body.status === 'draining') setNotice('Đang hoàn tất các event đã nhận. Bạn có thể chỉnh vạch hoặc chạy phiên mới sau khi phiên hoàn tất.')
+      else if (action === 'stop' && body.status === 'error') setError('Phiên đã dừng với lỗi. Xem thông báo của lần chạy gần nhất để kiểm tra event chưa lưu được.')
       else setNotice(action === 'start' ? 'AI đã bắt đầu. Bộ đếm phiên mới đã reset về 0; lịch sử PostgreSQL vẫn được giữ.' : 'Đã dừng AI. Bây giờ có thể chỉnh vạch đếm.')
       await load()
     } catch (err) { setError(err.message) } finally { setBusy(false) }
@@ -1131,6 +1133,11 @@ function App() {
         const stopResponse = await fetch(`/api/cameras/${selected.id}/stop`, {method:'POST'})
         const stopBody = await readApiBody(stopResponse)
         if (!stopResponse.ok) throw new Error(stopBody.detail || 'Không dừng được AI để áp dụng đề xuất')
+        if (stopBody.status === 'draining') {
+          setNotice('Đang hoàn tất các event đã nhận. Giữ đề xuất này và áp dụng sau khi phiên hoàn tất.')
+          await load()
+          return
+        }
       }
       const body = {...roadProposal.geometry, confidence_threshold:Number(lineForm.confidence_threshold)}
       const response = await fetch(`/api/cameras/${selected.id}`, {method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)})
@@ -1233,7 +1240,7 @@ const activateTraining = async run => {
 
       <section className="content-grid" id="live">
         <article className="panel camera-panel">
-          <div className="panel-head"><div><span className="panel-kicker">LIVE AI</span><h2>Camera Preview</h2></div><div className="panel-actions">{activePipeline && selected?.source_type === 'video' && <div className="preview-switch" title="Phát mượt dùng trình phát video native; AI Overlay dùng MJPEG đã vẽ box."><button type="button" className={previewMode === 'smooth' ? 'active' : 'secondary'} onClick={()=>setPreviewMode('smooth')}>Phát mượt</button><button type="button" className={previewMode === 'overlay' ? 'active' : 'secondary'} onClick={()=>{setOverlayReady(false);setPreviewMode('overlay')}}>AI Overlay</button></div>}<button className={activePipeline ? 'danger' : ''} disabled={!selected || busy || (!activePipeline && selectedVideoMissing && !sourceAutoRepairAvailable)} onClick={togglePipeline}>{activePipeline ? 'Dừng AI' : 'Chạy AI'}</button></div></div>
+          <div className="panel-head"><div><span className="panel-kicker">LIVE AI</span><h2>Camera Preview</h2></div><div className="panel-actions">{activePipeline && selected?.source_type === 'video' && <div className="preview-switch" title="Phát mượt dùng trình phát video native; AI Overlay dùng MJPEG đã vẽ box."><button type="button" className={previewMode === 'smooth' ? 'active' : 'secondary'} onClick={()=>setPreviewMode('smooth')}>Phát mượt</button><button type="button" className={previewMode === 'overlay' ? 'active' : 'secondary'} onClick={()=>{setOverlayReady(false);setPreviewMode('overlay')}}>AI Overlay</button></div>}<button className={activePipeline ? 'danger' : ''} disabled={!selected || busy || activePipeline?.status === 'draining' || (!activePipeline && selectedVideoMissing && !sourceAutoRepairAvailable)} onClick={togglePipeline}>{activePipeline?.status === 'draining' ? 'Đang hoàn tất...' : activePipeline ? 'Dừng AI' : 'Chạy AI'}</button></div></div>
           <div className={`camera-stage ${activePipeline && selected?.source_type === 'video' ? 'dual-preview-stage' : ''}`}>
             {activePipeline && selected?.source_type === 'video' ? <>
               <video key={`${selected.id}-${activePipeline.session_id}`} className={`preview-layer native-preview ${previewMode === 'smooth' || !overlayReady ? 'visible' : ''}`} src={nativeVideoUrl} autoPlay muted controls={previewMode === 'smooth'} playsInline preload="auto" />
@@ -1252,6 +1259,7 @@ const activateTraining = async run => {
           {activePipeline && (activePipeline.active_tracks ?? 0) > 0 && (activePipeline.road_tracks_current_frame ?? 0) === 0 && <div className="source-status bad"><strong>⚠ Có track nhưng Road Zone chưa phủ luồng xe</strong><span>Dừng AI rồi kéo vùng xanh bao phần lòng đường mà xe thực sự chạy; chỉ vùng xanh mới được phép đếm.</span></div>}
           {selected && !activePipeline && <div className={`source-status ${sourceStatus?.valid ? 'ok' : 'bad'}`}><strong>{sourceStatus?.valid ? '✓ Nguồn sẵn sàng' : '⚠ Nguồn chưa sẵn sàng'}</strong><span>{sourceStatus?.message || 'Đang kiểm tra nguồn...'}</span>{sourceStatus?.suggested_source_url && <><small>Gợi ý: {sourceStatus.suggested_source_url}</small><button type="button" className="inline-action" onClick={applySuggestedSource}>Dùng nguồn gợi ý</button></>}</div>}
           {latestPipeline && !activePipeline && <div className="pipeline-result">Lần chạy gần nhất: <strong>{latestPipeline.status}</strong> · {latestPipeline.processed_frames} frame · worker {latestPipeline.total_count} crossing · DB mới {latestPipeline.persisted_events ?? latestPipeline.delivered_events ?? 0} event · dedup {latestPipeline.deduplicated_events ?? 0} · Class refine {latestPipeline.class_refine_checks ?? 0} · Refiner chung {latestPipeline.general_refine_checks ?? 0} · Consensus {latestPipeline.class_consensus_rescues ?? 0} · Xe đạp cứu {latestPipeline.bicycle_class_rescues ?? 0} · Xe đạp thấy {latestPipeline.bicycle_tracks_seen ?? 0} · Xe tải cứu {latestPipeline.truck_class_rescues ?? 0} · Xe tải xác nhận {latestPipeline.truck_tracks_seen ?? 0} · Khóa class tải {latestPipeline.truck_semantic_locks ?? 0} · Xe tải cắt vạch {latestPipeline.truck_crossing_tracks ?? 0} · Xe lớn anchor {latestPipeline.heavy_anchor_tracks ?? 0} · Xe lớn cứu center {latestPipeline.heavy_center_rescues ?? 0} · Nối track xe lớn {latestPipeline.heavy_stitch_recoveries ?? 0} · Gộp canonical 4W {latestPipeline.four_wheel_duplicate_suppressed ?? 0} · Video-start {latestPipeline.video_start_rescues ?? 0} · Time-sync {latestPipeline.crossing_time_corrections ?? 0} · Time-clamp {latestPipeline.crossing_time_clamps ?? 0} · Replay {latestPipeline.deterministic_video_replay ? 'ổn định' : 'live'} · Human Guard {latestPipeline.human_guard_rejections ?? 0} · Rider giữ {latestPipeline.rider_guard_rescues ?? 0} · Guard xác nhận {latestPipeline.human_guard_deferred_commits ?? 0} · Guard timeout {latestPipeline.human_guard_pending_drops ?? 0}{latestPipeline.last_error ? ` · ${latestPipeline.last_error}` : ''}</div>}
+          {activePipeline?.status === 'draining' && <div className="source-status ok"><strong>Đang hoàn tất phiên</strong><span>Còn {activePipeline.pending_events ?? 0} event chờ gửi hoặc xác nhận. Bạn có thể bắt đầu phiên mới sau khi xử lý xong.</span></div>}
           {sessionPipeline?.benchmark_trace_warning && <div className="source-status bad"><strong>⚠ Hồ sơ trace bị gián đoạn</strong><span>Bộ đếm vẫn xử lý event; hồ sơ chẩn đoán có thể thiếu dữ liệu. {sessionPipeline.benchmark_trace_warning}</span></div>}
           {sessionPipeline?.benchmark_trace_snapshot_path && <div className="source-status ok"><strong>✓ Đã lưu trace cùng ảnh camera</strong><span>Khi gửi ảnh để phân tích, giữ kèm file {sessionPipeline.benchmark_trace_snapshot_path.split('/').pop()} trong thư mục camera.</span></div>}
         </article>
@@ -1266,7 +1274,7 @@ const activateTraining = async run => {
           <CountingLineEditor previewUrl={previewUrl} line={lineForm} onChange={setLineForm} disabled={!!activePipeline} />
           <div className="preset-row"><button disabled={busy || !!activePipeline} onClick={()=>applyPreset('road-horizontal')}>Gợi ý cho clip hiện tại</button><button disabled={busy || !!activePipeline} onClick={()=>applyPreset('horizontal')}>Đường ngang</button><button disabled={busy || !!activePipeline} onClick={()=>applyPreset('vertical')}>Đường dọc</button></div>
           <div className="road-zone-toolbar"><span>Vùng lòng đường:</span><button className="secondary" disabled={busy || !!activePipeline} onClick={()=>applyRoadZonePreset('roadway')}>Trapezoid đường</button><button className="secondary" disabled={busy || !!activePipeline} onClick={()=>applyRoadZonePreset('narrow')}>Hẹp hơn</button><button className="secondary" disabled={busy || !!activePipeline} onClick={()=>applyRoadZonePreset('full')}>Toàn khung</button></div>
-          <div className="auto-road-toolbar"><button type="button" disabled={!sessionPipeline || busy || !sessionPipeline?.calibration_ready} onClick={requestRoadProposal}>{!sessionPipeline ? 'Chạy AI để học luồng xe' : sessionPipeline?.calibration_ready ? `✨ AI đề xuất theo luồng xe · ${sessionPipeline.calibration_moving_tracks ?? 0} track` : `Đang học luồng xe · ${sessionPipeline?.calibration_moving_tracks ?? 0} track / ${sessionPipeline?.calibration_samples ?? 0} điểm`}</button>{roadProposal && <button type="button" className="success" disabled={busy || !countingGeometryState.valid} onClick={applyRoadProposal}>{activePipeline ? '✓ Dừng AI + áp dụng đề xuất' : '✓ Áp dụng đề xuất'}</button>}</div>
+          <div className="auto-road-toolbar"><button type="button" disabled={!sessionPipeline || busy || !sessionPipeline?.calibration_ready} onClick={requestRoadProposal}>{!sessionPipeline ? 'Chạy AI để học luồng xe' : sessionPipeline?.calibration_ready ? `✨ AI đề xuất theo luồng xe · ${sessionPipeline.calibration_moving_tracks ?? 0} track` : `Đang học luồng xe · ${sessionPipeline?.calibration_moving_tracks ?? 0} track / ${sessionPipeline?.calibration_samples ?? 0} điểm`}</button>{roadProposal && <button type="button" className="success" disabled={busy || activePipeline?.status === 'draining' || !countingGeometryState.valid} onClick={applyRoadProposal}>{activePipeline ? '✓ Dừng AI + áp dụng đề xuất' : '✓ Áp dụng đề xuất'}</button>}</div>
           {roadProposal && <div className="proposal-status"><strong>✨ Auto Road-Zone · chất lượng {Math.round((roadProposal.quality || 0)*100)}%</strong><span>{roadProposal.moving_track_count} track chuyển động · {roadProposal.sample_count} điểm · xe đứng/đỗ đã bị bỏ khỏi dữ liệu học vùng đường.</span></div>}
           <div className="nudge-grid"><button disabled={!!activePipeline} onClick={()=>moveLine(0,-0.02)}>↑ Lên</button><button disabled={!!activePipeline} onClick={()=>moveLine(0,0.02)}>↓ Xuống</button><button disabled={!!activePipeline} onClick={()=>moveLine(-0.02,0)}>← Trái</button><button disabled={!!activePipeline} onClick={()=>moveLine(0.02,0)}>→ Phải</button><button disabled={!!activePipeline} onClick={()=>resizeLine(1.12)}>Dài hơn</button><button disabled={!!activePipeline} onClick={()=>resizeLine(0.88)}>Ngắn hơn</button></div>
           <div className="line-grid">{lineField('line_x1','X1')}{lineField('line_y1','Y1')}{lineField('line_x2','X2')}{lineField('line_y2','Y2')}{lineField('confidence_threshold','Confidence')}</div>

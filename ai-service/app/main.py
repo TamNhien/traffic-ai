@@ -10,13 +10,13 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.runtime import registry
-from app.benchmark_trace import diagnose_trace, trace_path
+from app.benchmark_trace import closed_compressed_trace, diagnose_trace, trace_path
 from app.schemas import AnnotationBulkAcceptRequest, AnnotationSaveRequest, BenchmarkTraceDiagnoseRequest, DatasetAutoLabelRequest, DatasetExtractRequest, DatasetPrepareRequest, DatasetPurgeRequest, PipelineStart, SourceValidationRequest, TrainingStartRequest
 from app.sources import inspect_source, list_video_sources, read_source_preview, resolve_video_path
 from app.training import auto_label, dataset_stats, extract_frames, prepare_dataset, purge_dataset, reset_dataset_labels, training_registry
 from app.annotation import accept_safe_annotations, get_annotation, get_annotation_image, list_annotations, save_annotation
 
-APP_VERSION = '0.5.58'
+APP_VERSION = '0.5.60'
 app = FastAPI(title='Traffic AI Service', version=APP_VERSION)
 SNAPSHOT_DIR = Path(os.getenv('SNAPSHOT_DIR', '/tmp/traffic-ai-snapshots'))
 SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
@@ -73,7 +73,7 @@ def health() -> dict:
             'flow_calibration_points_per_track': int(os.getenv('AI_FLOW_CALIBRATION_POINTS_PER_TRACK', '180')),
         },
         'gpu': gpu,
-        'active_pipelines': len([p for p in registry.list() if p['status'] in {'starting', 'warming', 'running'}]),
+        'active_pipelines': len([p for p in registry.list() if p['status'] in {'starting', 'warming', 'running', 'draining'}]),
         'runtime': {
             'python': platform.python_version(),
             'fastapi': _pkg_version('fastapi'),
@@ -97,6 +97,26 @@ def benchmark_trace_download(session_id: int) -> FileResponse:
     if not path.is_file():
         raise HTTPException(status_code=404, detail='Benchmark trace không còn trên AI service')
     return FileResponse(path, media_type='application/x-ndjson', filename=f'session_{session_id}.jsonl')
+
+
+@app.get('/benchmark-traces/{session_id}/download-gzip')
+def benchmark_trace_download_gzip(session_id: int) -> FileResponse:
+    artifact = closed_compressed_trace(session_id)
+    if artifact is None:
+        raise HTTPException(status_code=404, detail='Compressed benchmark trace chưa được đóng hoặc không còn hợp lệ')
+    path, metadata = artifact
+    # application/gzip is an attachment representation, not HTTP content
+    # encoding: consumers must bound these transported bytes before unpacking.
+    return FileResponse(
+        path, media_type='application/gzip', filename=f'session_{session_id}.jsonl.gz',
+        headers={
+            'Cache-Control': 'no-store',
+            'X-Traffic-AI-Trace-Closed': 'true',
+            'X-Traffic-AI-Trace-Source-Bytes': str(metadata['source_bytes']),
+            'X-Traffic-AI-Trace-Source-SHA256': metadata['source_sha256'],
+            'X-Traffic-AI-Trace-Compressed-SHA256': metadata['compressed_sha256'],
+        },
+    )
 
 
 @app.get('/sources/videos')

@@ -169,19 +169,36 @@ class PipelineRegistry:
         if worker is None or state is None:
             raise KeyError(camera_id)
         worker.stop()
-        worker.join(timeout=15)
-        return asdict(state)
+        # Backend stop has a 12-second HTTP budget. Long accepted delivery
+        # retries settle in the worker; this request must remain responsive.
+        worker.join(timeout=1.0)
+        result = asdict(state)
+        if worker.is_alive():
+            # Do not overwrite the producer's terminal status before its
+            # finally block captures it for the durable finish callback.
+            result["status"] = "draining"
+        return result
 
     def list(self) -> list[dict]:
         with self._lock:
-            return [asdict(state) for state in self._states.values()]
+            return [self._public_state(state) for state in self._states.values()]
+
+    def _public_state(self, state: PipelineState) -> dict:
+        """Expose ownership through the finish callback without changing its payload."""
+        result = asdict(state)
+        worker = self._workers.get(state.camera_id)
+        if worker is not None and worker.is_alive() and result["status"] in {"completed", "stopped", "error"}:
+            # Delivery is settled, but a finish RPC/retry still owns this
+            # camera. The producer keeps its terminal status for that RPC.
+            result["status"] = "draining"
+        return result
 
     def get(self, camera_id: int) -> dict:
         with self._lock:
             state = self._states.get(camera_id)
             if state is None:
                 raise KeyError(camera_id)
-            return asdict(state)
+            return self._public_state(state)
 
     def calibration_proposal(self, camera_id: int) -> dict:
         with self._lock:

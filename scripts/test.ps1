@@ -323,12 +323,12 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.58") { throw "VERSION phải là 0.5.58, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0072_trace_lifecycle_v0558.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0072_trace_lifecycle_v0558.py." }
+  if ($version -ne "0.5.60") { throw "VERSION phải là 0.5.60, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0074_stop_ack_compat_v0560.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0074_stop_ack_compat_v0560.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0072_trace_lifecycle_v0558"' -or $migrationText -notmatch 'down_revision = "0071_anchor_lifecycle_v0557"' -or $migrationText -notmatch "value='0.5.58'") {
-    throw "Migration 0072_trace_lifecycle_v0558 không đúng contract V0.5.58."
+  if ($migrationText -notmatch 'revision = "0074_stop_ack_compat_v0560"' -or $migrationText -notmatch 'down_revision = "0073_trace_identity_v0559"' -or $migrationText -notmatch "value='0.5.60'") {
+    throw "Migration 0074_stop_ack_compat_v0560 không đúng contract V0.5.60."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
@@ -1674,7 +1674,7 @@ function Assert-RefineAdmissionV0555Contract {
   if ($classification -notmatch 'def four_wheel_support' -or $worker -notmatch '_refine_consensus.four_wheel_support') { throw "V0.5.55 thiếu competitive four-wheel evidence." }
   if ($worker -notmatch 'def _run_deferred_class_refinements' -or $worker -notmatch 'def _resolve_crossing_class_refinement' -or $worker -notmatch 'crossing_class_refine_track_ids') { throw "V0.5.55 thiếu crossing priority hoặc override source-clock contract." }
   if ($backend -notmatch 'with_for_update' -or $backend -notmatch 'populate_existing=True' -or $backend -notmatch 'bicycle_context_scope') { throw "V0.5.55 thiếu event/finish serialization hoặc trace provenance." }
-  if ($trace -notmatch 'context_updates=rows' -or $trace -notmatch 'tracking_ids' -or $schemas -notmatch 'def align_tracking_ids' -or $frontend -notmatch 'bicycle_context_scope') { throw "V0.5.55 thiếu matched-track trace hoặc final guard outcome." }
+  if ($trace -notmatch 'subscribers.get\(key, \[\]\)' -or $trace -notmatch 'item.context\[key\] = audit' -or $trace -notmatch 'tracking_ids' -or $schemas -notmatch 'def align_tracking_ids' -or $frontend -notmatch 'bicycle_context_scope') { throw "V0.5.55 thiếu matched-track trace hoặc final guard outcome." }
   if ($githubInit -notmatch 'function Invoke-QuietProbe' -or $githubInit -notmatch 'repoProbe.ExitCode' -or $githubInit -notmatch 'originProbe.ExitCode') { throw "V0.5.55 thiếu quiet probe khi GitHub repository/origin chưa tồn tại." }
   foreach ($relative in @("ai-service\tests\test_counting.py", "ai-service\tests\test_classification.py", "ai-service\tests\test_worker_context.py", "ai-service\tests\test_v0541_benchmark_trace.py", "backend\tests\test_app.py", "backend\tests\test_benchmarking.py")) {
     $text = Get-Content (Join-Path $root $relative) -Raw -Encoding UTF8
@@ -1758,6 +1758,46 @@ function Assert-TraceLifecycleV0558Contract {
   Write-Host "[OK] Trace Lifecycle + Source Evidence V0.5.58" -ForegroundColor Green
 }
 
+function Assert-TraceIdentityV0559Contract {
+  Write-Host "`n[Traffic AI] Trace Identity + Delivery Completion V0.5.59" -ForegroundColor Cyan
+  $tracking = Get-Content (Join-Path $root "ai-service\app\tracking.py") -Raw -Encoding UTF8
+  $worker = Get-Content (Join-Path $root "ai-service\app\worker.py") -Raw -Encoding UTF8
+  $classification = Get-Content (Join-Path $root "ai-service\app\classification.py") -Raw -Encoding UTF8
+  $tasks = Get-Content (Join-Path $root "ai-service\app\async_tasks.py") -Raw -Encoding UTF8
+  $runtime = Get-Content (Join-Path $root "ai-service\app\runtime.py") -Raw -Encoding UTF8
+  $trace = Get-Content (Join-Path $root "ai-service\app\benchmark_trace.py") -Raw -Encoding UTF8
+  $aiMain = Get-Content (Join-Path $root "ai-service\app\main.py") -Raw -Encoding UTF8
+  $routes = Get-Content (Join-Path $root "backend\app\api\routes.py") -Raw -Encoding UTF8
+  $benchmark = Get-Content (Join-Path $root "backend\app\benchmarking.py") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  if ($tracking -notmatch 'def _opposite_two_wheel_stitch' -or $tracking -notmatch 'box_radius' -or $worker -notmatch 'rect=rect') { throw "V0.5.59 thiếu kiểm tra hướng/bbox khi ghép raw ID mới." }
+  if ($classification -notmatch 'def source_frame_for' -or $classification -notmatch 'primary_frame_index' -or $worker -notmatch 'primary_frame_index=primary_source_frame') { throw "V0.5.59 thiếu clock primary truck thực." }
+  if ($tasks -notmatch 'unfinished_tasks' -or $tasks -notmatch '_admission_lock' -or $worker -notmatch '_drain_events_before_finish' -or $worker -notmatch 'stop_and_flush\(timeout=None\)' -or $runtime -notmatch 'draining') { throw "V0.5.59 thiếu chờ accepted event và trạng thái draining." }
+  if ($routes -notmatch 'def _stop_completion_matches_session' -or $routes -notmatch 'db.refresh\(session\)' -or $frontend -notmatch 'body.status === .draining.' -or $frontend -notmatch 'stopBody.status === .draining.') { throw "V0.5.59 stop hoặc stop-and-apply chưa chờ phiên hoàn tất." }
+  if ($trace -notmatch 'def publish_compressed_trace' -or $trace -notmatch 'def closed_compressed_trace' -or $aiMain -notmatch '/download-gzip' -or $routes -notmatch 'iter_bytes\(' -or $routes -notmatch 'X-Traffic-AI-Trace-Compressed-SHA256' -or $benchmark -notmatch 'benchmark-trace.jsonl.gz') { throw "V0.5.59 thiếu gzip trace đóng, hash và bounded transport." }
+  if ($trace -notmatch 'class _TraceWindow' -or $trace -notmatch 'subscribers.get\(key, \[\]\)' -or $trace -notmatch 'item.context\[key\] = audit') { throw "V0.5.59 thiếu chẩn đoán streaming và final context outcome." }
+  if ($worker -notmatch '_benchmark_geometry_metadata' -or $worker -notmatch '_class_refine_decision_audit_this_frame = \[\]' -or $worker -notmatch '"class_refine_decision_audit"' -or $worker -notmatch '_class_semantic_snapshot_for') { throw "V0.5.59 thiếu geometry/class provenance." }
+  foreach ($relative in @("ai-service\tests\test_tracking.py", "ai-service\tests\test_classification.py", "ai-service\tests\test_worker_context.py", "ai-service\tests\test_guard_transaction.py", "ai-service\tests\test_async_tasks.py", "ai-service\tests\test_runtime.py", "ai-service\tests\test_benchmark_trace.py", "ai-service\tests\test_v0541_benchmark_trace.py", "backend\tests\test_app.py", "backend\tests\test_benchmarking.py", "backend\tests\test_benchmark_trace_transport.py")) {
+    $text = Get-Content (Join-Path $root $relative) -Raw -Encoding UTF8
+    if ($text -notmatch 'def test_v0559_') { throw "V0.5.59 thiếu regression trong $relative." }
+  }
+  Write-Host "[OK] Trace Identity + Delivery Completion V0.5.59" -ForegroundColor Green
+}
+
+
+function Assert-StopAckCompatibilityV0560Contract {
+  Write-Host "`n[Traffic AI] Stop Acknowledgment Compatibility V0.5.60" -ForegroundColor Cyan
+  $routes = Get-Content (Join-Path $root "backend\app\api\routes.py") -Raw -Encoding UTF8
+  $tests = Get-Content (Join-Path $root "backend\tests\test_app.py") -Raw -Encoding UTF8
+  if ($routes -notmatch 'getattr\(response, "json", None\)' -or $routes -notmatch 'callable\(json_reader\)') {
+    throw "V0.5.60 stop route chưa tương thích phản hồi 200 legacy không có json()."
+  }
+  if ($routes -notmatch 'AI stop response must be an object' -or $tests -notmatch 'def test_v0560_stop_ack_without_json_' -or $tests -notmatch 'def test_v0560_stop_ack_with_non_object_json_') {
+    throw "V0.5.60 thiếu regression cho stop acknowledgment."
+  }
+  Write-Host "[OK] Stop Acknowledgment Compatibility V0.5.60" -ForegroundColor Green
+}
+
 function Invoke-Step([string]$Title, [scriptblock]$Action) {
   Write-Host "`n[Traffic AI] $Title" -ForegroundColor Cyan
   & $Action
@@ -1832,6 +1872,8 @@ Assert-RefineAdmissionV0555Contract
 Assert-BenchmarkEvidenceV0556Contract
 Assert-AnchorLifecycleV0557Contract
 Assert-TraceLifecycleV0558Contract
+Assert-TraceIdentityV0559Contract
+Assert-StopAckCompatibilityV0560Contract
 Assert-LegacySemanticCompatibilityV0523R1
 
 Write-Host "`n[Traffic AI] Road Zone + Frame Browser V0.5.11" -ForegroundColor Cyan

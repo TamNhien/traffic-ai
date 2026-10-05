@@ -20,7 +20,7 @@ def test_root_metadata() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["name"] == "Traffic AI"
-    assert payload["version"] == "0.5.58"
+    assert payload["version"] == "0.5.60"
     assert payload["docs"] == "/docs"
     assert payload["health"] == "/api/health"
 
@@ -158,7 +158,7 @@ def test_benchmark_clone_compatibility_rejects_different_line() -> None:
 
 
 def test_backend_version_metadata() -> None:
-    assert app.version == "0.5.58"
+    assert app.version == "0.5.60"
 
 
 def test_v0531_startup_crossing_signature_guard_is_narrow() -> None:
@@ -179,7 +179,7 @@ def test_v0533_ground_truth_mark_update_schema() -> None:
 
 
 def test_v0533_version() -> None:
-    assert app.version == "0.5.58"
+    assert app.version == "0.5.60"
 
 
 def test_v0533_ground_truth_mark_update_keeps_timecode() -> None:
@@ -935,6 +935,42 @@ def test_v0554_stale_stop_preserves_newer_active_camera(monkeypatch) -> None:
         assert db.get(Camera, 1).status == CameraStatus.active
 
 
+def test_v0560_stop_ack_without_json_keeps_legacy_status_only_contract(monkeypatch) -> None:
+    from types import SimpleNamespace
+    from app.api.routes import stop_camera
+    from app.models.all_models import Camera, CameraStatus, CountingSession, SessionStatus
+
+    with _dedup_event_database() as db:
+        db.get(Camera, 1).status = CameraStatus.active
+        db.commit()
+
+        monkeypatch.setattr(
+            "app.api.routes.httpx.post",
+            lambda _url, **_kwargs: SimpleNamespace(status_code=200),
+        )
+        result = stop_camera(1, db)
+        assert result == {"status": "stopped", "camera_id": 1}
+        assert db.get(CountingSession, 1).status == SessionStatus.stopped
+        assert db.get(Camera, 1).status == CameraStatus.inactive
+
+
+def test_v0560_stop_ack_with_non_object_json_remains_rejected(monkeypatch) -> None:
+    import pytest
+    from types import SimpleNamespace
+    from fastapi import HTTPException
+    from app.api.routes import stop_camera
+
+    with _dedup_event_database() as db:
+        monkeypatch.setattr(
+            "app.api.routes.httpx.post",
+            lambda _url, **_kwargs: SimpleNamespace(status_code=200, json=lambda: []),
+        )
+        with pytest.raises(HTTPException) as rejected:
+            stop_camera(1, db)
+        assert rejected.value.status_code == 502
+        assert "AI stop response must be an object" in str(rejected.value.detail)
+
+
 def test_v0554_class_trace_targets_use_ai_clock_without_changing_scoring() -> None:
     from types import SimpleNamespace
     from app.api.routes import _benchmark_trace_targets
@@ -1213,6 +1249,8 @@ def test_v0556_export_trace_transport_handles_oversized_missing_and_empty_source
 
     def stream(method, url, **options):
         requests.append((method, url, options))
+        if url.endswith("/download-gzip"):
+            return nullcontext(SimpleNamespace(status_code=404, is_success=False, headers={}))
         return nullcontext(response)
 
     monkeypatch.setattr("app.api.routes.httpx.stream", stream)
@@ -1232,7 +1270,8 @@ def test_v0556_export_trace_transport_handles_oversized_missing_and_empty_source
         payload, actual_reason = _fetch_benchmark_export_trace(9)
         assert actual_reason == reason
         assert payload == (b"12345" if reason == "available" else None)
-    assert all(request[0] == "GET" and request[1].endswith("/benchmark-traces/9/download") for request in requests)
+    assert all(request[0] == "GET" and request[1].rsplit("/", 1)[-1] in {"download", "download-gzip"} for request in requests)
+    assert [request[1].rsplit("/", 1)[-1] for request in requests] == ["download-gzip", "download"] * 6
     assert all(request[2] == {"timeout": 8.0, "follow_redirects": False} for request in requests)
 
 
@@ -1326,3 +1365,41 @@ def test_v0558_numeric_benchmark_tolerance_keeps_finite_route_clamp_inputs() -> 
     for tolerance in (-1.0, 0.0, 0.05, 0.75, 3.0, 4.0):
         assert BenchmarkCreate(session_id=1, tolerance_seconds=tolerance).tolerance_seconds == tolerance
         assert BenchmarkUpdate(tolerance_seconds=tolerance).tolerance_seconds == tolerance
+
+
+def test_v0559_stop_acknowledgment_keeps_live_and_draining_sessions_open() -> None:
+    from app.api.routes import _stop_completion_matches_session
+
+    for status_value in ('starting', 'warming', 'running', 'draining'):
+        assert not _stop_completion_matches_session(
+            {'camera_id': 1, 'session_id': 163, 'status': status_value, 'pending_events': 1}, 1, 163,
+        )
+
+
+def test_v0559_stop_acknowledgment_requires_same_camera_and_session() -> None:
+    from app.api.routes import _stop_completion_matches_session
+
+    assert not _stop_completion_matches_session({'camera_id': 2, 'session_id': 163, 'status': 'stopped'}, 1, 163)
+    assert not _stop_completion_matches_session({'camera_id': 1, 'session_id': 162, 'status': 'completed'}, 1, 163)
+    assert not _stop_completion_matches_session({}, 1, 163)
+    assert not _stop_completion_matches_session(None, 1, 163)
+
+
+def test_v0559_legacy_terminal_stop_with_inflight_events_is_not_complete() -> None:
+    from app.api.routes import _stop_completion_matches_session
+
+    for status_value in ('completed', 'stopped'):
+        assert not _stop_completion_matches_session(
+            {'camera_id': 1, 'session_id': 163, 'status': status_value, 'pending_events': 1}, 1, 163,
+        )
+
+
+def test_v0559_settled_terminal_stop_and_explicit_failure_remain_terminal() -> None:
+    from app.api.routes import _stop_completion_matches_session
+
+    for status_value in ('completed', 'stopped', 'error'):
+        assert _stop_completion_matches_session(
+            {'camera_id': 1, 'session_id': 163, 'status': status_value, 'pending_events': 0}, 1, 163,
+        )
+    assert _stop_completion_matches_session({'camera_id': 1, 'session_id': 163, 'status': 'error', 'pending_events': 1}, 1, 163)
+    assert _stop_completion_matches_session({'camera_id': 1, 'session_id': 163, 'status': 'stopped'}, 1, None)
