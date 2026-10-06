@@ -1313,3 +1313,29 @@ def test_v0559_clockless_primary_lock_and_smoother_keep_legacy_behavior() -> Non
     assert lock.observe(7, 120, stable_label="truck", certainty=.90, hits=6) == ("truck", .90)
     assert lock.resolve(7, 150, "car")
     assert lock.resolve(7, 151, "car") is None
+
+
+def test_v0561_recent_car_wins_ignore_stale_truck_history_but_require_two_fresh_frames() -> None:
+    from app.classification import RefineEvidenceAccumulator
+
+    evidence = RefineEvidenceAccumulator(history_frames=120)
+    evidence.update(254023, 16004, "truck", 0.99, "domain")
+    evidence.update(254023, 16049, "car", 0.838867, "general")
+    assert evidence.recent_four_wheel_wins(254023, 16049, "car", max_age_frames=1, min_confidence=0.80)[0] == 1
+    evidence.update(254023, 16050, "car", 0.858887, "general")
+    hits, fused, strongest, latest = evidence.recent_four_wheel_wins(
+        254023, 16050, "car", max_age_frames=1, min_confidence=0.80,
+    )
+    assert hits == 2
+    assert fused > strongest >= 0.80
+    assert latest == 16050
+
+
+def test_v0561_recent_car_win_rejects_same_frame_heavy_competitor() -> None:
+    from app.classification import RefineEvidenceAccumulator
+
+    evidence = RefineEvidenceAccumulator()
+    evidence.update(9, 100, "car", 0.86, "general")
+    evidence.update(9, 100, "truck", 0.90, "domain")
+    evidence.update(9, 101, "car", 0.88, "general")
+    assert evidence.recent_four_wheel_wins(9, 101, "car", max_age_frames=1, min_confidence=0.80)[0] == 1

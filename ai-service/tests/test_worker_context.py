@@ -1308,3 +1308,33 @@ def test_v0559_class_audit_distinguishes_absent_model_from_no_matched_opinion() 
     worker._refiner_model = None
     assert worker._observe_class_refiner(8, 101, object(), object(), "car", "cpu", False, force=True) == (None, False)
     assert worker._class_refine_decision_audit_this_frame == []
+
+
+def test_v0561_fresh_car_crossing_override_requires_two_consecutive_target_wins() -> None:
+    worker = _class_worker()
+    worker.truck_lock_car_demotion_conf = 0.80
+    worker.truck_lock_car_demotion_frames = 2
+    worker._truck_lock_demotion_tracks = set()
+    worker.state.truck_lock_demotion_rescues = 0
+
+    worker._refine_consensus.update(254023, 16049, "car", 0.838867, "general")
+    assert worker._fresh_car_crossing_override(254023, 16049, ("car", 0.838867)) is None
+
+    worker._refine_consensus.update(254023, 16050, "car", 0.858887, "general")
+    result = worker._fresh_car_crossing_override(254023, 16050, ("car", 0.858887))
+    assert result is not None and result[0] == "car" and result[1] > 0.90
+    assert worker.state.truck_lock_demotion_rescues == 1
+
+
+def test_v0561_fresh_car_crossing_override_does_not_beat_stronger_same_frame_truck() -> None:
+    worker = _class_worker()
+    worker.truck_lock_car_demotion_conf = 0.80
+    worker.truck_lock_car_demotion_frames = 2
+    worker._truck_lock_demotion_tracks = set()
+    worker.state.truck_lock_demotion_rescues = 0
+
+    worker._refine_consensus.update(5, 200, "car", 0.86, "general")
+    worker._refine_consensus.update(5, 201, "car", 0.87, "general")
+    worker._refine_consensus.update(5, 201, "truck", 0.91, "domain")
+    assert worker._fresh_car_crossing_override(5, 201, ("car", 0.87)) is None
+    assert worker.state.truck_lock_demotion_rescues == 0

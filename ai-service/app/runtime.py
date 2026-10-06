@@ -59,7 +59,9 @@ class PipelineState:
     anchor_span_lost_finalizations: int = 0
     anchor_span_immediate_overrides: int = 0
     anchor_span_immediate_rejections: int = 0
+    anchor_span_clock_reconciliations: int = 0
     truck_class_rescues: int = 0
+    truck_lock_demotion_rescues: int = 0
     bicycle_tracks_seen: int = 0
     truck_tracks_seen: int = 0
     truck_semantic_locks: int = 0

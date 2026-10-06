@@ -1,28 +1,46 @@
-# Traffic AI V0.5.60 — Stop acknowledgment compatibility + test closure
+# Traffic AI V0.5.61 — Span clock + fresh class closure
 
-Nâng cấp từ full source V0.5.59. Đơn vị đếm là **lượt cắt vạch**: cùng phương tiện quay lại và cắt vạch lần nữa được tính thêm một lượt.
+Nâng cấp từ full source V0.5.60. Đơn vị đếm là **lượt cắt vạch**: cùng phương tiện quay lại và cắt vạch lần nữa được tính thêm một lượt.
 
-## Benchmark đầu vào V0.5.58
+## Benchmark đầu vào V0.5.60
 
-Screenshot: session163 / benchmark42, sao chép149 GT từ benchmark41.
+Screenshot mới: session166 / benchmark43, sao chép149 GT từ benchmark42.
 
-| Chỉ số | V0.5.57 | V0.5.58 |
-|---|---:|---:|
-| Ground truth | 149 | 149 |
-| AI đếm | 149 | 149 |
-| Khớp | 132 | 132 |
-| Lọt không đếm | 17 | 17 |
-| Đếm dư | 17 | 17 |
-| Recall / Precision / F1 | 88.6% | 88.6% |
-| Class đúng | 98.5% | 98.5% |
-| Sai loại | 2 | 2 |
-| IN / OUT cuối | 72 / 77 | 72 / 77 |
+| Chỉ số | V0.5.60 |
+|---|---:|
+| Ground truth | 149 |
+| AI đếm | 149 |
+| Khớp | 134 |
+| Lọt không đếm | 15 |
+| Đếm dư | 15 |
+| Recall / Precision / F1 | 89.9% / 89.9% / 89.9% |
+| Class đúng | 98.5% |
+| Sai loại | 2 |
+| IN / OUT cuối | 70 / 79 |
 
-V0.5.58 chưa cải thiện các số đo này. IntegrityOK: worker đề xuất198, backend gộp49, DB149 event có timecode; Human Guard loại31. Counter direct43/interpolation82/rescue73 là bước candidate, không cộng thành tổng DB cuối.
+Integrity OK: worker đề xuất196, backend gộp47, DB149 event có timecode. Nhóm lọt nổi bật gồm **7 anchor đã băng qua vạch nhưng Gate chưa đóng event**, 2 crossing thiếu xác nhận phía sau vạch, 2 cooldown, 1 center qua nhưng motion-leading anchor chưa đủ span, 1 track sát vạch chưa span hai phía, 1 Human Guard loại nhầm và 1 Road Zone loại. Nhóm dư nổi bật gồm 5 gap-rescue, 5 direct, 2 interpolation và 3 event sát GT đã khớp/cùng điểm cắt.
 
-RAR lần này có **197 JPG duy nhất, đều session163, cùng JSONL140,618,731byte /23,651 dòng** (23,650 observation frame và1 metadata header). Đã xem đủ5 contact sheet và ảnh mục tiêu. Trace có camera/session, bbox, center/anchor, raw ID, velocity và context audit. Chưa có149 GT/event export đầy đủ để gắn mọi lọt/dư với đúng track; không coi crossing_events toàn frame là event DB cụ thể.
+RAR phiên166 có **195 JPG + 1 `session_166_benchmark-trace.jsonl`**, trace raw **194,016,680 byte**. Trace xác nhận tại vùng GT `10:41.981 OUT · Ô tô`, track254023 có hai target-aware GENERAL opinions CAR liên tiếp ở frame16049/16050 với confidence ~0.839/~0.859 nhưng event vẫn bị TRUCK semantic lock giữ. Với GT bicycle `04:49.450`, trace chưa chứng minh đúng bicycle target đã được track ở gate, vì vậy V0.5.61 **không hạ bicycle veto/threshold toàn cục**.
 
-**Chưa replay V0.5.60**. Bản này chỉ sửa contract stop/backend và versioning, không đổi thuật toán đếm; chưa có bằng chứng F1/Recall/Precision mới. Giữ matching window.75s, GT timestamps/class, finite gate, Road Zone, cooldown, confidence và retry/dedup policy.
+**Chưa replay V0.5.61.** Các thay đổi dưới đây được thiết kế từ trace phiên166 nhưng không được mô tả như đã tăng F1/Recall/Precision. Giữ GT timestamps/class, matching window0.75s, finite gate, Road Zone, cooldown, confidence, dedup và benchmark scoring.
+
+## Thay đổi V0.5.61
+
+### 1. Anchor Span Clock Reconciliation — sửa timecode mà không tự tạo event
+
+Một finite anchor span đã vượt vạch thật nhưng hết cửa sổ post-confirm trước khi primary Gate đóng event có thể giữ lại **chỉ crossing clock**, không giữ quyền đếm. Hint chỉ tồn tại trong cửa sổ ngắn, cùng canonical track + cùng direction, và phải đạt normal-motion/side-depth mạnh hơn mức pending cơ bản; same-direction candidate, approach repair hoặc span có opposite observation đều bị loại.
+
+Khi primary Gate sau đó **tự chấp nhận** event, worker có thể dùng crossing frame đã đo trước đó để timestamp event. Cơ chế này không mở Gate, không tăng tổng lượt, không biến pending hết hạn thành crossing và không thay matching algorithm. Mục tiêu là giảm cặp “lọt + dư” do cùng xe được đóng event muộn hơn timecode vật lý.
+
+### 2. Fresh CAR Crossing Override — hai frame CAR mới có thể thắng TRUCK lock tại đúng crossing
+
+V0.5.61 thêm `recent_four_wheel_wins()`: chỉ nhìn cửa sổ rất ngắn, đếm theo **distinct source frame**, yêu cầu CAR >=0.80 và thắng BUS/TRUCK trên chính frame đó. Crossing-only override yêu cầu ít nhất2 frame CAR mới liên tiếp và frame mới nhất chính là crossing frame.
+
+Override này chỉ đổi **class của event crossing** từ TRUCK→CAR khi bằng chứng mới đủ mạnh; không xóa semantic lock toàn cục, không giảm truck thresholds và không cho một frame CAR đơn lẻ thắng lock. Thiết kế trực tiếp nhắm vào evidence của track254023 ở 10:41.981; cần replay V0.5.61 để xác nhận sai loại thực tế giảm từ2 xuống1.
+
+### 3. Telemetry và regression
+
+Dashboard/trace có thêm `Span clock` và `Truck lock→car`. Thêm regression cho trusted direct timestamp, hint hết hạn/không mở crossing, fresh CAR hai frame và heavy competitor veto. Camera Preview / Vehicle Count và GT / Report giữ bố cục 50/50.
 
 ## Thay đổi V0.5.60
 
@@ -93,14 +111,14 @@ Gửi ZIP hồ sơ cùng screenshot. Khi nén thư mục ảnh camera, giữ `se
 
 | Thành phần | Giá trị |
 |---|---|
-| VERSION / Frontend / Backend / AI Service | 0.5.60 |
-| Alembic head | `0074_stop_ack_compat_v0560` |
-| Parent | `0073_trace_identity_v0559` |
-| schema_version | 0.5.60 |
+| VERSION / Frontend / Backend / AI Service | 0.5.61 |
+| Alembic head | `0075_span_clock_class_v0561` |
+| Parent | `0074_stop_ack_compat_v0560` |
+| schema_version | 0.5.61 |
 | npm trong Docker / CI / packageManager | 12.2.0 |
 | Node.js trong Docker / CI | 26.10.0 |
 
-npm12.2.0 đã đối chiếu [npm CLI latest](https://github.com/npm/cli/releases/latest) ngày05/10/2026; giữ Node26.10.0 theo cấu hình hiện có. Giữ quy trình publish test→commit→push→tag→Release. Migration 0074 chỉ cập nhật schema version, giữ dữ liệu/GT. Camera Preview/Vehicle Count và GT/Report giữ bố cục 50/50. V0.5.60 đã chạy **637 pytest cases: 521 AI + 116 backend, 0 lỗi** trong môi trường đóng gói với test-only shim `httpx2 -> httpx`; giới hạn và cấu hình kiểm thử được ghi rõ trong `VERIFICATION.md`.
+npm12.2.0 đã đối chiếu [npm CLI latest](https://github.com/npm/cli/releases/latest) ngày05/10/2026; giữ Node26.10.0 theo cấu hình hiện có. Giữ quy trình publish test→commit→push→tag→Release. Migration 0075 chỉ cập nhật schema version, giữ dữ liệu/GT. Camera Preview/Vehicle Count và GT/Report giữ bố cục 50/50. V0.5.61 đã chạy **644 pytest cases: 528 AI + 116 backend, 0 lỗi** trong môi trường đóng gói với test-only shim `httpx2 -> httpx`; giới hạn và cấu hình kiểm thử được ghi rõ trong `VERIFICATION.md`.
 
 ## Đầy đủ lệnh test, start và tự động publish
 
@@ -132,7 +150,7 @@ gh auth setup-git
 
 Nếu chưa cấu hình Git author, đặt `git config --global user.name` và `git config --global user.email` bằng thông tin của bạn.
 
-Publish tự đọc VERSION để tạo tag **v0.5.60**, mặc định repository `TamNhien/traffic-ai`. Script kiểm thử source đã chuẩn hóa, commit/push/tag, chờ đúng Actions run theo tag/SHA/push và tạo Release có ZIP, TAR.GZ, README, SHA256SUMS. Fallback CLI bổ sung đủ asset từ tag và hoàn tất Release tạo dở.
+Publish tự đọc VERSION để tạo tag **v0.5.61**, mặc định repository `TamNhien/traffic-ai`. Script kiểm thử source đã chuẩn hóa, commit/push/tag, chờ đúng Actions run theo tag/SHA/push và tạo Release có ZIP, TAR.GZ, README, SHA256SUMS. Fallback CLI bổ sung đủ asset từ tag và hoàn tất Release tạo dở.
 
 Nếu bị gián đoạn, xử lý lỗi mạng/quyền truy cập rồi chạy lại `publish.ps1` khi source không đổi. Thay đổi source sau tag đã có cần tăng version; script không di chuyển hoặc ghi đè tag. `-NoWait` chỉ đẩy source/tag rồi trả về khi Release còn đang chờ.
 
@@ -141,7 +159,7 @@ Nếu bị gián đoạn, xử lý lỗi mạng/quyền truy cập rồi chạy 
 ```powershell
 .\scripts\publish.ps1 -Owner TEN_GITHUB -Repository TEN_REPO
 
-gh workflow run release.yml --repo TamNhien/traffic-ai -f tag=v0.5.60
+gh workflow run release.yml --repo TamNhien/traffic-ai -f tag=v0.5.61
 ```
 
 Khi dùng npm ngoài Docker trên Windows, Node.js cần 26.10.0 trở lên:

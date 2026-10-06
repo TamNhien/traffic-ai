@@ -889,6 +889,53 @@ class RefineEvidenceAccumulator:
             return 0, 0.0, 0.0, None
         return len(winning), fused, max(winning.values()), max(winning)
 
+    def recent_four_wheel_wins(
+        self,
+        track_id: int,
+        frame_index: int,
+        label: str,
+        *,
+        max_age_frames: int = 2,
+        min_confidence: float = 0.80,
+    ) -> tuple[int, float, float, int | None]:
+        """Return strong, very-recent four-wheel wins without stale-history veto.
+
+        This is intentionally narrower than ``four_wheel_support_snapshot``.
+        It exists for crossing-time conflict resolution when a fresh target-aware
+        refiner repeatedly sees CAR while an older TRUCK semantic lock is still
+        alive. Only distinct source frames inside a tiny age window qualify, and
+        the requested label must beat every BUS/CAR/TRUCK opinion on that same
+        frame. Historical evidence outside the window cannot veto the result.
+        """
+        selected_label = str(label)
+        if selected_label not in HEAVY_CLASSES:
+            return 0, 0.0, 0.0, None
+        current = int(frame_index)
+        max_age = max(0, int(max_age_frames))
+        threshold = max(0.0, min(1.0, float(min_confidence)))
+        by_frame: dict[int, dict[str, float]] = {}
+        for observed_frame, observed_label, confidence, _source in self._samples.get(int(track_id), ()):
+            age = current - int(observed_frame)
+            if age < 0 or age > max_age or observed_label not in HEAVY_CLASSES:
+                continue
+            frame = by_frame.setdefault(int(observed_frame), {})
+            frame[observed_label] = max(frame.get(observed_label, 0.0), float(confidence))
+
+        winning: dict[int, float] = {}
+        competing_labels = HEAVY_CLASSES - {selected_label}
+        for observed_frame, frame in by_frame.items():
+            confidence = frame.get(selected_label, 0.0)
+            competing = max((frame.get(other, 0.0) for other in competing_labels), default=0.0)
+            if confidence >= threshold and confidence > competing:
+                winning[observed_frame] = confidence * (0.992 ** (current - observed_frame))
+        if not winning:
+            return 0, 0.0, 0.0, None
+
+        miss_probability = 1.0
+        for confidence in winning.values():
+            miss_probability *= max(0.0, 1.0 - confidence)
+        return len(winning), 1.0 - miss_probability, max(winning.values()), max(winning)
+
     def consume_through(self, track_id: int, frame_index: int) -> None:
         """Consume completed-passage evidence while preserving newer samples."""
         tid = int(track_id)

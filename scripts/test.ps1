@@ -323,12 +323,12 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.60") { throw "VERSION phải là 0.5.60, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0074_stop_ack_compat_v0560.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0074_stop_ack_compat_v0560.py." }
+  if ($version -ne "0.5.61") { throw "VERSION phải là 0.5.61, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0075_span_clock_class_v0561.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0075_span_clock_class_v0561.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0074_stop_ack_compat_v0560"' -or $migrationText -notmatch 'down_revision = "0073_trace_identity_v0559"' -or $migrationText -notmatch "value='0.5.60'") {
-    throw "Migration 0074_stop_ack_compat_v0560 không đúng contract V0.5.60."
+  if ($migrationText -notmatch 'revision = "0075_span_clock_class_v0561"' -or $migrationText -notmatch 'down_revision = "0074_stop_ack_compat_v0560"' -or $migrationText -notmatch "value='0.5.61'") {
+    throw "Migration 0075_span_clock_class_v0561 không đúng contract V0.5.61."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
@@ -1798,6 +1798,33 @@ function Assert-StopAckCompatibilityV0560Contract {
   Write-Host "[OK] Stop Acknowledgment Compatibility V0.5.60" -ForegroundColor Green
 }
 
+
+
+function Assert-SpanClockClassV0561Contract {
+  Write-Host "`n[Traffic AI] Span Clock + Fresh Class Closure V0.5.61" -ForegroundColor Cyan
+  $counting = Get-Content (Join-Path $root "ai-service\app\counting.py") -Raw -Encoding UTF8
+  $classification = Get-Content (Join-Path $root "ai-service\app\classification.py") -Raw -Encoding UTF8
+  $worker = Get-Content (Join-Path $root "ai-service\app\worker.py") -Raw -Encoding UTF8
+  $runtime = Get-Content (Join-Path $root "ai-service\app\runtime.py") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  $countingTests = Get-Content (Join-Path $root "ai-service\tests\test_counting.py") -Raw -Encoding UTF8
+  $classTests = Get-Content (Join-Path $root "ai-service\tests\test_classification.py") -Raw -Encoding UTF8
+  $workerTests = Get-Content (Join-Path $root "ai-service\tests\test_worker_context.py") -Raw -Encoding UTF8
+  if ($counting -notmatch 'class _SpanClockHint' -or $counting -notmatch 'def reconciliation_crossing_frame_for' -or $counting -notmatch 'trusted_span_frame') {
+    throw "V0.5.61 thiếu timestamp-only anchor-span reconciliation."
+  }
+  if ($classification -notmatch 'def recent_four_wheel_wins' -or $worker -notmatch 'def _fresh_car_crossing_override' -or $runtime -notmatch 'truck_lock_demotion_rescues') {
+    throw "V0.5.61 thiếu fresh CAR crossing override."
+  }
+  if ($frontend -notmatch 'anchor_span_clock_reconciliations' -or $frontend -notmatch 'truck_lock_demotion_rescues') {
+    throw "V0.5.61 thiếu telemetry frontend cho span clock/class closure."
+  }
+  if ($countingTests -notmatch 'def test_v0561_' -or $classTests -notmatch 'def test_v0561_' -or $workerTests -notmatch 'def test_v0561_') {
+    throw "V0.5.61 thiếu regression tests."
+  }
+  Write-Host "[OK] Span Clock + Fresh Class Closure V0.5.61" -ForegroundColor Green
+}
+
 function Invoke-Step([string]$Title, [scriptblock]$Action) {
   Write-Host "`n[Traffic AI] $Title" -ForegroundColor Cyan
   & $Action
@@ -1874,6 +1901,7 @@ Assert-AnchorLifecycleV0557Contract
 Assert-TraceLifecycleV0558Contract
 Assert-TraceIdentityV0559Contract
 Assert-StopAckCompatibilityV0560Contract
+Assert-SpanClockClassV0561Contract
 Assert-LegacySemanticCompatibilityV0523R1
 
 Write-Host "`n[Traffic AI] Road Zone + Frame Browser V0.5.11" -ForegroundColor Cyan

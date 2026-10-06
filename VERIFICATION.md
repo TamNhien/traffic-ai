@@ -1,25 +1,30 @@
-# Kiểm tra Traffic AI V0.5.60
+# Kiểm tra Traffic AI V0.5.61
 
 ## Kết quả đã thực hiện
 
-### V0.5.60 — lỗi được tái hiện và sửa
+### V0.5.61 — span clock + fresh class closure
 
-- Tái hiện đúng lỗi người dùng gửi: `test_v0554_stale_stop_preserves_newer_active_camera` trả 502 vì `SimpleNamespace(status_code=200)` không có `json()`.
-- Sửa route stop theo hướng backward-compatible: chỉ parse JSON khi `response.json` tồn tại và callable; response HTTP thực vẫn đi qua validation object như V0.5.59.
-- Thêm 2 regression V0.5.60: legacy status-only 200 phải stop bình thường; 200 có JSON không phải object vẫn phải bị từ chối.
-- Không thay đổi AI counting/tracking/classification hoặc benchmark scoring.
+- **644 pytest cases đạt, 0 lỗi trong môi trường đóng gói: 528 AI + 116 backend.** Backend dùng SQLite memory và test-only shim `httpx2 -> httpx`; AI dùng cùng shim và các `AI_*_ROOT` tạm dưới `/mnt/data`. Đây là kiểm tra source logic, không thay thế Docker với dependency pin thật.
+- **7 regression V0.5.61 mới đạt**: 2 class evidence, 3 anchor/timecode, 2 worker crossing-class. Chúng kiểm tra two-frame CAR win, same-frame heavy veto, trusted direct timestamp, hint expiry/no event reopen và crossing-only class override.
+- **130 Python files parse AST thành công**. Frontend `package.json` parse JSON; source version đồng bộ `0.5.61`.
+- **75 migrations** có revision duy nhất, parent đầy đủ, không cycle; head `0075_span_clock_class_v0561`, parent `0074_stop_ack_compat_v0560`. Migration 0075 chỉ cập nhật `schema_version` lên0.5.61; downgrade về0.5.60.
+- Giữ `Assert-StopAckCompatibilityV0560Contract` và thêm `Assert-SpanClockClassV0561Contract` trong `test.ps1`. Contract mới kiểm tra `_SpanClockHint`, `reconciliation_crossing_frame_for`, `trusted_span_frame`, `recent_four_wheel_wins`, `_fresh_car_crossing_override`, telemetry và regression files.
+- **17 PowerShell scripts** được chuẩn hóa UTF-8 no-BOM/CRLF ở bước đóng gói. Không có PowerShell runtime trong môi trường hiện tại, nên `test.ps1` phải được chạy lại trên máy Windows dự án.
+- Full source **190 file: 187 text + 3 binary assets** sau migration0075; không thêm model weight/video/dataset vào ZIP.
 
-- **637 pytest cases đạt, 0 lỗi trong môi trường đóng gói**: **521 AI + 116 backend**. Backend dùng SQLite memory và test-only shim `httpx2 -> httpx`; AI dùng cùng shim và các `AI_*_ROOT` tạm ghi được dưới `/mnt/data`. Đây là kiểm tra source logic, không thay thế Docker với dependency pin `httpx2==2.13.0`.
-- Riêng lỗi người dùng gửi và 2 regression V0.5.60: **3/3 pass** (`stale_stop`, legacy 200 không có `json()`, JSON không phải object vẫn bị từ chối).
-- **129 Python files** parse AST thành công; frontend `package.json` parse JSON thành công. Không đổi JSX/AI counting code ngoài version string.
-- **74 migrations** có revision duy nhất, tối đa 32 ký tự, parent đầy đủ, không cycle; head duy nhất `0074_stop_ack_compat_v0560`, parent `0073_trace_identity_v0559`. Migration mới chỉ cập nhật schema_version lên 0.5.60; downgrade về 0.5.59.
-- Giữ `Assert-TraceIdentityV0559Contract` và thêm `Assert-StopAckCompatibilityV0560Contract` trong `test.ps1`; contract mới kiểm tra fallback 200 không có `json()` và regression V0.5.60. Chưa chạy PowerShell parser/runtime trong môi trường đóng gói.
-- JSX parse bằng Babel bundle Playwright đạt và mẫu JSX sai bị từ chối; frontend JSON/config hợp lệ. Chưa chạy Vite/React import resolution hoặc browser layout.
-- Backend entrypoint giữ nguyên; **17 script PowerShell UTF-8 no-BOM/CRLF**, các text source/config còn lại LF. Full source **189 file: 186 text UTF-8 và 3 binary assets** sau khi thêm migration 0074; 17 script PowerShell giữ CRLF không BOM.
+### Phạm vi thay đổi có chủ ý
 
-Harness chạy test functions source thực với phần pytest tối thiểu (`approx`, `raises`, temporary path, monkeypatch). Worker/backend helpers được trích AST vì môi trường không có HTTP/ORM dependencies; classification/counting/tracking/Human Guard, Pydantic và NumPy dùng module thực. Dispatcher HTTP dùng transport fixture điều khiển. Model opinions trong regression là fixture; không chạy model inference. Các số offline không thay thế full pytest trong Docker.
+`Anchor Span Clock Reconciliation` chỉ cung cấp timestamp cho event mà primary Gate đã tự chấp nhận. Hint cùng track/direction phải xuất phát từ finite span đã qua geometry/Road Zone, không phải same-direction candidate/approach span, không có opposite observation, và nằm trong cửa sổ bounded. Hết hạn thì bỏ; hint không gọi `register_external_crossing()` và không tăng count.
 
-89 Python functions mới gồm 12 tracking, 23 class/context, 26 dispatcher/guard/runtime, 24 trace/export/transport/geometry-metadata và 4 backend stop-owner checks. Các phép đối chiếu source, frontend và release bên dưới là kiểm tra riêng, không cộng vào 602 Python functions.
+`Fresh CAR Crossing Override` chỉ chạy tại crossing, cần refined CAR >=0.80 trên ít nhất2 distinct frame rất mới, mỗi frame CAR phải thắng BUS/TRUCK cùng frame và frame mới nhất phải là crossing frame. Nó không xóa TRUCK semantic lock toàn cục và không thay threshold bicycle/truck thông thường.
+
+### Benchmark đầu vào thực tế V0.5.60
+
+Screenshot session166 / benchmark43: **GT149 / AI149 / khớp134 / lọt15 / dư15 / Recall89.9% / Precision89.9% / F1 89.9% / class đúng98.5% / 2 sai loại / IN70 / OUT79**. Worker đề xuất196, backend gộp47, DB149 event.
+
+RAR phiên166 chứa195 JPG và `session_166_benchmark-trace.jsonl` raw194,016,680byte. Trace tại track254023 quanh frame16049/16050 cho thấy GENERAL refiner CAR ~0.839/~0.859 nhưng event vẫn bị TRUCK lock giữ; đây là evidence trực tiếp cho fresh-CAR rule. GT bicycle04:49.450 chưa có bằng chứng đủ để hạ bicycle veto nên policy bicycle giữ nguyên.
+
+**Chưa replay V0.5.61** và chưa xác nhận F1/Recall/Precision mới. Không đổi GT, tolerance0.75s, benchmark global matching, finite gate/Road Zone, dedup policy hoặc model taxonomy. Cần replay cùng clip/vạch/Road Zone rồi tải hồ sơ benchmark mới để đo hiệu quả thật.
 
 ## Đối chiếu source V0.5.58 thực tế
 
@@ -73,17 +78,13 @@ Geometry header mới ghi sau frame thật đầu tiên: canonical line/Road, pr
 
 Bash Verify VERSION/Build release artifacts lấy trực tiếp từ `release.yml`, chạy trong Git repository cô lập. Tag/version/HEAD đúng đạt; sai bị chặn. ZIP/TAR.GZ/README lấy byte từ tag, hash khớp SHA256SUMS. Local bare Git kiểm tra annotated/peeled tag, tag absent khác lỗi repository, immutable retry và tag checkout khi main đã tiến.
 
-Native Git tag chưa tồn tại trả1, repository lỗi trả128; source publish quiet probe xử lý đúng. Workflow selection theo tag/SHA/event và expected native probe fallback được kiểm tra bằng fixture. **Không push GitHub hoặc tạo Release thật** trong phiên đóng gói; chưa chạy PowerShell publisher. Lệnh `publish.ps1` trên máy dự án tự đọc VERSION để tạo tag `v0.5.60`.
+Native Git tag chưa tồn tại trả1, repository lỗi trả128; source publish quiet probe xử lý đúng. Workflow selection theo tag/SHA/event và expected native probe fallback được kiểm tra bằng fixture. **Không push GitHub hoặc tạo Release thật** trong phiên đóng gói; chưa chạy PowerShell publisher. Lệnh `publish.ps1` trên máy dự án tự đọc VERSION để tạo tag `v0.5.61`.
 
 ## Benchmark đầu vào và giới hạn
 
-Screenshot **V0.5.58: GT149 / AI149 / khớp132 / lọt17 / dư17 / F1 88.6% / class đúng98.5% / 2 lỗi class**, session163/benchmark42; IN72/OUT77, không đổi so với .57. Worker đề xuất198/backend dedup49/DB149 timed events/integrityOK. Đây là số input, không phải kết quả .59.
+Baseline dùng cho V0.5.61 là **V0.5.60 session166 / benchmark43: GT149 / AI149 / khớp134 / lọt15 / dư15 / F1 89.9% / class đúng98.5% / 2 lỗi class / IN70 / OUT79**. Đây là input trước nâng cấp, không phải kết quả V0.5.61.
 
-RAR có 198 members: 197 JPG duy nhất và 1 JSONL, tất cả JPG session163. Đã xem 5 contact sheets và ảnh mục tiêu. Chứng minh rider identity hijack ở f18860 vì hai xe khác nhau cùng xuất hiện. Bike GT289.450 chưa có đúng track tại gate; context target105044 ở f7243 là motorcycle khác, không giảm veto cho crop đó. Canonical110070 xuất hiện f7273/t290.88 đã downstream; van254023 thiếu ordinary refiner opinion trong trace .58. Không gán quan hệ nhân quả cho từng hàng lọt/dư/class chỉ từ cửa sổ thời gian.
-
-**Chưa replay V0.5.60 hoặc xác nhận F1/Recall/Precision mới.** Giữ GT timestamps/class, matching window.75s, finite gate/Road Zone, cooldown, confidence, consensus policy, retry/dedup thresholds; counting.py giữ nguyên byte từ .58. Cần replay cùng clip/geometry và benchmark export chứa GT/event/trace để đánh giá thay đổi.
-
-Chưa chạy full pytest với pinned dependencies, HTTP/ORM services, PostgreSQL concurrency/migration, PowerShell parser/runtime, Docker/npm build/audit, inference hoặc browser/model replay. Môi trường thực Python3.12.14, NumPy2.3.5, Pydantic2.13.5, Node24.19.0/npm11.9.0. Project giữ NumPy2.4.6 test pin, Node26.10.0/npm12.2.0 Docker/CI pin; không khẳng định đã thực thi bằng các version pin đó. npm12.2.0 được đối chiếu official latest ngày05/10/2026; không cài npm global trong môi trường đóng gói.
+Không chạy model/video replay trong môi trường đóng gói, nên không khẳng định số benchmark đã cải thiện. Chưa chạy PostgreSQL concurrency/migration thực, PowerShell runtime, Docker build, npm/Vite build hoặc browser layout. Full AI/backend pytest source đã chạy với shim/test roots như mô tả đầu file.
 
 ## Đầy đủ lệnh trên máy dự án
 
@@ -98,7 +99,7 @@ Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
 # Khởi động
 .\scripts\start.ps1
 
-# Tự test, commit, push, tạo tag v0.5.60 và GitHub Release
+# Tự test, commit, push, tạo tag v0.5.61 và GitHub Release
 .\scripts\publish.ps1
 ```
 

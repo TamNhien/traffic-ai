@@ -220,6 +220,8 @@ def select_event_crossing_frame(
     *,
     max_interpolated_shift_frames: float = 6.0,
     max_rescued_shift_frames: float = 18.0,
+    trusted_span_frame: float | None = None,
+    max_trusted_span_shift_frames: float = 32.0,
 ) -> tuple[float, bool, bool]:
     """Choose a trustworthy source frame for event persistence.
 
@@ -234,6 +236,26 @@ def select_event_crossing_frame(
     Returns ``(selected_frame, corrected, clamped)``.
     """
     observed = max(1.0, float(observed_frame))
+
+    # V0.5.61: a finite, Road-Zone-validated anchor span may have measured the
+    # physical line intersection before the primary gate finally commits the
+    # same track/direction. This is a timestamp-only reconciliation: it never
+    # creates or accepts an event, and an old hint outside the bounded window is
+    # ignored rather than extrapolated or clamped.
+    if trusted_span_frame is not None:
+        try:
+            trusted = float(trusted_span_frame)
+        except (TypeError, ValueError):
+            trusted = float("nan")
+        trusted_shift = observed - trusted
+        trusted_limit = max(0.5, float(max_trusted_span_shift_frames))
+        if (
+            isfinite(trusted)
+            and 1.0 <= trusted <= observed + 0.25
+            and 0.50 <= trusted_shift <= trusted_limit
+        ):
+            return trusted, True, False
+
     if geometric_frame is None:
         return observed, False, False
     try:
@@ -386,6 +408,15 @@ class _AnchorSpanPending:
 
 
 @dataclass(slots=True)
+class _SpanClockHint:
+    direction: str
+    crossing_frame: float
+    end_frame: int
+    normal_ratio: float
+    side_depth_ratio: float
+
+
+@dataclass(slots=True)
 class _AnchorSpanState:
     history: deque[_GateSample] = field(default_factory=lambda: deque(maxlen=64))
     pending: _AnchorSpanPending | None = None
@@ -433,6 +464,9 @@ class VerifiedAnchorSpanRescuer:
         same_direction_min_frames: int = 16,
         lost_finalize_min_normal_ratio: float = 0.55,
         lost_finalize_min_side_distance_ratio: float = 0.014,
+        clock_reconcile_max_gap_frames: int = 32,
+        clock_reconcile_min_normal_ratio: float = 0.48,
+        clock_reconcile_min_side_distance_ratio: float = 0.008,
     ) -> None:
         self.line = line
         self.road_zone = road_zone
@@ -453,6 +487,11 @@ class VerifiedAnchorSpanRescuer:
         self.same_direction_min_frames = max(1, int(same_direction_min_frames))
         self.lost_finalize_min_normal_ratio = max(self.min_normal_ratio, min(1.0, float(lost_finalize_min_normal_ratio)))
         self.lost_finalize_min_side_distance_ratio = max(self.min_side_distance_ratio, float(lost_finalize_min_side_distance_ratio))
+        self.clock_reconcile_max_gap_frames = max(self.post_confirm_max_gap_frames, int(clock_reconcile_max_gap_frames))
+        self.clock_reconcile_min_normal_ratio = max(self.min_normal_ratio, min(1.0, float(clock_reconcile_min_normal_ratio)))
+        self.clock_reconcile_min_side_distance_ratio = max(
+            self.min_side_distance_ratio, float(clock_reconcile_min_side_distance_ratio)
+        )
         self._tracks: dict[int, _AnchorSpanState] = {}
         self.verified_candidates = 0
         self.verified_anchor_span_rescues = 0
@@ -472,6 +511,7 @@ class VerifiedAnchorSpanRescuer:
         self._immediate_candidates: set[int] = set()
         self._span_proposals: dict[int, _AnchorSpanProposal] = {}
         self._committed_proposals: dict[int, _AnchorSpanProposal] = {}
+        self._clock_hints: dict[int, _SpanClockHint] = {}
 
     def _propose_span(
         self, track_id: int, pending: _AnchorSpanPending, frame_index: int, kind: str,
@@ -726,6 +766,63 @@ class VerifiedAnchorSpanRescuer:
             return start, crossing, crossing_frame_between(left, right, crossing), normal_ratio, side_depth, road_edge
         return None
 
+    def _store_clock_hint_if_safe(
+        self, track_id: int, pending: _AnchorSpanPending, frame_index: int,
+    ) -> bool:
+        """Retain only the measured crossing clock from a strong expired span.
+
+        The hint has no authority to count. It can only timestamp a later event
+        that the primary gate independently accepts for the same canonical track
+        and direction.
+        """
+        age = int(frame_index) - int(pending.end.frame_index)
+        if (
+            age < 0
+            or age > self.clock_reconcile_max_gap_frames
+            or pending.same_direction_candidate
+            or pending.approach_span
+            or pending.opposite_observations
+            or pending.normal_ratio < self.clock_reconcile_min_normal_ratio
+            or pending.side_depth_ratio < self.clock_reconcile_min_side_distance_ratio
+            or not isfinite(float(pending.crossing_frame))
+            or float(pending.crossing_frame) < 1.0
+        ):
+            return False
+        self._clock_hints[int(track_id)] = _SpanClockHint(
+            direction=str(pending.direction),
+            crossing_frame=float(pending.crossing_frame),
+            end_frame=int(pending.end.frame_index),
+            normal_ratio=float(pending.normal_ratio),
+            side_depth_ratio=float(pending.side_depth_ratio),
+        )
+        return True
+
+    def reconciliation_crossing_frame_for(
+        self, track_id: int, direction: str, frame_index: int,
+    ) -> float | None:
+        """Return a bounded timestamp hint for an independently accepted event."""
+        tid = int(track_id)
+        current = int(frame_index)
+        state = self._tracks.get(tid)
+        pending = state.pending if state is not None else None
+        if pending is not None and pending.direction == str(direction):
+            # Revalidate merged/post-span observations before trusting a pending
+            # proof as a clock. This never commits the pending crossing.
+            if self._review_pending_history(state) == "valid" and state.pending is pending:
+                if self._store_clock_hint_if_safe(tid, pending, current):
+                    return float(pending.crossing_frame)
+
+        hint = self._clock_hints.get(tid)
+        if hint is None:
+            return None
+        age = current - int(hint.end_frame)
+        if age < 0 or age > self.clock_reconcile_max_gap_frames:
+            self._clock_hints.pop(tid, None)
+            return None
+        if hint.direction != str(direction):
+            return None
+        return float(hint.crossing_frame)
+
     def update(
         self, track_id: int, anchor: Point, width: int, height: int, frame_index: int,
         *, commit: bool = True,
@@ -753,6 +850,12 @@ class VerifiedAnchorSpanRescuer:
         if pending is not None:
             age = sample.frame_index - pending.end.frame_index
             if age > self.post_confirm_max_gap_frames:
+                # V0.5.61 keeps only a strong measured crossing *clock* after
+                # post-confirm expiry. Replaying the pending history first makes
+                # opposite-side jitter/reversal a hard veto. The event itself is
+                # still closed here and can never be emitted by this hint.
+                if self._review_pending_history(state) == "valid" and state.pending is pending:
+                    self._store_clock_hint_if_safe(tid, pending, sample.frame_index)
                 state.pending = None
                 # Expiry closes the original geometry window. Retaining its
                 # pre-side samples would reopen the very same old crossing with
@@ -1031,6 +1134,7 @@ class VerifiedAnchorSpanRescuer:
         state.last_count_frame = int(last_count_frame)
         state.pending = None
         state.history.clear()
+        self._clock_hints.pop(tid, None)
         self._override_qualified.discard(tid)
         self._immediate_candidates.discard(tid)
         self._span_proposals.pop(tid, None)
@@ -1055,6 +1159,7 @@ class VerifiedAnchorSpanRescuer:
             self._committed_proposals.pop(tid, None)
         state.counted_directions = {str(direction)}
         state.pending = None
+        self._clock_hints.pop(tid, None)
         if frame_index is not None:
             state.last_count_frame = max(state.last_count_frame, int(frame_index))
         self._override_qualified.discard(int(track_id))
@@ -1073,6 +1178,12 @@ class VerifiedAnchorSpanRescuer:
         source, target = int(source_track_id), int(target_track_id)
         if source == target:
             return
+        source_hint = self._clock_hints.pop(source, None)
+        target_hint = self._clock_hints.get(target)
+        if source_hint is not None and (
+            target_hint is None or source_hint.end_frame > target_hint.end_frame
+        ):
+            self._clock_hints[target] = source_hint
         src = self._tracks.pop(source, None)
         if src is None:
             return

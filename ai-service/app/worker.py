@@ -119,6 +119,7 @@ class PipelineWorker(threading.Thread):
         self._bicycle_context_xframe_last_consumed: dict[int, int] = {}
         self._bicycle_xframe_audit_this_frame: list[dict] = []
         self._truck_class_rescue_tracks: set[int] = set()
+        self._truck_lock_demotion_tracks: set[int] = set()
         self._class_consensus_rescue_tracks: set[int] = set()
         self._truck_tracks_seen: set[int] = set()
         self._truck_crossing_tracks: set[int] = set()
@@ -257,6 +258,9 @@ class PipelineWorker(threading.Thread):
         self.video_aux_ready_timeout = max(5.0, float(os.getenv("AI_VIDEO_AUX_READY_TIMEOUT", "90")))
         self.cross_time_max_interp_seconds = max(0.0, float(os.getenv("AI_CROSS_TIME_MAX_INTERP_SECONDS", "0.24")))
         self.cross_time_max_rescue_seconds = max(0.0, float(os.getenv("AI_CROSS_TIME_MAX_RESCUE_SECONDS", "0.72")))
+        self.cross_time_anchor_span_seconds = max(0.0, float(os.getenv("AI_CROSS_TIME_ANCHOR_SPAN_SECONDS", "1.28")))
+        self.truck_lock_car_demotion_conf = max(0.0, min(1.0, float(os.getenv("AI_TRUCK_LOCK_CAR_DEMOTION_CONF", "0.80"))))
+        self.truck_lock_car_demotion_frames = max(2, int(os.getenv("AI_TRUCK_LOCK_CAR_DEMOTION_FRAMES", "2")))
         self.iou = float(os.getenv("AI_IOU", "0.55"))
         self.agnostic_nms = os.getenv("AI_AGNOSTIC_NMS", "0").strip().lower() not in {"0", "false", "no"}
         self.heavy_duplicate_iou = float(os.getenv("AI_HEAVY_DUP_IOU", "0.68"))
@@ -914,6 +918,40 @@ class PipelineWorker(threading.Thread):
             self.state.truck_class_rescues += 1
         return str(resolved_label), float(resolved_conf)
 
+    def _fresh_car_crossing_override(
+        self, track_id: int, frame_index: int, refined: tuple[str, float] | None,
+    ) -> tuple[str, float] | None:
+        """Let repeated fresh CAR evidence beat only a stale TRUCK crossing lock.
+
+        This does not clear the semantic lock globally. It is a crossing-only
+        decision requiring two distinct, very recent target-aware CAR-winning
+        frames at high confidence, with the newest win on the crossing frame.
+        """
+        if refined is None or str(refined[0]) != "car":
+            return None
+        threshold = float(getattr(self, "truck_lock_car_demotion_conf", 0.80))
+        required_frames = max(2, int(getattr(self, "truck_lock_car_demotion_frames", 2)))
+        if float(refined[1]) < threshold:
+            return None
+        hits, fused, strongest, latest = self._refine_consensus.recent_four_wheel_wins(
+            track_id,
+            frame_index,
+            "car",
+            max_age_frames=required_frames - 1,
+            min_confidence=threshold,
+        )
+        if hits < required_frames or latest != int(frame_index) or strongest < threshold:
+            return None
+        tid = int(track_id)
+        demotion_tracks = getattr(self, "_truck_lock_demotion_tracks", None)
+        if demotion_tracks is None:
+            demotion_tracks = set()
+            self._truck_lock_demotion_tracks = demotion_tracks
+        if tid not in demotion_tracks:
+            demotion_tracks.add(tid)
+            self.state.truck_lock_demotion_rescues = len(demotion_tracks)
+        return "car", max(float(refined[1]), float(fused))
+
     def _resolve_crossing_class_refinement(
         self, track_id: int, frame_index: int, current_label: str, stable_label: str,
         certainty: float, hits: int, base_display_label: str, refined: tuple[str, float] | None,
@@ -940,6 +978,11 @@ class PipelineWorker(threading.Thread):
         if remembered is not None:
             event_label = remembered[0]
             confidence = max(confidence, remembered[1])
+        if event_label == "truck":
+            fresh_car = self._fresh_car_crossing_override(track_id, frame_index, refined)
+            if fresh_car is not None:
+                event_label = fresh_car[0]
+                confidence = max(confidence, fresh_car[1])
         return event_label, confidence
 
     def _run_deferred_class_refinements(
@@ -1406,6 +1449,9 @@ class PipelineWorker(threading.Thread):
                 same_direction_min_frames=int(os.getenv("AI_GATE_ANCHOR_SPAN_SAME_DIRECTION_MIN_FRAMES", "16")),
                 lost_finalize_min_normal_ratio=float(os.getenv("AI_GATE_ANCHOR_SPAN_LOST_MIN_NORMAL_RATIO", "0.55")),
                 lost_finalize_min_side_distance_ratio=float(os.getenv("AI_GATE_ANCHOR_SPAN_LOST_MIN_SIDE_RATIO", "0.014")),
+                clock_reconcile_max_gap_frames=int(os.getenv("AI_GATE_ANCHOR_CLOCK_MAX_GAP", "32")),
+                clock_reconcile_min_normal_ratio=float(os.getenv("AI_GATE_ANCHOR_CLOCK_MIN_NORMAL_RATIO", "0.48")),
+                clock_reconcile_min_side_distance_ratio=float(os.getenv("AI_GATE_ANCHOR_CLOCK_MIN_SIDE_RATIO", "0.008")),
             )
             self._anchor_span_rescuer = anchor_span_rescuer
 
@@ -1790,6 +1836,7 @@ class PipelineWorker(threading.Thread):
                         span_passage_state = anchor_span_rescuer.capture_passage_state(track_id)
                         center_crossing_source = None
                         anchor_crossing_source = False
+                        span_clock_reconciliation_frame = None
                         direction = counter.update(
                             track_id, anchor, width, height, frame_index=frame_index,
                             origin_probe=(
@@ -1799,6 +1846,10 @@ class PipelineWorker(threading.Thread):
                             ),
                             lineage_size=self._continuity.lineage_size(track_id),
                         )
+                        if direction is not None:
+                            span_clock_reconciliation_frame = anchor_span_rescuer.reconciliation_crossing_frame_for(
+                                track_id, direction, frame_index,
+                            )
                         if direction is None:
                             span_candidate = anchor_span_rescuer.update(
                                 track_id, anchor, width, height, frame_index, commit=False
@@ -1960,6 +2011,8 @@ class PipelineWorker(threading.Thread):
                                 frame_index, crossing_frame_float, crossing_method,
                                 max_interpolated_shift_frames=max(1.0, self.cross_time_max_interp_seconds * fps_for_policy),
                                 max_rescued_shift_frames=max(1.0, self.cross_time_max_rescue_seconds * fps_for_policy),
+                                trusted_span_frame=span_clock_reconciliation_frame,
+                                max_trusted_span_shift_frames=max(1.0, self.cross_time_anchor_span_seconds * fps_for_policy),
                             )
                             event_frame_index = max(1, int(round(selected_crossing_frame)))
                             source_time_seconds = (
@@ -1968,6 +2021,11 @@ class PipelineWorker(threading.Thread):
                             )
                             if time_corrected:
                                 self.state.crossing_time_corrections += 1
+                            if (
+                                span_clock_reconciliation_frame is not None
+                                and abs(float(selected_crossing_frame) - float(span_clock_reconciliation_frame)) <= 1e-6
+                            ):
+                                self.state.anchor_span_clock_reconciliations += 1
                             if time_clamped:
                                 self.state.crossing_time_clamps += 1
                             crossing_point = counter.crossing_point_for(track_id)
@@ -2204,8 +2262,10 @@ class PipelineWorker(threading.Thread):
                         "anchor_span_cooldown_overrides": self.state.anchor_span_cooldown_overrides,
                         "anchor_span_lost_finalizations": self.state.anchor_span_lost_finalizations,
                         "anchor_span_immediate_overrides": self.state.anchor_span_immediate_overrides,
+                        "anchor_span_clock_reconciliations": self.state.anchor_span_clock_reconciliations,
                         "gate_tracks": gate_trace_tracks,
                         "truck_class_rescues": self.state.truck_class_rescues,
+                        "truck_lock_demotion_rescues": self.state.truck_lock_demotion_rescues,
                         "bicycle_tracks_seen": self.state.bicycle_tracks_seen,
                         "truck_tracks_seen": self.state.truck_tracks_seen,
                         "truck_crossing_tracks": self.state.truck_crossing_tracks,
@@ -2908,7 +2968,7 @@ class PipelineWorker(threading.Thread):
         rt = f"x{self.state.realtime_factor:.2f}" if self.state.source_fps > 0 else "live"
         cv2.putText(
             frame,
-            f"DET {self.state.detections_current_frame} | UNTRACKED {self.state.untracked_detections} | TRACK {self.state.active_tracks} | ROAD {self.state.road_tracks_current_frame} | TOTAL {self.state.total_count} | IN {self.state.in_count} | OUT {self.state.out_count} | FPS {self.state.fps:.1f} ({rt}) | {self.state.inference_ms:.0f}ms | {'HYBRID' if self.hybrid_mode else 'DIRECT'} {Path(self.detector_model_name).name} | ROI {self.detection_roi_mode.upper()} | DIRECT-X {self.state.direct_crossings} | INTERP {self.state.interpolated_crossings} | RESCUE {self.state.rescued_crossings} | ROAD-REJECT {counter.rejected_outside_road} | CONFIRM-REJECT {counter.rejected_unconfirmed_side} | COOL-REJECT {counter.rejected_cooldown} | COOL-REL {counter.adaptive_cooldown_releases} | FAST-CONF {counter.fast_confirm_rescues} | BRACKET+ {counter.bracket_confirm_rescues} | LATE-CONF {counter.late_geometry_confirms} | RESCUE-X {counter.rejected_rescue_validation} | LONG-RESCUE-X {counter.rejected_long_gap_rescue} | CLASS-R {self.state.class_refine_checks} | GEN-R {self.state.general_refine_checks} | CONS+ {self.state.class_consensus_rescues} | BIKE+ {self.state.bicycle_class_rescues} | BIKE-CTX {self.state.bicycle_context_rescues} | BIKE-T {self.state.bicycle_context_temporal_rescues} | BIKE-W+ {self.state.bicycle_context_weak_motor_rescues} | BIKE-M+ {self.state.bicycle_context_competitive_rescues} | BIKE-NM+ {self.state.bicycle_context_near_margin_rescues} | 2W-C+ {self.state.two_wheel_center_rescues} | 2W-SIG2 {self.state.two_wheel_spatial_signature_duplicates} | 2W-ULTRA {self.state.two_wheel_ultra_spatial_signature_duplicates} | TRUCK+ {self.state.truck_class_rescues} | TRUCK-SEEN {self.state.truck_tracks_seen} | TRUCK-X {self.state.truck_crossing_tracks} | HEAVY-A {self.state.heavy_anchor_tracks} | HEAVY-C+ {self.state.heavy_center_rescues} | HEAVY-STITCH {self.state.heavy_stitch_recoveries} | 4W-DUP {self.state.four_wheel_duplicate_suppressed} | START+ {self.state.video_start_rescues} | TIME-SYNC {self.state.crossing_time_corrections} | TIME-CLAMP {self.state.crossing_time_clamps} | REPLAY {'DET' if self.state.deterministic_video_replay else 'LIVE'} | HUMAN-X {self.state.human_guard_rejections} | RIDER+ {self.state.rider_guard_rescues} | GUARD-PENDING {self.state.human_guard_pending_crossings} | ROAD-EDGE+ {counter.road_edge_rescues}",
+            f"DET {self.state.detections_current_frame} | UNTRACKED {self.state.untracked_detections} | TRACK {self.state.active_tracks} | ROAD {self.state.road_tracks_current_frame} | TOTAL {self.state.total_count} | IN {self.state.in_count} | OUT {self.state.out_count} | FPS {self.state.fps:.1f} ({rt}) | {self.state.inference_ms:.0f}ms | {'HYBRID' if self.hybrid_mode else 'DIRECT'} {Path(self.detector_model_name).name} | ROI {self.detection_roi_mode.upper()} | DIRECT-X {self.state.direct_crossings} | INTERP {self.state.interpolated_crossings} | RESCUE {self.state.rescued_crossings} | ROAD-REJECT {counter.rejected_outside_road} | CONFIRM-REJECT {counter.rejected_unconfirmed_side} | COOL-REJECT {counter.rejected_cooldown} | COOL-REL {counter.adaptive_cooldown_releases} | FAST-CONF {counter.fast_confirm_rescues} | BRACKET+ {counter.bracket_confirm_rescues} | LATE-CONF {counter.late_geometry_confirms} | RESCUE-X {counter.rejected_rescue_validation} | LONG-RESCUE-X {counter.rejected_long_gap_rescue} | CLASS-R {self.state.class_refine_checks} | GEN-R {self.state.general_refine_checks} | CONS+ {self.state.class_consensus_rescues} | BIKE+ {self.state.bicycle_class_rescues} | BIKE-CTX {self.state.bicycle_context_rescues} | BIKE-T {self.state.bicycle_context_temporal_rescues} | BIKE-W+ {self.state.bicycle_context_weak_motor_rescues} | BIKE-M+ {self.state.bicycle_context_competitive_rescues} | BIKE-NM+ {self.state.bicycle_context_near_margin_rescues} | 2W-C+ {self.state.two_wheel_center_rescues} | 2W-SIG2 {self.state.two_wheel_spatial_signature_duplicates} | 2W-ULTRA {self.state.two_wheel_ultra_spatial_signature_duplicates} | TRUCK+ {self.state.truck_class_rescues} | LOCK→CAR {self.state.truck_lock_demotion_rescues} | TRUCK-SEEN {self.state.truck_tracks_seen} | TRUCK-X {self.state.truck_crossing_tracks} | HEAVY-A {self.state.heavy_anchor_tracks} | HEAVY-C+ {self.state.heavy_center_rescues} | HEAVY-STITCH {self.state.heavy_stitch_recoveries} | 4W-DUP {self.state.four_wheel_duplicate_suppressed} | START+ {self.state.video_start_rescues} | TIME-SYNC {self.state.crossing_time_corrections} | TIME-CLAMP {self.state.crossing_time_clamps} | REPLAY {'DET' if self.state.deterministic_video_replay else 'LIVE'} | HUMAN-X {self.state.human_guard_rejections} | RIDER+ {self.state.rider_guard_rescues} | GUARD-PENDING {self.state.human_guard_pending_crossings} | ROAD-EDGE+ {counter.road_edge_rescues}",
             (20, 32),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.62,

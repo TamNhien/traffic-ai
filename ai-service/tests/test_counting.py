@@ -2121,3 +2121,51 @@ def test_v0550_late_geometry_confirm_stays_fail_closed_for_oblique_jitter():
     assert counter.update(5502, (600.0, 510.0), 1000, 1000, 23) is None
     assert counter.late_geometry_confirms == 0
     assert counter.rejected_unconfirmed_side == 1
+
+
+def test_v0561_trusted_anchor_span_clock_can_reconcile_direct_event_without_creating_one() -> None:
+    from app.counting import select_event_crossing_frame
+
+    assert select_event_crossing_frame(
+        100.0, 99.8, "direct", trusted_span_frame=92.5, max_trusted_span_shift_frames=10.0,
+    ) == (92.5, True, False)
+    # Outside the trust horizon, direct-event semantics stay unchanged.
+    assert select_event_crossing_frame(
+        100.0, 95.0, "direct", trusted_span_frame=80.0, max_trusted_span_shift_frames=10.0,
+    ) == (100.0, False, False)
+
+
+def test_v0561_expired_verified_anchor_span_retains_timestamp_only_hint() -> None:
+    from app.counting import VerifiedAnchorSpanRescuer
+
+    gate = VerifiedAnchorSpanRescuer(
+        CountingLine(),
+        immediate_min_normal_ratio=0.95,
+        post_confirm_max_gap_frames=2,
+        clock_reconcile_max_gap_frames=10,
+        clock_reconcile_min_normal_ratio=0.48,
+        clock_reconcile_min_side_distance_ratio=0.008,
+    )
+    assert gate.update(77, (450.0, 460.0), 1000, 1000, 10) is None
+    assert gate.update(77, (500.0, 540.0), 1000, 1000, 12) is None
+    # Neutral sample expires post-confirmation but cannot itself create an event.
+    assert gate.update(77, (500.0, 500.0), 1000, 1000, 15) is None
+    clock = gate.reconciliation_crossing_frame_for(77, "in", 16)
+    assert clock == pytest.approx(11.0)
+    assert gate.reconciliation_crossing_frame_for(77, "out", 16) is None
+    gate.mark_counted(77, "in", 16)
+    assert gate.reconciliation_crossing_frame_for(77, "in", 17) is None
+
+
+def test_v0561_anchor_clock_hint_expires_and_never_reopens_crossing() -> None:
+    from app.counting import VerifiedAnchorSpanRescuer
+
+    gate = VerifiedAnchorSpanRescuer(
+        CountingLine(), immediate_min_normal_ratio=0.95,
+        post_confirm_max_gap_frames=2, clock_reconcile_max_gap_frames=5,
+    )
+    gate.update(78, (450.0, 460.0), 1000, 1000, 10)
+    gate.update(78, (500.0, 540.0), 1000, 1000, 12)
+    gate.update(78, (500.0, 500.0), 1000, 1000, 15)
+    assert gate.reconciliation_crossing_frame_for(78, "in", 18) is None
+    assert gate.verified_anchor_span_rescues == 0
