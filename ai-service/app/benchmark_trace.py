@@ -269,6 +269,10 @@ def _diagnosis_scope(reason: str, gate_audit: dict, tracking_id: int | None) -> 
     reason_scope = "nearby_time_window"
     if reason == "no_trace_window":
         reason_scope = "no_trace_window"
+    elif reason == "crossing_proposal_observed":
+        reason_scope = "matched_track_proposal"
+    elif reason == "crossing_delivery_observed":
+        reason_scope = "matched_track_delivery"
     elif geometry_scope == "matched_track" and reason in {
         "crossing_anchor_span_reject", "crossing_center_only_span", "crossing_near_no_span",
         "crossing_outside_segment_geometry", "crossing_unverified_span",
@@ -283,6 +287,64 @@ def _diagnosis_scope(reason: str, gate_audit: dict, tracking_id: int | None) -> 
 
 
 TRACE_GEOMETRY_MAX_GAP_FRAMES = 45
+TRACE_EVENT_AUDIT_RECORDS_LIMIT = 8
+_TRACE_DEDUP_REASONS = frozenset({
+    "same-track-delivery-retry", "startup-crossing-signature", "heavy-semantic-signature",
+    "crossing-signature", "two-wheel-rescue-signature", "two-wheel-spatial-signature",
+    "two-wheel-ultra-spatial-signature", "same-track-repeat-jitter", "same-track-direction-flip",
+    "secondary-shadow-signature", "direct-ultra-shadow", "direct-secondary-shadow",
+    "semantic-family-shadow", "semantic-family-reverse-shadow", "secondary-reverse-shadow",
+})
+
+
+def _event_audit_record(value: dict, session_id: int, *, delivery: bool) -> dict | None:
+    """Project recorded producer/receipt evidence without response bodies or paths."""
+    if not isinstance(value, dict):
+        return None
+    integer_keys = ("camera_id", "session_id", "tracking_id", "source_frame_index")
+    if any(type(value.get(key)) is not int for key in integer_keys):
+        return None
+    if value["camera_id"] < 1 or value["session_id"] != session_id or value["source_frame_index"] < 0:
+        return None
+    numeric_keys = ("confidence", "source_time_seconds", "crossing_x", "crossing_y")
+    try:
+        if any(type(value.get(key)) not in (int, float) or not isfinite(value[key]) for key in numeric_keys):
+            return None
+    except OverflowError:
+        return None
+    if any(type(value.get(key)) is not str for key in ("vehicle_type", "direction", "crossing_method", "stage")):
+        return None
+    if (not 0 <= value["confidence"] <= 1 or value["source_time_seconds"] < 0
+            or not 0 <= value["crossing_x"] <= 1 or not 0 <= value["crossing_y"] <= 1
+            or value.get("vehicle_type") not in {"bicycle", "motorcycle", "car", "bus", "truck"}
+            or value.get("direction") not in {"in", "out"}
+            or value.get("crossing_method") not in {"direct", "interpolated", "rescued"}):
+        return None
+    record = {key: value[key] for key in (*integer_keys, "vehicle_type", "direction", *numeric_keys,
+                                        "crossing_method")}
+    if delivery:
+        stage, outcome = value.get("stage"), value.get("outcome")
+        if (type(outcome) is not str
+                or (stage == "backend_acknowledged" and outcome not in {"created", "deduplicated", "acknowledged_unknown"})
+                or (stage == "delivery_failed" and outcome != "failed")
+                or stage not in {"backend_acknowledged", "delivery_failed"}
+                or type(value.get("attempts")) is not int or value["attempts"] < 1):
+            return None
+        event_id = value.get("backend_event_id")
+        if event_id is not None and (type(event_id) is not int or event_id < 1):
+            return None
+        reason = value.get("dedup_reason")
+        record.update(stage=stage, outcome=outcome, attempts=value["attempts"], backend_event_id=event_id,
+                      dedup_reason=reason if isinstance(reason, str) and reason in _TRACE_DEDUP_REASONS else None)
+    else:
+        stage = value.get("stage")
+        observed_frame = value.get("observed_frame_index")
+        if (stage not in {"committed_before_submit", "submitted_after_guard"}
+                or type(observed_frame) is not int or observed_frame < value["source_frame_index"]):
+            return None
+        record.update(stage=stage, observed_frame_index=observed_frame)
+    return record
+
 
 
 def _finite_geometry_context(row: dict) -> tuple | None:
@@ -376,8 +438,34 @@ class _TraceWindow:
         self.maximum = {}
         self.minimum = {}
         self.events = 0
+        self.proposal_enabled = False
+        self.delivery_enabled = False
+        self.proposals = {}
+        self.deliveries = {}
+        self.proposals_truncated = False
+        self.deliveries_truncated = False
+        self.delivery_summary = None
+
+    def observe_event_audit(self, record, *, delivery):
+        if self.track is not None and record["tracking_id"] != self.track:
+            return
+        records = self.deliveries if delivery else self.proposals
+        key = tuple(record[field] for field in (
+            "tracking_id", "source_frame_index", "source_time_seconds", "vehicle_type",
+            "direction", "crossing_method", "stage",
+        ))
+        records.pop(key, None)
+        records[key] = record
+        if len(records) > TRACE_EVENT_AUDIT_RECORDS_LIMIT:
+            records.pop(next(iter(records)))
+            if delivery:
+                self.deliveries_truncated = True
+            else:
+                self.proposals_truncated = True
 
     def observe(self, row):
+        if row.get('kind') in ('event_delivery', 'delivery_summary'):
+            return
         for audit in row.get('bicycle_xframe_decision_audit', []) or []:
             if not isinstance(audit, dict) or (self.track is not None and audit.get('track_id') != self.track):
                 continue
@@ -413,7 +501,7 @@ class _TraceWindow:
                 values[2] = min(values[2], center)
                 values[3] = max(values[3], center)
                 values[4] = min(values[4], abs(anchor))
-        if row.get('audit_only'):
+        if row.get('audit_only') or row.get('kind') == 'event_delivery':
             return
         self.count += 1
         self.events += int(row.get('crossing_events', 0))
@@ -507,8 +595,35 @@ class _TraceWindow:
                 reason = 'crossing_near_no_span'
             else:
                 reason = 'crossing_gate_miss'
+        if self.proposal_enabled:
+            output["crossing_proposal_audit"] = {
+                "scope": ("matched_track" if self.track is not None else "nearby_time_window")
+                if self.proposals else "no_proposal_evidence",
+                "backend_persistence": "unverified", "records": [dict(value) for value in self.proposals.values()],
+                "records_limit": TRACE_EVENT_AUDIT_RECORDS_LIMIT, "truncated": self.proposals_truncated,
+            }
+        if self.delivery_enabled:
+            output["event_delivery_audit"] = {
+                "scope": ("matched_track" if self.track is not None else "nearby_time_window")
+                if self.deliveries else "no_delivery_evidence",
+                "records": [dict(value) for value in self.deliveries.values()],
+                "records_limit": TRACE_EVENT_AUDIT_RECORDS_LIMIT, "truncated": self.deliveries_truncated,
+                "summary_scope": "session_global",
+                "dropped_records": self.delivery_summary["delivery_audit_dropped"] if self.delivery_summary else None,
+                "delivery_drain_complete": self.delivery_summary["delivery_drain_complete"] if self.delivery_summary else None,
+                "pending_events": self.delivery_summary["pending_events"] if self.delivery_summary else None,
+            }
+        # A known producer proposal cannot be explained as a gate rejection.
+        # A receipt records transport/backend acknowledgement, never GT identity.
+        if self.track is not None:
+            if self.deliveries:
+                reason = "crossing_delivery_observed"
+            elif self.proposals:
+                reason = "crossing_proposal_observed"
         output['reason'] = reason
         output['diagnosis_scope'] = _diagnosis_scope(reason, gate, self.track)
+        if not self.count:
+            output['diagnosis_scope']['counters'] = "no_trace_window"
         return output
 
 
@@ -558,7 +673,49 @@ def diagnose_trace(session_id: int, times: Iterable[float], window_seconds: floa
                 if isinstance(row, dict):
                     yield row
 
+        proposal_schema_seen = False
+        delivery_schema_seen = False
         for row in rows():
+            if row.get("kind") == "delivery_summary":
+                valid = (type(row.get("session_id")) is int and row["session_id"] == int(session_id) and type(row.get("camera_id")) is int
+                         and row["camera_id"] > 0 and type(row.get("delivery_drain_complete")) is bool
+                         and all(type(row.get(key)) is int and row[key] >= 0
+                                 for key in ("delivery_audit_dropped", "pending_events")))
+                for item in windows:
+                    item.delivery_enabled = True
+                    if valid:
+                        item.delivery_summary = row
+                continue
+            # Producer and receipt clocks belong to the original event, even if
+            # their carrier observation/acknowledgement arrives much later.
+            delivery = row.get("kind") == "event_delivery"
+            if "crossing_proposals" in row and not proposal_schema_seen:
+                proposal_schema_seen = True
+                for item in windows:
+                    item.proposal_enabled = True
+            if delivery and not delivery_schema_seen:
+                delivery_schema_seen = True
+                for item in windows:
+                    item.delivery_enabled = True
+            values = [row] if delivery else row.get("crossing_proposals", [])
+            if isinstance(values, list):
+                for value in values:
+                    if not isinstance(value, dict) or any(
+                        key in row and row[key] != value.get(key) for key in ("camera_id", "session_id")
+                    ):
+                        continue
+                    record = _event_audit_record(value, int(session_id), delivery=delivery)
+                    if record is None:
+                        continue
+                    clock = record["source_time_seconds"]
+                    lower = bisect_left(target_times, nextafter(clock - window, -inf))
+                    upper = bisect_right(target_times, nextafter(clock + window, inf))
+                    for position in range(lower, upper):
+                        item = windows[ordered[position][1]]
+                        if abs(clock - item.target) <= window:
+                            item.observe_event_audit(record, delivery=delivery)
+            if delivery:
+                continue
             geometry = _finite_geometry_context(row)
             if geometry is not None:
                 for item in windows:

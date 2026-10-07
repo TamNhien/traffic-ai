@@ -323,12 +323,12 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.62") { throw "VERSION phải là 0.5.62, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0076_identity_audit_v0562.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0076_identity_audit_v0562.py." }
+  if ($version -ne "0.5.63") { throw "VERSION phải là 0.5.63, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0077_delivery_prescan_v0563.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0077_delivery_prescan_v0563.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0076_identity_audit_v0562"' -or $migrationText -notmatch 'down_revision = "0075_span_clock_class_v0561"' -or $migrationText -notmatch "value='0.5.62'") {
-    throw "Migration 0076_identity_audit_v0562 không đúng contract V0.5.62."
+  if ($migrationText -notmatch 'revision = "0077_delivery_prescan_v0563"' -or $migrationText -notmatch 'down_revision = "0076_identity_audit_v0562"' -or $migrationText -notmatch "value='0.5.63'") {
+    throw "Migration 0077_delivery_prescan_v0563 không đúng contract V0.5.63."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
@@ -1853,6 +1853,35 @@ function Assert-IdentityProvenanceV0562Contract {
   Write-Host "[OK] Identity Separation + Evidence Provenance V0.5.62" -ForegroundColor Green
 }
 
+function Assert-DeliveryPrescanV0563Contract {
+  Write-Host "`n[Traffic AI] Gate Class Prescan + Backend Delivery Evidence V0.5.63" -ForegroundColor Cyan
+  $worker = Get-Content (Join-Path $root "ai-service\app\worker.py") -Raw -Encoding UTF8
+  $async = Get-Content (Join-Path $root "ai-service\app\async_tasks.py") -Raw -Encoding UTF8
+  $trace = Get-Content (Join-Path $root "ai-service\app\benchmark_trace.py") -Raw -Encoding UTF8
+  $routes = Get-Content (Join-Path $root "backend\app\api\routes.py") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  if ($worker -notmatch 'def _truck_lock_prescan_candidate' -or $worker -notmatch 'lock_prescan_candidates' -or $worker -notmatch 'used >= self\.refine_max_per_frame') {
+    throw "V0.5.63 thiếu lấy mẫu lock gần vạch trong ngân sách còn dư."
+  }
+  if ($async -notmatch 'def drain_delivery_audits' -or $async -notmatch 'maxsize=1024' -or $async -notmatch 'delivery_audit_dropped' -or $async -notmatch 'kind="event_delivery", audit_only=True') {
+    throw "V0.5.63 thiếu bounded terminal delivery audit đúng discriminator."
+  }
+  if ($worker -notmatch 'drain_delivery_audits' -or $worker -notmatch 'delivery_summary' -or $worker -notmatch 'delivery_drain_complete') {
+    throw "V0.5.63 thiếu single-writer delivery trace và EOF summary."
+  }
+  if ($trace -notmatch 'crossing_proposal_audit' -or $trace -notmatch 'event_delivery_audit' -or $trace -notmatch 'matched_track_delivery' -or $trace -notmatch 'TRACE_EVENT_AUDIT_RECORDS_LIMIT = 8') {
+    throw "V0.5.63 thiếu audit theo track/source clock và giới hạn bản ghi."
+  }
+  if ($routes -notmatch 'def _scope_crossing_trace_audit' -or $frontend -notmatch 'function CrossingDeliveryAudit' -or $frontend -notmatch 'crossing_proposal_observed' -or $frontend -notmatch 'crossing_delivery_observed') {
+    throw "V0.5.63 thiếu API/frontend hiển thị đúng scope bằng chứng gửi event."
+  }
+  foreach ($relative in @("ai-service\tests\test_worker_context.py", "ai-service\tests\test_guard_transaction.py", "ai-service\tests\test_async_tasks.py", "ai-service\tests\test_v0541_benchmark_trace.py", "backend\tests\test_app.py")) {
+    $text = Get-Content (Join-Path $root $relative) -Raw -Encoding UTF8
+    if ($text -notmatch 'def test_v0563_') { throw "V0.5.63 thiếu regression trong $relative." }
+  }
+  Write-Host "[OK] Gate Class Prescan + Backend Delivery Evidence V0.5.63" -ForegroundColor Green
+}
+
 function Invoke-Step([string]$Title, [scriptblock]$Action) {
   Write-Host "`n[Traffic AI] $Title" -ForegroundColor Cyan
   & $Action
@@ -1931,6 +1960,7 @@ Assert-TraceIdentityV0559Contract
 Assert-StopAckCompatibilityV0560Contract
 Assert-SpanClockClassV0561Contract
 Assert-IdentityProvenanceV0562Contract
+Assert-DeliveryPrescanV0563Contract
 Assert-LegacySemanticCompatibilityV0523R1
 
 Write-Host "`n[Traffic AI] Road Zone + Frame Browser V0.5.11" -ForegroundColor Cyan

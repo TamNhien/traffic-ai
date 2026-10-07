@@ -506,3 +506,157 @@ def test_v0562_direct_and_streaming_gate_audits_use_same_recorded_geometry(tmp_p
     streaming = _v0562_diagnose_rows(bt, tmp_path, monkeypatch, [header] + rows)["gate_span_audit"]
     assert direct == streaming == bt._gate_span_audit([header] + rows, tracking_id=4)
     assert "geometry_basis" not in bt._gate_span_audit(rows, tracking_id=4)
+
+
+def _v0563_proposal(session_id=169, track_id=-1, source_time=10.0, source_frame=251, **changes):
+    return {
+        'camera_id': 1, 'session_id': session_id, 'tracking_id': track_id,
+        'vehicle_type': 'motorcycle', 'direction': 'out', 'confidence': .9,
+        'source_frame_index': source_frame, 'source_time_seconds': source_time,
+        'crossing_method': 'interpolated', 'crossing_x': .65, 'crossing_y': .41,
+        'stage': 'committed_before_submit', 'observed_frame_index': source_frame + 2,
+        **changes,
+    }
+
+
+def _v0563_delivery(**changes):
+    proposal = _v0563_proposal()
+    proposal.pop('observed_frame_index')
+    return {**proposal, 'kind': 'event_delivery', 'audit_only': True,
+            'stage': 'backend_acknowledged', 'outcome': 'deduplicated', 'attempts': 1,
+            'backend_event_id': 512, 'dedup_reason': 'same-track-repeat-jitter', **changes}
+
+
+def test_v0563_exact_known_proposal_is_not_a_gate_rejection(monkeypatch, tmp_path):
+    import app.benchmark_trace as bt
+    monkeypatch.setattr(bt, 'TRACE_ROOT', tmp_path)
+    rows = [{'source_time_seconds': t, 'detections': 2, 'tracks': 2, 'road_tracks': 1,
+             'gate_tracks': [{'track_id': -1, 'label': 'motorcycle', 'anchor_signed': d, 'center_signed': d}],
+             'rejected_cooldown': n, 'crossing_proposals': [_v0563_proposal()] if n else []}
+            for t, d, n in [(9.9, -.02, 0), (10.1, .02, 1)]]
+    _write_trace_scope_rows(bt, 169, rows)
+    result = bt.diagnose_trace(169, [10], tracking_ids=[-1])['items'][0]
+    assert result['reason'] == 'crossing_proposal_observed'
+    assert result['diagnosis_scope']['reason'] == 'matched_track_proposal'
+    assert result['diagnosis_scope']['counters'] == 'frame_global'
+    assert result['cooldown_reject_delta'] == 1
+    audit = result['crossing_proposal_audit']
+    assert audit['scope'] == 'matched_track' and audit['backend_persistence'] == 'unverified'
+    assert audit['records'] == [_v0563_proposal()]
+    assert not any(k.startswith('event_delivery') for k in result)
+
+
+def test_v0563_neighbor_proposal_does_not_identify_missing_gt_or_unknown_track(monkeypatch, tmp_path):
+    import app.benchmark_trace as bt
+    monkeypatch.setattr(bt, 'TRACE_ROOT', tmp_path)
+    rows = [{'source_time_seconds': t, 'detections': 1, 'tracks': 1, 'road_tracks': 1,
+             'gate_tracks': [{'track_id': -1, 'anchor_signed': d, 'center_signed': d}],
+             'crossing_proposals': [_v0563_proposal()] if d > 0 else []}
+            for t, d in [(9.9, -.02), (10.1, .02)]]
+    _write_trace_scope_rows(bt, 169, rows)
+    neighbor, unknown = bt.diagnose_trace(169, [10, 10], tracking_ids=[None, 99])['items']
+    assert neighbor['reason'] == 'crossing_anchor_span_reject'
+    assert neighbor['diagnosis_scope']['reason'] == 'nearby_time_window'
+    assert neighbor['crossing_proposal_audit']['scope'] == 'nearby_time_window'
+    assert unknown['reason'] == 'crossing_gate_miss'
+    assert unknown['crossing_proposal_audit']['records'] == []
+    assert unknown['crossing_proposal_audit']['scope'] == 'no_proposal_evidence'
+
+
+def test_v0563_delayed_guard_proposal_uses_original_source_window(monkeypatch, tmp_path):
+    import app.benchmark_trace as bt
+    monkeypatch.setattr(bt, 'TRACE_ROOT', tmp_path)
+    delayed = _v0563_proposal(stage='submitted_after_guard')
+    unrelated = _v0563_proposal(source_time=30, source_frame=751)
+    rows = [{'source_time_seconds': 10, 'detections': 1, 'tracks': 1, 'road_tracks': 1,
+             'crossing_proposals': [unrelated]},
+            {'source_time_seconds': 30, 'detections': 9, 'tracks': 9, 'road_tracks': 9,
+             'crossing_proposals': [delayed]}]
+    _write_trace_scope_rows(bt, 169, rows)
+    item = bt.diagnose_trace(169, [10], tracking_ids=[-1])['items'][0]
+    assert item['crossing_proposal_audit']['records'] == [delayed]
+    assert item['max_det'] == 1
+    assert item['reason'] == 'crossing_proposal_observed'
+    assert item['crossing_proposal_audit']['backend_persistence'] == 'unverified'
+
+
+def test_v0563_delivery_receipt_is_source_scoped_and_excluded_from_frame_totals(monkeypatch, tmp_path):
+    import app.benchmark_trace as bt
+    monkeypatch.setattr(bt, 'TRACE_ROOT', tmp_path)
+    receipt = _v0563_delivery(detections=99, tracks=99, road_tracks=99, crossing_events=99,
+                              gate_tracks=[{'track_id': -1, 'anchor_signed': -.2, 'center_signed': .2}])
+    rows = [{'source_time_seconds': 10, 'detections': 1, 'tracks': 1, 'road_tracks': 1}, receipt]
+    _write_trace_scope_rows(bt, 169, rows)
+    known, nearby = bt.diagnose_trace(169, [10, 10], tracking_ids=[-1, None])['items']
+    assert known['reason'] == 'crossing_delivery_observed'
+    assert known['diagnosis_scope']['reason'] == 'matched_track_delivery'
+    assert known['max_det'] == 1 and known['crossing_events_nearby'] == 0
+    assert known['gate_span_audit']['geometry_scope'] == 'no_track_evidence'
+    audit = known['event_delivery_audit']
+    assert audit['scope'] == 'matched_track' and audit['records'][0]['outcome'] == 'deduplicated'
+    assert audit['records'][0]['backend_event_id'] == 512
+    assert audit['summary_scope'] == 'session_global' and audit['dropped_records'] is None
+    assert nearby['reason'] == 'crossing_gate_miss'
+    assert nearby['event_delivery_audit']['scope'] == 'nearby_time_window'
+    assert 'detections' not in audit['records'][0] and 'gate_tracks' not in audit['records'][0]
+
+
+def test_v0563_receipt_outcomes_and_session_global_footer_do_not_claim_gt(monkeypatch, tmp_path):
+    import app.benchmark_trace as bt
+    monkeypatch.setattr(bt, 'TRACE_ROOT', tmp_path)
+    receipts = [_v0563_delivery(source_frame_index=251 + n, outcome=outcome,
+                               stage='delivery_failed' if outcome == 'failed' else 'backend_acknowledged',
+                               backend_event_id=None if outcome in ('failed', 'acknowledged_unknown') else 512 + n)
+                for n, outcome in enumerate(('created', 'deduplicated', 'acknowledged_unknown', 'failed'))]
+    summary = {'kind': 'delivery_summary', 'audit_only': True, 'camera_id': 1, 'session_id': 169,
+               'delivery_drain_complete': False, 'delivery_audit_dropped': 3, 'pending_events': 2}
+    _write_trace_scope_rows(bt, 169, [*receipts, summary])
+    item = bt.diagnose_trace(169, [10], tracking_ids=[-1])['items'][0]
+    assert item['max_det'] == item['max_track'] == item['max_road'] == 0
+    assert item['diagnosis_scope']['counters'] == 'no_trace_window'
+    audit = item['event_delivery_audit']
+    assert [record['outcome'] for record in audit['records']] == ['created', 'deduplicated', 'acknowledged_unknown', 'failed']
+    assert audit['summary_scope'] == 'session_global' and audit['dropped_records'] == 3
+    assert audit['delivery_drain_complete'] is False and audit['pending_events'] == 2
+    assert not any(key in audit for key in ('gt_identity', 'matched_gt', 'persisted'))
+
+
+def test_v0563_event_audits_are_bounded_deduplicated_and_results_independent(monkeypatch, tmp_path):
+    import app.benchmark_trace as bt
+    monkeypatch.setattr(bt, 'TRACE_ROOT', tmp_path)
+    proposals = [_v0563_proposal(source_frame=250 + n) for n in range(12)]
+    receipts = [_v0563_delivery(source_frame_index=250 + n) for n in range(12)]
+    rows = [{'source_time_seconds': 10, 'detections': 1, 'tracks': 1, 'road_tracks': 1,
+             'crossing_proposals': proposals + [proposals[-1]]}, *receipts, receipts[-1]]
+    _write_trace_scope_rows(bt, 169, rows)
+    first, second = bt.diagnose_trace(169, [10, 10], tracking_ids=[-1, -1])['items']
+    for key in ('crossing_proposal_audit', 'event_delivery_audit'):
+        audit = first[key]
+        assert audit['records_limit'] == len(audit['records']) == 8 and audit['truncated'] is True
+        assert [record['source_frame_index'] for record in audit['records']] == list(range(254, 262))
+        first[key]['records'][0]['confidence'] = 0
+        assert second[key]['records'][0]['confidence'] == .9
+
+
+def test_v0563_event_audit_projection_rejects_invalid_identity_clock_and_private_fields(monkeypatch, tmp_path):
+    import app.benchmark_trace as bt
+    monkeypatch.setattr(bt, 'TRACE_ROOT', tmp_path)
+    private = {'snapshot_path': 'private.jpg', 'backend_url': 'secret', 'response_body': {'token': 'secret'}}
+    valid = _v0563_proposal(**private)
+    invalid = [_v0563_proposal(session_id=170), _v0563_proposal(source_time=float('nan')),
+               _v0563_proposal(source_frame=300, observed_frame_index=253),
+               _v0563_proposal(tracking_id='-1'), _v0563_proposal(stage=[]),
+               _v0563_proposal(crossing_x=2), _v0563_proposal(vehicle_type={})]
+    receipt = _v0563_delivery(dedup_reason=['untrusted'], **private)
+    bad_receipt = _v0563_delivery(outcome='created', stage='delivery_failed')
+    wrong_carrier = {'camera_id': 2, 'session_id': 169, 'source_time_seconds': 10,
+                     'crossing_proposals': [_v0563_proposal(track_id=99)]}
+    rows = [{'source_time_seconds': 10, 'detections': 1, 'tracks': 1, 'road_tracks': 1,
+             'crossing_proposals': [*invalid, valid]}, receipt, bad_receipt, wrong_carrier]
+    _write_trace_scope_rows(bt, 169, rows)
+    item = bt.diagnose_trace(169, [10], tracking_ids=[-1])['items'][0]
+    assert item['crossing_proposal_audit']['records'] == [_v0563_proposal()]
+    records = item['event_delivery_audit']['records']
+    assert len(records) == 1 and records[0]['dedup_reason'] is None
+    assert all(key not in records[0] for key in private)
+    assert records[0]['tracking_id'] == -1

@@ -1578,6 +1578,42 @@ def _benchmark_trace_targets(report: dict, timed_events: list[VehicleEvent]) -> 
     return targets
 
 
+def _scope_crossing_trace_audit(audit: dict, tracking_id: int | None, *, delivery: bool = False) -> dict:
+    """Copy bounded event evidence without identifying a nearby track as GT."""
+    fields = {
+        "camera_id", "session_id", "tracking_id", "vehicle_type", "direction", "confidence",
+        "source_frame_index", "source_time_seconds", "crossing_method", "crossing_x", "crossing_y",
+        "stage", "observed_frame_index",
+    }
+    if delivery:
+        fields.update({"outcome", "attempts", "backend_event_id", "dedup_reason"})
+    raw_records = audit.get("records")
+    records = []
+    for record in raw_records if isinstance(raw_records, list) else []:
+        if not isinstance(record, dict):
+            continue
+        tid = record.get("tracking_id")
+        if not isinstance(tid, int) or isinstance(tid, bool):
+            continue
+        if tracking_id is not None and tid != tracking_id:
+            continue
+        records.append({key: value for key, value in record.items() if key in fields})
+    result = {
+        "scope": ("matched_track" if tracking_id is not None else "nearby_time_window") if records
+        else ("no_delivery_evidence" if delivery else "no_proposal_evidence"),
+        "records": records[-8:], "records_limit": 8,
+        "truncated": bool(audit.get("truncated")) or len(records) > 8,
+    }
+    if delivery:
+        result.update(summary_scope="session_global",
+                      dropped_records=audit.get("dropped_records"),
+                      delivery_drain_complete=audit.get("delivery_drain_complete"),
+                      pending_events=audit.get("pending_events"))
+    else:
+        result["backend_persistence"] = "unverified"
+    return result
+
+
 def _attach_benchmark_trace_diagnosis(item: dict, diagnosis: dict) -> None:
     """Keep class evidence scoped to the matched canonical event track."""
     attached = dict(diagnosis)
@@ -1594,6 +1630,17 @@ def _attach_benchmark_trace_diagnosis(item: dict, diagnosis: dict) -> None:
             if "bicycle_context_audit" in span:
                 span["bicycle_context_audit"] = same_track_audits(span["bicycle_context_audit"] or [])
             attached["gate_span_audit"] = span
+    for name, delivery in (("crossing_proposal_audit", False), ("event_delivery_audit", True)):
+        if isinstance(attached.get(name), dict):
+            attached[name] = _scope_crossing_trace_audit(attached[name], tracking_id, delivery=delivery)
+    reason_audit = {
+        "crossing_proposal_observed": "crossing_proposal_audit",
+        "crossing_delivery_observed": "event_delivery_audit",
+    }.get(attached.get("reason"))
+    if reason_audit and (attached.get(reason_audit) or {}).get("scope") != "matched_track":
+        scope = dict(attached.get("diagnosis_scope") or {})
+        scope["reason"] = "nearby_time_window"
+        attached["diagnosis_scope"] = scope
     item["diagnosis"] = attached
 
 

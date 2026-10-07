@@ -1472,3 +1472,194 @@ def test_v0562_verified_fresh_car_crossing_still_overrides_eligible_global_lock(
     assert worker._truck_semantic_lock._locks[7] == (.90, 100)
     assert worker._class_refine_overrides[7] == ("car", .90, 129)
     assert worker.state.truck_lock_demotion_rescues == 1
+
+
+def _v0563_locked_truck_candidate(worker, track_id=254023, *, distance=.003365):
+    worker._truck_semantic_lock.observe(
+        track_id, 16049, stable_label="truck", certainty=.9958174520916362, hits=25,
+    )
+    worker._class_refine_last_check[track_id] = 16007
+    worker._class_refine_last_observation[track_id] = (16007, ("car", .716796875))
+    worker._class_refine_overrides[track_id] = ("car", .8829369611178074, 16007)
+    return {
+        "distance": distance, "confidence": .800781, "track_id": track_id,
+        "rect": (906.229431, 262.029603, 1197.227905, 538.287049),
+        "current_label": "truck", "stable_label": "truck",
+        "certainty": .923315, "hits": 25, "base_display_label": "truck", "display_label": "truck",
+    }
+
+
+def test_v0563_locked_truck_near_gate_samples_missing_previous_car_frame() -> None:
+    worker = _class_worker()
+    candidate = _v0563_locked_truck_candidate(worker)
+    worker._refiner_model = None
+    worker._refine_crossing_label = lambda *_args, **_kwargs: (
+        "car", .8388671875 if worker._class_refine_last_check[254023] == 16049 else .85888671875,
+    )
+    worker._refine_consensus.update(254023, 16007, "car", .716796875, "general")
+
+    assert worker._run_deferred_class_refinements(
+        [candidate], 16049, object(), "cpu", False, 0, set(),
+    ) == 1
+    assert worker._class_refine_last_check[254023] == 16049
+    assert worker._class_refine_overrides[254023][0::2] == ("car", 16049)
+    # Sampling a CAR observation does not globally clear the live TRUCK lock.
+    assert worker._class_override_for(254023, 16049, "truck")[0] == "truck"
+    refined, inferred = worker._observe_class_refiner(
+        254023, 16050, object(), candidate["rect"], "truck", "cpu", False, force=True,
+    )
+    assert inferred and refined == ("car", .85888671875)
+    result = worker._resolve_crossing_class_refinement(
+        254023, 16050, "truck", "truck", .9269068210965732, 25, "truck", refined,
+    )
+    assert result[0] == "car" and result[1] > .97
+    assert worker.state.truck_lock_demotion_rescues == 1
+    assert worker._truck_semantic_lock.snapshot_for(254023, 16050, "truck") is not None
+
+
+def test_v0563_lock_prescan_requires_live_current_four_wheel_lock() -> None:
+    worker = _class_worker()
+    before = dict(worker._truck_semantic_lock._locks)
+    assert not worker._truck_lock_prescan_candidate(7, 100, "truck", .01)
+    worker._truck_semantic_lock.observe(7, 100, stable_label="truck", certainty=.90, hits=4)
+    assert worker._truck_lock_prescan_candidate(7, 100, "truck", .01)
+    for label in ("car", "bus", "motorcycle", "bicycle"):
+        assert not worker._truck_lock_prescan_candidate(7, 100, label, .01)
+    locked = dict(worker._truck_semantic_lock._locks)
+    assert not worker._truck_lock_prescan_candidate(7, 99, "truck", .01)
+    assert not worker._truck_lock_prescan_candidate(7, 551, "truck", .01)
+    assert worker._truck_semantic_lock._locks == locked and before == {}
+
+
+def test_v0563_lock_prescan_uses_finite_gate_proximity_and_radius() -> None:
+    worker = _class_worker()
+    worker._truck_semantic_lock.observe(7, 100, stable_label="truck", certainty=.90, hits=4)
+    a, b = (100, 500), (900, 500)
+    near = worker._finite_gate_distance_ratio((500, 510), a, b, 1000, 1000)
+    extension = worker._finite_gate_distance_ratio((1101, 500), a, b, 1000, 1000)
+    assert worker._truck_lock_prescan_candidate(7, 100, "truck", near)
+    assert not worker._truck_lock_prescan_candidate(7, 100, "truck", extension)
+    assert worker._truck_lock_prescan_candidate(7, 100, "truck", .11)
+    for distance in (.110001, -.001, float("nan"), float("inf")):
+        assert not worker._truck_lock_prescan_candidate(7, 100, "truck", distance)
+
+
+def test_v0563_due_two_wheel_periodic_work_keeps_priority_over_lock_prescan() -> None:
+    for label in ("motorcycle", "bicycle"):
+        worker = _class_worker()
+        truck = _v0563_locked_truck_candidate(worker)
+        ordinary = {**truck, "track_id": 7, "distance": .02, "display_label": label,
+                    "current_label": label, "stable_label": label, "base_display_label": label}
+        calls = []
+        worker._refine_crossing_label = lambda *_args, **kwargs: (
+            calls.append(kwargs["target_label"]) or (label, .90)
+        )
+        assert worker._run_deferred_class_refinements(
+            [truck, ordinary], 16049, object(), "cpu", False, 0, set(),
+        ) == 1
+        assert calls == [label, label]
+        assert worker._class_refine_last_check[254023] == 16007
+        assert worker._class_refine_last_check[7] == 16049
+
+
+def test_v0563_lock_prescan_respects_crossing_slots_and_original_max_budget() -> None:
+    worker = _class_worker()
+    first = _v0563_locked_truck_candidate(worker, 7, distance=.003)
+    second = _v0563_locked_truck_candidate(worker, 8, distance=.004)
+    calls = []
+    worker._refine_crossing_label = lambda *_args, **kwargs: (
+        calls.append(kwargs["target_label"]) or ("car", .86)
+    )
+    assert worker._run_deferred_class_refinements(
+        [first, second], 16049, object(), "cpu", False, 1, set(),
+    ) == 1
+    assert calls == []
+    worker.refine_max_per_frame = 2
+    assert worker._run_deferred_class_refinements(
+        [second, first], 16049, object(), "cpu", False, 1, set(),
+    ) == 2
+    assert worker._class_refine_last_check[7] == 16049
+    assert worker._class_refine_last_check[8] == 16007
+    assert len(calls) == 2  # One target inference, with domain + general opinions.
+
+
+def test_v0563_crossing_target_cannot_receive_a_deferred_lock_prescan() -> None:
+    worker = _class_worker()
+    candidate = _v0563_locked_truck_candidate(worker)
+    calls = []
+    worker._observe_class_refiner = lambda *_args, **_kwargs: calls.append(1) or (None, True)
+    assert worker._run_deferred_class_refinements(
+        [candidate], 16049, object(), "cpu", False, 0, {254023},
+    ) == 0
+    assert calls == []
+
+
+def test_v0563_lock_prescan_same_frame_no_opinion_is_one_inference() -> None:
+    worker = _class_worker()
+    candidate = _v0563_locked_truck_candidate(worker)
+    worker.refine_max_per_frame = 3
+    worker._refine_crossing_label = lambda *_args, **_kwargs: None
+    assert worker._run_deferred_class_refinements(
+        [candidate, candidate], 16049, object(), "cpu", False, 0, set(),
+    ) == 1
+    assert worker.state.class_refine_checks == 1
+    assert worker._class_refine_last_observation[254023] == (16049, None)
+    assert worker._class_refine_overrides[254023][2] == 16007
+
+
+def test_v0563_lock_prescan_stronger_same_frame_truck_still_vetoes_car_demotion() -> None:
+    for truck_confidence in (.86, .91):
+        worker = _class_worker()
+        candidate = _v0563_locked_truck_candidate(worker)
+        worker._refine_crossing_label = lambda *_args, **kwargs: (
+            ("truck", truck_confidence) if kwargs["model"] is worker._refiner_model else ("car", .86)
+        )
+        assert worker._run_deferred_class_refinements(
+            [candidate], 16049, object(), "cpu", False, 0, set(),
+        ) == 1
+        refined, _ = worker._observe_class_refiner(
+            254023, 16050, object(), candidate["rect"], "truck", "cpu", False, force=True,
+        )
+        result = worker._resolve_crossing_class_refinement(
+            254023, 16050, "truck", "truck", .93, 25, "truck", refined,
+        )
+        assert result[0] == "truck"
+        assert worker._refine_consensus.recent_four_wheel_wins(254023, 16050, "car")[0] == 0
+        assert getattr(worker.state, "truck_lock_demotion_rescues", 0) == 0
+
+
+def test_v0563_lock_prescan_missing_model_cannot_create_temporal_evidence() -> None:
+    worker = _class_worker()
+    candidate = _v0563_locked_truck_candidate(worker)
+    worker._refiner_model = worker._general_refiner_model = None
+    assert worker._run_deferred_class_refinements(
+        [candidate], 16049, object(), "cpu", False, 0, set(),
+    ) == 0
+    assert worker.state.class_refine_checks == 0
+    assert worker._refine_consensus.recent_four_wheel_wins(254023, 16049, "car")[0] == 0
+
+
+def test_v0563_deferred_away_or_expired_or_future_lock_keeps_periodic_cadence() -> None:
+    for frame, distance in ((16049, .12), (16048, .01), (16500, .01)):
+        worker = _class_worker()
+        candidate = _v0563_locked_truck_candidate(worker, distance=distance)
+        # Keep ordinary cadence ineligible even in the future/expired controls.
+        worker._class_refine_last_check[254023] = frame - 1
+        calls = []
+        worker._refine_crossing_label = lambda *_args, **_kwargs: calls.append(1) or ("car", .90)
+        assert worker._run_deferred_class_refinements(
+            [candidate], frame, object(), "cpu", False, 0, set(),
+        ) == 0
+        assert calls == []
+
+
+def test_v0563_one_lock_prescan_cannot_replace_two_consecutive_car_wins() -> None:
+    worker = _class_worker()
+    candidate = _v0563_locked_truck_candidate(worker)
+    worker._refine_crossing_label = lambda *_args, **_kwargs: ("car", .86)
+    assert worker._run_deferred_class_refinements(
+        [candidate], 16049, object(), "cpu", False, 0, set(),
+    ) == 1
+    assert worker._fresh_car_crossing_override(254023, 16049, ("car", .86)) is None
+    assert worker._fresh_car_crossing_override(254023, 16050, ("car", .86)) is None
+    assert getattr(worker.state, "truck_lock_demotion_rescues", 0) == 0

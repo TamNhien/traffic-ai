@@ -3,12 +3,182 @@ from types import SimpleNamespace
 from app.worker import PipelineWorker, _PendingGuardCrossing
 
 
+def _v0563_receipt():
+    return {
+        "kind": "event_delivery", "audit_only": True,
+        "camera_id": 1, "session_id": 2, "tracking_id": -1,
+        "vehicle_type": "motorcycle", "direction": "out",
+        "source_frame_index": 1737, "source_time_seconds": 69.4566,
+        "stage": "backend_acknowledged", "outcome": "deduplicated",
+        "attempts": 1, "backend_event_id": 12,
+        "dedup_reason": "secondary-reverse-shadow",
+    }
+
+
+def _v0563_execute_finalizer(worker, writer):
+    ast, source_path, run = _run_method_ast()
+    outer_try = next(node for node in run.body if isinstance(node, ast.Try))
+    namespace = {"self": worker, "counter": None, "trace_file": writer, "cap": None}
+    exec(compile(ast.fix_missing_locations(ast.Module(body=outer_try.finalbody, type_ignores=[])),
+                 str(source_path), "exec"), namespace)
+
+
+def test_v0563_trace_writer_records_receipts_without_inventing_observation_clock() -> None:
+    import io
+    import json
+    worker = _worker()
+    pending = [_v0563_receipt()]
+
+    def drain():
+        values = list(pending)
+        pending.clear()
+        return values
+
+    worker._event_dispatcher = SimpleNamespace(drain_delivery_audits=drain)
+    writer = io.StringIO()
+    observation = {"frame_index": 1760, "source_time_seconds": 70.36, "crossing_events": 0}
+    assert worker._write_benchmark_trace(writer, observation) is writer
+    assert worker._write_benchmark_trace(writer, observation) is writer
+    rows = [json.loads(line) for line in writer.getvalue().splitlines()]
+    assert rows == [_v0563_receipt(), observation, observation]
+    assert rows[0]["source_time_seconds"] == 69.4566 and "frame_index" not in rows[0]
+    assert worker.state.total_count == 0 and worker.state.last_error is None
+
+
+def test_v0563_eof_trace_closes_after_late_ack_and_before_session_release() -> None:
+    import io
+    import json
+    worker = _worker()
+    worker.state.status = "completed"
+    writer = io.StringIO()
+    pending, calls, published = [], [], []
+
+    def flush(*, timeout):
+        assert timeout is None and worker.state.status == "draining"
+        assert not writer.closed
+        calls.append("drain")
+        pending.append(_v0563_receipt())
+        return True
+
+    def drain():
+        values = list(pending)
+        pending.clear()
+        return values
+
+    def close(trace, *, publish):
+        assert worker.state.status == "draining" and publish
+        published.extend(json.loads(line) for line in trace.getvalue().splitlines())
+        trace.close()
+        calls.append("close")
+
+    worker._event_dispatcher = SimpleNamespace(stop_and_flush=flush, drain_delivery_audits=drain,
+                                               delivery_audit_dropped=3)
+    worker._close_and_publish_benchmark_trace = close
+    worker._notify_finished = lambda: calls.append(("finish", worker.state.status))
+    worker.on_finished = lambda camera_id: calls.append(("release", camera_id))
+    _v0563_execute_finalizer(worker, writer)
+    assert calls == ["drain", "close", ("finish", "completed"), ("release", 1)]
+    assert published[0] == _v0563_receipt()
+    assert published[1] == {
+        "kind": "delivery_summary", "audit_only": True, "camera_id": 1, "session_id": 2,
+        "delivery_drain_complete": True, "delivery_audit_dropped": 3, "pending_events": 0,
+    }
+    assert writer.closed and not pending
+
+
+def test_v0563_failed_drain_footer_preserves_error_and_unfinished_delivery() -> None:
+    import io
+    import json
+    worker = _worker()
+    worker.state.status = "completed"
+    worker.state.pending_events = 1
+    writer = io.StringIO()
+    rows, finishes = [], []
+    worker._event_dispatcher = SimpleNamespace(stop_and_flush=lambda **_kwargs: False,
+                                               drain_delivery_audits=lambda: [], delivery_audit_dropped=0)
+
+    def close(trace, **_kwargs):
+        rows.extend(json.loads(line) for line in trace.getvalue().splitlines())
+        trace.close()
+
+    worker._close_and_publish_benchmark_trace = close
+    worker._notify_finished = lambda: finishes.append(worker.state.status)
+    worker.on_finished = lambda _camera_id: None
+    _v0563_execute_finalizer(worker, writer)
+    assert finishes == ["error"] and worker.state.status == "error"
+    assert "unfinished accepted events" in worker.state.last_error
+    assert len(rows) == 1 and rows[0]["delivery_drain_complete"] is False
+    assert rows[0]["pending_events"] == 1 and rows[0]["delivery_audit_dropped"] == 0
+
+
+def test_v0563_receipt_write_failure_disables_trace_without_changing_delivery_state() -> None:
+    worker = _worker()
+    worker.state.last_error = "existing delivery error"
+    worker._event_dispatcher = SimpleNamespace(drain_delivery_audits=lambda: [_v0563_receipt()])
+    closed = []
+
+    def fail(_value):
+        raise OSError("trace storage full")
+
+    writer = SimpleNamespace(write=fail, close=lambda: closed.append(True))
+    assert worker._write_benchmark_trace(writer, {"frame_index": 1760}) is None
+    assert closed == [True] and worker.state.total_count == 0
+    assert worker.state.last_error == "existing delivery error"
+    assert worker.state.benchmark_trace_warning == "Benchmark trace write failed: trace storage full"
+
+
+def test_v0563_actual_dispatcher_receipt_reaches_worker_trace_and_diagnosis(tmp_path, monkeypatch) -> None:
+    from app import async_tasks, benchmark_trace
+    worker = _worker()
+    for name in ("pending_events", "delivery_failures", "delivered_events", "persisted_events", "deduplicated_events"):
+        setattr(worker.state, name, 0)
+    sent = []
+
+    class Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def post(self, _url, *, json):
+            sent.append(dict(json))
+            return SimpleNamespace(raise_for_status=lambda: None,
+                headers={"X-TrafficAI-Deduplicated": "0"}, json=lambda: {"id": 12})
+
+    monkeypatch.setattr(async_tasks.httpx, "Client", lambda **_kwargs: Client())
+    monkeypatch.setattr(benchmark_trace, "TRACE_ROOT", tmp_path)
+    dispatcher = async_tasks.EventDispatcher("https://local-test.invalid/internal", "test-token", worker.state)
+    worker._event_dispatcher = dispatcher
+    payload = worker._event_payload(-1, "motorcycle", "out", .82, "private.jpg", 1737, 69.4566,
+                                    "interpolated", .5, .4)
+    dispatcher.submit(payload)
+    dispatcher.start()
+    assert dispatcher.stop_and_flush(timeout=None) is True
+    with benchmark_trace.trace_path(2).open("w", encoding="utf-8") as writer:
+        worker._write_benchmark_trace(writer, {"kind": "delivery_summary", "audit_only": True,
+            "camera_id": 1, "session_id": 2, "delivery_drain_complete": True,
+            "delivery_audit_dropped": 0, "pending_events": 0})
+    result = benchmark_trace.diagnose_trace(2, [69.457], tracking_ids=[-1])["items"][0]
+    assert result["reason"] == "crossing_delivery_observed"
+    assert result["diagnosis_scope"]["reason"] == "matched_track_delivery"
+    receipt = result["event_delivery_audit"]["records"][0]
+    assert receipt["tracking_id"] == -1 and receipt["source_time_seconds"] == 69.4566
+    assert receipt["outcome"] == "created" and receipt["backend_event_id"] == 12
+    assert "snapshot_path" not in receipt and "test-token" not in benchmark_trace.trace_path(2).read_text()
+    assert result["diagnosis_scope"]["counters"] == "no_trace_window" and result["max_det"] == 0
+    assert sent == [payload] and worker.state.persisted_events == 1
+
+
 class _Dispatcher:
     def __init__(self) -> None:
         self.payloads = []
 
     def submit(self, payload) -> None:
         self.payloads.append(payload)
+
+    def stop_and_flush(self, *, timeout=None) -> bool:
+        return True
 
 
 class _Counter:
@@ -48,6 +218,7 @@ def _worker() -> PipelineWorker:
     worker._class_refine_decision_audit_this_frame = []
     worker._guard_crossing_proposals_this_frame = []
     worker._event_dispatcher = _Dispatcher()
+    worker._jpeg_encoder = SimpleNamespace(is_alive=lambda: False)
     worker._save_crossing_snapshot = lambda _cv2, _frame, frame_index: f"frame_{frame_index}.jpg"
     return worker
 
@@ -1098,7 +1269,7 @@ def test_v0558_eof_audit_failure_disables_artifact_publication(tmp_path, monkeyp
     prefix = outer_try.finalbody[:outer_try.finalbody.index(close) + 1]
     counter = _Counter()
     exec(compile(ast.fix_missing_locations(ast.Module(body=prefix, type_ignores=[])), str(source_path), "exec"),
-        {"self": worker, "counter": counter, "trace_file": writer})
+        {"self": worker, "counter": counter, "trace_file": writer, "cap": None})
 
     assert writer.closed and calls == []
     assert worker._pending_guard_crossings == {} and counter.revoked == [(77, "in")]
@@ -1209,7 +1380,7 @@ def test_v0559_run_finishes_and_releases_camera_only_after_event_drain() -> None
     suffix = outer_try.finalbody[outer_try.finalbody.index(drain):]
 
     exec(compile(ast.fix_missing_locations(ast.Module(body=suffix, type_ignores=[])), str(source_path), "exec"),
-        {"self": worker, "terminal_status": "completed"})
+        {"self": worker, "terminal_status": "completed", "trace_file": None, "trace_usable": True})
 
     assert calls == ["drain", ("finish", "completed", 1), ("release", 1)]
 
@@ -1226,7 +1397,7 @@ def test_v0559_run_enters_draining_before_optional_artifact_publication() -> Non
         and node.value.func.attr == "_close_and_publish_benchmark_trace")
     prefix = outer_try.finalbody[:outer_try.finalbody.index(close) + 1]
 
-    env = {"self": worker, "counter": None, "trace_file": None}
+    env = {"self": worker, "counter": None, "trace_file": None, "cap": None}
     exec(compile(ast.fix_missing_locations(ast.Module(body=prefix, type_ignores=[])), str(source_path), "exec"), env)
 
     assert calls == ["draining"] and env["terminal_status"] == "completed"

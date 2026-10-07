@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './styles.css'
 
-const APP_VERSION = '0.5.62'
+const APP_VERSION = '0.5.63'
 const vehicleLabels = {
   motorcycle: 'Xe máy', bicycle: 'Xe đạp', car: 'Ô tô', bus: 'Xe buýt', truck: 'Xe tải', other: 'Khác'
 }
@@ -15,6 +15,8 @@ const missReasonLabels = {
   crossing_center_only_span: 'Center băng qua nhưng motion-leading anchor chưa đủ span',
   crossing_outside_segment_geometry: 'Quỹ đạo chỉ cắt đường kéo dài ngoài đoạn vạch đếm',
   crossing_unverified_span: 'Chưa đủ quỹ đạo quan sát để xác nhận cắt đoạn vạch',
+  crossing_proposal_observed: 'Worker đã đề xuất crossing cho track này',
+  crossing_delivery_observed: 'Đã có kết quả gửi crossing của track này',
   crossing_near_no_span: 'Track tới sát vạch nhưng quỹ đạo chưa span hai phía',
   crossing_confirmation_reject: 'Crossing chưa đủ xác nhận phía sau vạch',
   crossing_cooldown_reject: 'Crossing bị cooldown chống đếm lặp',
@@ -42,14 +44,14 @@ const missedAuditReason = item => {
   const diagnosis = item?.diagnosis || {}
   if (!diagnosis.reason) return 'GT có · AI không có'
   const label = missReasonLabels[diagnosis.reason] || diagnosis.reason
-  return diagnosis.diagnosis_scope?.reason === 'matched_track_geometry'
+  return ['matched_track_geometry', 'matched_track_proposal', 'matched_track_delivery'].includes(diagnosis.diagnosis_scope?.reason)
     ? label : `Dấu hiệu quanh timecode: ${label}`
 }
 
 const missedAuditDetail = item => {
   const diagnosis = item?.diagnosis || {}
   const parts = []
-  if (diagnosis.reason && diagnosis.diagnosis_scope?.reason !== 'matched_track_geometry') {
+  if (diagnosis.reason && !['matched_track_geometry', 'matched_track_proposal', 'matched_track_delivery'].includes(diagnosis.diagnosis_scope?.reason)) {
     parts.push('Chưa gắn bằng chứng này với phương tiện GT')
   }
   if (diagnosis.max_det != null || diagnosis.max_track != null || diagnosis.max_road != null) {
@@ -105,6 +107,53 @@ function BicycleContextAudit({ item }) {
         Frame {observation.frame_index} · {observation.source === 'general' ? 'model tổng quát' : observation.source === 'domain' ? 'model chuyên biệt' : observation.source} · xe đạp {auditScore(observation.bicycle)} / xe máy {auditScore(observation.motorcycle)}
       </p>)}
     </div>)}
+  </details>
+}
+
+const deliveryOutcomeLabels = {
+  created: 'Backend xác nhận tạo event', deduplicated: 'Backend gộp trùng',
+  acknowledged_unknown: 'Backend đã nhận, chưa rõ tạo hay gộp', failed: 'Gửi không thành công sau các lần thử',
+}
+const deliveryDedupLabels = {
+  'same-track-delivery-retry': 'Gửi lại cùng crossing',
+  'same-track-repeat-jitter': 'Track phát lặp quá gần',
+  'same-track-direction-flip': 'Track đảo hướng quá gần',
+  'crossing-signature': 'Cùng hướng và điểm cắt gần nhau',
+  'startup-crossing-signature': 'Trùng crossing lúc đầu clip',
+  'two-wheel-rescue-signature': 'Trùng lượt cứu xe hai bánh',
+  'two-wheel-spatial-signature': 'Xe hai bánh cùng điểm cắt',
+  'two-wheel-ultra-spatial-signature': 'Xe hai bánh có điểm cắt rất sát nhau',
+  'secondary-shadow-signature': 'Lượt cứu/nội suy trùng nhau',
+  'direct-ultra-shadow': 'Hai lượt trực tiếp có điểm cắt rất sát nhau',
+  'direct-secondary-shadow': 'Lượt trực tiếp trùng với cứu/nội suy',
+  'semantic-family-shadow': 'Trùng crossing khi nhãn cùng nhóm thay đổi',
+  'semantic-family-reverse-shadow': 'Nhận lại cùng xe nhưng đổi hướng/nhãn',
+  'secondary-reverse-shadow': 'Lượt cứu/nội suy đảo hướng tại cùng điểm',
+  'heavy-semantic-signature': 'Trùng xe lớn khi nhãn thay đổi',
+}
+
+function CrossingDeliveryAudit({ item }) {
+  const proposal = item?.diagnosis?.crossing_proposal_audit || {}
+  const delivery = item?.diagnosis?.event_delivery_audit || {}
+  const proposals = Array.isArray(proposal.records) ? proposal.records : []
+  const receipts = Array.isArray(delivery.records) ? delivery.records : []
+  if (!proposals.length && !receipts.length) return null
+  const matched = proposal.scope === 'matched_track' || delivery.scope === 'matched_track'
+  return <details className="bicycle-context-audit">
+    <summary>Dấu vết crossing và phản hồi backend ({proposals.length + receipts.length})</summary>
+    <p>{matched ? `Canonical ${item.ai_tracking_id} của event đã ghép với GT.` : 'Các track gần timecode; cần xem video để xác định phương tiện GT.'}</p>
+    {proposals.slice(-8).map((record,index)=><div className="bicycle-context-record" key={`p-${record.tracking_id}-${record.source_frame_index}-${index}`}>
+      <strong>Track {record.tracking_id} · {formatVideoTime(record.source_time_seconds)} · {String(record.direction || '').toUpperCase()} {vehicleLabels[record.vehicle_type] || 'Khác'}</strong>
+      <p>{record.stage === 'submitted_after_guard' ? 'Guard xác nhận, đã nhận vào hàng đợi gửi' : 'Worker đề xuất, chưa có phản hồi backend tại bước này'}</p>
+    </div>)}
+    {receipts.slice(-8).map((record,index)=><div className="bicycle-context-record" key={`d-${record.tracking_id}-${record.source_frame_index}-${index}`}>
+      <strong>Track {record.tracking_id} · {formatVideoTime(record.source_time_seconds)} · {deliveryOutcomeLabels[record.outcome] || 'Kết quả chưa rõ'}</strong>
+      <p>{record.backend_event_id ? `Event backend #${record.backend_event_id} · ` : ''}{record.attempts ?? '—'} lần thử{deliveryDedupLabels[record.dedup_reason] ? ` · ${deliveryDedupLabels[record.dedup_reason]}` : ''}</p>
+    </div>)}
+    {(proposal.truncated || delivery.truncated) && <p>Chỉ hiển thị tối đa 8 bản ghi mỗi nhóm trong cửa sổ này.</p>}
+    {Number(delivery.dropped_records) > 0 && <p>Toàn phiên có {delivery.dropped_records} bản ghi phản hồi không giữ được.</p>}
+    {delivery.delivery_drain_complete === false && <p>Phiên chưa hoàn tất chuyển các event đã nhận tới backend.</p>}
+    <p>Đối chiếu event backend với video để xác nhận đúng phương tiện; số khớp và cửa sổ chấm điểm giữ nguyên.</p>
   </details>
 }
 
@@ -879,9 +928,9 @@ function GroundTruthBenchmark({ selectedCameraId, sessions }) {
         {report.dominant_false_positive_reason && <div className="source-status warn"><strong>Nguyên nhân đếm dư nghi ngờ: {falsePositiveReasonLabels[report.dominant_false_positive_reason] || report.dominant_false_positive_reason}</strong><span>{Object.entries(report.false_positive_reason_counts || {}).map(([reason,count])=>`${falsePositiveReasonLabels[reason] || reason}: ${count}`).join(' · ')}</span></div>}
         {report.legacy_ai_events_without_source_time > 0 && <div className="source-status bad"><strong>⚠ Phiên cũ thiếu timecode</strong><span>{report.legacy_ai_events_without_source_time} event được tạo trước V0.5.19 nên không thể ghép chính xác. Hãy chạy lại clip một lần trên V0.5.19 rồi benchmark session mới.</span></div>}
         <h3 className="benchmark-subhead">Sai loại phương tiện ({report.class_mismatch_items?.length || 0})</h3>
-        <div className="benchmark-diff-list">{report.class_mismatch_items?.length ? report.class_mismatch_items.map(item=><div key={`c-${item.ground_truth_id}-${item.ai_event_id}`} className="diff-row false-positive class-audit-row"><button className="time-link" onClick={()=>seekTo(item.time)}><strong>{formatVideoTime(item.time)}</strong></button><span>{String(item.direction).toUpperCase()} · GT {vehicleLabels[item.ground_truth_vehicle_type] || item.ground_truth_vehicle_type}</span><em>AI → {vehicleLabels[item.ai_vehicle_type] || item.ai_vehicle_type}</em><select className="gt-class-edit" value={item.ground_truth_vehicle_type} disabled={busy} title="Sửa class GT tại timecode này" onChange={e=>updateMarkVehicle(item.ground_truth_id,e.target.value)}>{Object.entries(vehicleLabels).map(([key,label])=><option key={key} value={key}>{label}</option>)}</select><BicycleContextAudit item={item} /></div>) : <div className="empty">Không có event đã khớp thời gian nhưng sai loại xe.</div>}</div>
+        <div className="benchmark-diff-list">{report.class_mismatch_items?.length ? report.class_mismatch_items.map(item=><div key={`c-${item.ground_truth_id}-${item.ai_event_id}`} className="diff-row false-positive class-audit-row"><button className="time-link" onClick={()=>seekTo(item.time)}><strong>{formatVideoTime(item.time)}</strong></button><span>{String(item.direction).toUpperCase()} · GT {vehicleLabels[item.ground_truth_vehicle_type] || item.ground_truth_vehicle_type}</span><em>AI → {vehicleLabels[item.ai_vehicle_type] || item.ai_vehicle_type}</em><select className="gt-class-edit" value={item.ground_truth_vehicle_type} disabled={busy} title="Sửa class GT tại timecode này" onChange={e=>updateMarkVehicle(item.ground_truth_id,e.target.value)}>{Object.entries(vehicleLabels).map(([key,label])=><option key={key} value={key}>{label}</option>)}</select><BicycleContextAudit item={item} /><CrossingDeliveryAudit item={item} /></div>) : <div className="empty">Không có event đã khớp thời gian nhưng sai loại xe.</div>}</div>
         <h3 className="benchmark-subhead">Lọt không đếm ({report.missed_items?.length || 0})</h3>
-        <div className="benchmark-diff-list benchmark-audit-list">{report.missed_items?.length ? report.missed_items.map(item=>{const detail=missedAuditDetail(item);return <button key={`m-${item.ground_truth_id}`} className="diff-row audit-diff-row missed" onClick={()=>seekTo(item.time)}><strong className="diff-time">{formatVideoTime(item.time)}</strong><span className="diff-meta">{String(item.direction).toUpperCase()} · {vehicleLabels[item.vehicle_type] || item.vehicle_type}</span><em className="diff-reason">{missedAuditReason(item)}</em>{detail && <small className="diff-detail">{detail}</small>}</button>}) : <div className="empty">Chưa có xe lọt trong cửa sổ ghép hiện tại.</div>}</div>
+        <div className="benchmark-diff-list benchmark-audit-list">{report.missed_items?.length ? report.missed_items.map(item=>{const detail=missedAuditDetail(item);return <div key={`m-${item.ground_truth_id}`}><button className="diff-row audit-diff-row missed" onClick={()=>seekTo(item.time)}><strong className="diff-time">{formatVideoTime(item.time)}</strong><span className="diff-meta">{String(item.direction).toUpperCase()} · {vehicleLabels[item.vehicle_type] || item.vehicle_type}</span><em className="diff-reason">{missedAuditReason(item)}</em>{detail && <small className="diff-detail">{detail}</small>}</button><CrossingDeliveryAudit item={item} /></div>}) : <div className="empty">Chưa có xe lọt trong cửa sổ ghép hiện tại.</div>}</div>
         <h3 className="benchmark-subhead">AI đếm dư ({report.false_positive_items?.length || 0})</h3>
         <div className="benchmark-diff-list benchmark-audit-list">{report.false_positive_items?.length ? report.false_positive_items.map(item=>{const detail=falsePositiveAuditDetail(item);return <button key={`f-${item.ai_event_id}`} className="diff-row audit-diff-row false-positive" onClick={()=>seekTo(item.time)}><strong className="diff-time">{formatVideoTime(item.time)}</strong><span className="diff-meta">{String(item.direction).toUpperCase()} · {vehicleLabels[item.vehicle_type] || item.vehicle_type}</span><em className="diff-reason">{item.reason ? (falsePositiveReasonLabels[item.reason] || item.reason) : 'AI có · GT không có'}</em>{detail && <small className="diff-detail">{detail}</small>}{(item.near_matched_time_delta != null || item.near_matched_spatial_distance != null || item.near_matched_crossing_method) && <small className="diff-tech">{item.near_matched_time_delta != null ? `Δt ${Number(item.near_matched_time_delta).toFixed(3)}s` : ''}{item.near_matched_spatial_distance != null ? ` · Δxy ${Number(item.near_matched_spatial_distance).toFixed(4)}` : ''}{item.near_matched_crossing_method ? ` · ${item.near_matched_crossing_method}→${item.crossing_method || '?'}` : ''}</small>}</button>}) : <div className="empty">Chưa có lượt đếm dư trong cửa sổ ghép hiện tại.</div>}</div>
         <h3 className="benchmark-subhead">Theo loại phương tiện</h3>

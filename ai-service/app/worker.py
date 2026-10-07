@@ -647,6 +647,13 @@ class PipelineWorker(threading.Thread):
         if trace_file is None:
             return None
         try:
+            # The dispatcher only queues terminal receipts. This worker remains
+            # the sole JSONL writer, including acknowledgements received after
+            # their original source frame or during EOF delivery draining.
+            drain = getattr(self._event_dispatcher, "drain_delivery_audits", None)
+            if callable(drain):
+                for audit in drain():
+                    trace_file.write(json.dumps(audit, separators=(",", ":"), allow_nan=False) + "\n")
             trace_file.write(json.dumps(row, separators=(",", ":"), allow_nan=False) + "\n")
             return trace_file
         except Exception as exc:
@@ -1032,6 +1039,27 @@ class PipelineWorker(threading.Thread):
                 confidence = max(confidence, fresh_car[1])
         return event_label, confidence
 
+    def _truck_lock_prescan_candidate(
+        self, track_id: int, frame_index: int, display_label: str, gate_distance_ratio: float,
+    ) -> bool:
+        """Sample a live TRUCK conflict near the finite gate using spare slots.
+
+        A 45-frame periodic cadence cannot reliably supply the consecutive
+        observations required by the existing crossing-only CAR decision.
+        This schedules current-frame evidence; it does not qualify a crossing
+        or relax the confidence, distinct-frame, or semantic-lock contracts.
+        """
+        from math import isfinite
+
+        distance = float(gate_distance_ratio)
+        if (
+            str(display_label) != "truck"
+            or not isfinite(distance)
+            or not 0.0 <= distance <= self.class_refine_gate_distance_ratio
+        ):
+            return False
+        return self._truck_semantic_lock.snapshot_for(track_id, frame_index, display_label) is not None
+
     def _run_deferred_class_refinements(
         self, candidates: list[dict], frame_index: int, frame, device, use_half: bool,
         refines_used: int, crossing_track_ids: set[int],
@@ -1040,6 +1068,7 @@ class PipelineWorker(threading.Thread):
         prioritized = sorted(candidates, key=lambda item: (
             float(item["distance"]), float(item["confidence"]), int(item["track_id"]),
         ))
+        lock_prescan_candidates = []
         for candidate in prioritized:
             if used >= self.refine_max_per_frame:
                 break
@@ -1049,6 +1078,28 @@ class PipelineWorker(threading.Thread):
             refined, did_infer = self._observe_class_refiner(
                 tid, frame_index, frame, candidate["rect"], candidate["display_label"],
                 device, use_half, force=False,
+            )
+            if did_infer:
+                used += 1
+            if refined is not None:
+                self._remember_class_refinement(
+                    tid, frame_index, candidate["current_label"], candidate["stable_label"],
+                    candidate["certainty"], candidate["hits"], candidate["base_display_label"], refined,
+                )
+            elif not did_infer and self._truck_lock_prescan_candidate(
+                tid, frame_index, candidate["display_label"], candidate["distance"],
+            ):
+                lock_prescan_candidates.append(candidate)
+        # Preserve every due periodic candidate's previous priority, including
+        # motorcycles/bicycles. Extra lock-conflict samples use only unused
+        # capacity after crossing work and the ordinary periodic queue.
+        for candidate in lock_prescan_candidates:
+            if used >= self.refine_max_per_frame:
+                break
+            tid = int(candidate["track_id"])
+            refined, did_infer = self._observe_class_refiner(
+                tid, frame_index, frame, candidate["rect"], candidate["display_label"],
+                device, use_half, force=True,
             )
             if did_infer:
                 used += 1
@@ -2402,7 +2453,6 @@ class PipelineWorker(threading.Thread):
             trace_usable = True
             if counter is not None and self._pending_guard_crossings:
                 trace_usable = self._expire_guard_crossings(counter, trace_file)
-            self._close_and_publish_benchmark_trace(trace_file, publish=trace_usable)
             if cap is not None:
                 cap.release()
             try:
@@ -2410,7 +2460,20 @@ class PipelineWorker(threading.Thread):
                     self._jpeg_encoder.stop_and_join(timeout=4.0)
             except Exception:
                 pass
-            self._drain_events_before_finish(terminal_status=terminal_status)
+            # Preserve ownership through both delivery and artifact closure.
+            # Closing before this drain would omit late backend decisions from
+            # the certified trace even though the session finishes afterwards.
+            self._drain_events_before_finish(terminal_status="draining")
+            trace_file = self._write_benchmark_trace(trace_file, {
+                "kind": "delivery_summary", "audit_only": True,
+                "camera_id": self.payload.camera_id, "session_id": self.payload.session_id,
+                "delivery_drain_complete": self.state.status == "draining",
+                "delivery_audit_dropped": int(getattr(self._event_dispatcher, "delivery_audit_dropped", 0)),
+                "pending_events": int(getattr(self.state, "pending_events", 0)),
+            })
+            self._close_and_publish_benchmark_trace(trace_file, publish=trace_usable)
+            if self.state.status != "error":
+                self.state.status = terminal_status
             self._notify_finished()
             self.on_finished(self.payload.camera_id)
 

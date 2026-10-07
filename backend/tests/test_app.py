@@ -20,7 +20,7 @@ def test_root_metadata() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["name"] == "Traffic AI"
-    assert payload["version"] == "0.5.62"
+    assert payload["version"] == "0.5.63"
     assert payload["docs"] == "/docs"
     assert payload["health"] == "/api/health"
 
@@ -158,7 +158,7 @@ def test_benchmark_clone_compatibility_rejects_different_line() -> None:
 
 
 def test_backend_version_metadata() -> None:
-    assert app.version == "0.5.62"
+    assert app.version == "0.5.63"
 
 
 def test_v0531_startup_crossing_signature_guard_is_narrow() -> None:
@@ -179,7 +179,7 @@ def test_v0533_ground_truth_mark_update_schema() -> None:
 
 
 def test_v0533_version() -> None:
-    assert app.version == "0.5.62"
+    assert app.version == "0.5.63"
 
 
 def test_v0533_ground_truth_mark_update_keeps_timecode() -> None:
@@ -1044,6 +1044,71 @@ def test_v0555_class_trace_missing_track_does_not_claim_nearby_decision() -> Non
     assert item["diagnosis"]["bicycle_context_scope"] == "nearby_tracks"
     assert item["diagnosis"]["bicycle_context_audit"] == [other]
     assert "bicycle_context_scope" not in diagnosis
+
+
+def test_v0563_crossing_trace_scopes_signed_event_and_omits_private_fields() -> None:
+    from app.api.routes import _attach_benchmark_trace_diagnosis
+    own = {"tracking_id": -1, "source_frame_index": 1737, "source_time_seconds": 69.4566,
+           "stage": "committed_before_submit", "snapshot_path": "private.jpg", "model_id": 9}
+    foreign = {"tracking_id": 88, "source_frame_index": 1737, "source_time_seconds": 69.4566}
+    diagnosis = {
+        "reason": "crossing_proposal_observed", "diagnosis_scope": {"reason": "matched_track_proposal"},
+        "crossing_proposal_audit": {"records": [foreign, own], "backend_persistence": "persisted"},
+        "event_delivery_audit": {"records": [dict(own, stage="backend_acknowledged", outcome="deduplicated",
+            attempts=1, backend_event_id=12, dedup_reason="secondary-reverse-shadow", response_body="private")],
+            "dropped_records": 3, "delivery_drain_complete": True, "pending_events": 0},
+    }
+    item = {"ai_tracking_id": -1}
+    _attach_benchmark_trace_diagnosis(item, diagnosis)
+    proposal = item["diagnosis"]["crossing_proposal_audit"]
+    receipt = item["diagnosis"]["event_delivery_audit"]
+    assert proposal["scope"] == receipt["scope"] == "matched_track"
+    assert proposal["backend_persistence"] == "unverified"
+    assert proposal["records"] == [{key: own[key] for key in
+        ("tracking_id", "source_frame_index", "source_time_seconds", "stage")}]
+    assert receipt["records"][0]["backend_event_id"] == 12
+    assert "response_body" not in receipt["records"][0] and "snapshot_path" not in receipt["records"][0]
+    assert receipt["summary_scope"] == "session_global" and receipt["dropped_records"] == 3
+    assert item["diagnosis"]["diagnosis_scope"]["reason"] == "matched_track_proposal"
+    assert diagnosis["crossing_proposal_audit"]["records"] == [foreign, own]
+
+
+def test_v0563_nearby_crossing_trace_cannot_claim_matched_gt_track() -> None:
+    from app.api.routes import _attach_benchmark_trace_diagnosis
+    foreign = {"tracking_id": 88, "source_time_seconds": 69.4566, "stage": "committed_before_submit"}
+    diagnosis = {"reason": "crossing_proposal_observed", "diagnosis_scope": {"reason": "matched_track_proposal"},
+                 "crossing_proposal_audit": {"records": [foreign]}}
+    missed = {"time": 69.457}
+    _attach_benchmark_trace_diagnosis(missed, diagnosis)
+    assert missed["diagnosis"]["crossing_proposal_audit"]["scope"] == "nearby_time_window"
+    assert missed["diagnosis"]["diagnosis_scope"]["reason"] == "nearby_time_window"
+    mismatch = {"ai_tracking_id": -1}
+    _attach_benchmark_trace_diagnosis(mismatch, diagnosis)
+    assert mismatch["diagnosis"]["crossing_proposal_audit"]["scope"] == "no_proposal_evidence"
+    assert mismatch["diagnosis"]["diagnosis_scope"]["reason"] == "nearby_time_window"
+    assert diagnosis["diagnosis_scope"]["reason"] == "matched_track_proposal"
+
+
+def test_v0563_crossing_trace_bounds_malformed_and_extra_records_without_changing_scores() -> None:
+    from app.api.routes import _attach_benchmark_trace_diagnosis
+    from app.benchmarking import match_crossings
+    from types import SimpleNamespace
+    gt = SimpleNamespace(id=1, source_time_seconds=10.0, direction="out", vehicle_type="car")
+    event = SimpleNamespace(id=12, source_time_seconds=10.1, direction="out", vehicle_type="truck", tracking_id=-1)
+    report = match_crossings([gt], [event], 0.75)
+    scores = {key: report[key] for key in ("matched", "missed", "false_positives", "class_accuracy")}
+    item = report["class_mismatch_items"][0]
+    item["ai_tracking_id"] = -1
+    records = [None, {"tracking_id": True}, {"tracking_id": "-1"}] + [
+        {"tracking_id": -1, "source_frame_index": frame, "stage": "backend_acknowledged"} for frame in range(10)]
+    diagnosis = {"event_delivery_audit": {"records": records}, "crossing_proposal_audit": {"records": "invalid"}}
+    _attach_benchmark_trace_diagnosis(item, diagnosis)
+    audit = item["diagnosis"]["event_delivery_audit"]
+    assert len(audit["records"]) == 8 and audit["truncated"] is True
+    assert [record["source_frame_index"] for record in audit["records"]] == list(range(2, 10))
+    assert item["diagnosis"]["crossing_proposal_audit"]["records"] == []
+    assert scores == {key: report[key] for key in scores}
+    assert len(diagnosis["event_delivery_audit"]["records"]) == 13
 
 
 def test_v0555_event_refreshes_session_and_bucket_after_another_delivery() -> None:
