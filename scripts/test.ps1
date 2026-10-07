@@ -323,12 +323,12 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.61") { throw "VERSION phải là 0.5.61, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0075_span_clock_class_v0561.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0075_span_clock_class_v0561.py." }
+  if ($version -ne "0.5.62") { throw "VERSION phải là 0.5.62, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0076_identity_audit_v0562.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0076_identity_audit_v0562.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0075_span_clock_class_v0561"' -or $migrationText -notmatch 'down_revision = "0074_stop_ack_compat_v0560"' -or $migrationText -notmatch "value='0.5.61'") {
-    throw "Migration 0075_span_clock_class_v0561 không đúng contract V0.5.61."
+  if ($migrationText -notmatch 'revision = "0076_identity_audit_v0562"' -or $migrationText -notmatch 'down_revision = "0075_span_clock_class_v0561"' -or $migrationText -notmatch "value='0.5.62'") {
+    throw "Migration 0076_identity_audit_v0562 không đúng contract V0.5.62."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
@@ -1825,6 +1825,34 @@ function Assert-SpanClockClassV0561Contract {
   Write-Host "[OK] Span Clock + Fresh Class Closure V0.5.61" -ForegroundColor Green
 }
 
+function Assert-IdentityProvenanceV0562Contract {
+  Write-Host "`n[Traffic AI] Identity Separation + Evidence Provenance V0.5.62" -ForegroundColor Cyan
+  $tracking = Get-Content (Join-Path $root "ai-service\app\tracking.py") -Raw -Encoding UTF8
+  $worker = Get-Content (Join-Path $root "ai-service\app\worker.py") -Raw -Encoding UTF8
+  $trace = Get-Content (Join-Path $root "ai-service\app\benchmark_trace.py") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  if ($tracking -notmatch 'def _fresh_canonical_id' -or $tracking -notmatch '_next_synthetic_canonical_id' -or $tracking -notmatch '_reserved_negative_ids') {
+    throw "V0.5.62 thiếu identity riêng khi canonical ID đã được dùng."
+  }
+  if ($worker -notmatch 'primary_clock_lookup' -or $worker -notmatch '(?s)self\._class_refine_overrides\[int\(track_id\)\] = \(\s*str\(resolved_label\).*if semantic_lock is not None and resolved_label') {
+    throw "V0.5.62 thiếu cache bằng chứng thật trước ưu tiên semantic lock."
+  }
+  if ($trace -notmatch 'class _FiniteTrackAudit' -or $trace -notmatch 'finite_segment_observations' -or $trace -notmatch 'extension_only_span' -or $trace -notmatch 'unverified_span') {
+    throw "V0.5.62 thiếu chẩn đoán đoạn vạch hữu hạn và evidence chưa xác minh."
+  }
+  if ($worker -notmatch 'def _crossing_proposal_metadata' -or $worker -notmatch '"crossing_proposals"' -or $worker -notmatch '"crossing_clock_audit"' -or $worker -notmatch 'submitted_after_guard') {
+    throw "V0.5.62 thiếu track/source clock và producer stage cho proposal crossing."
+  }
+  if ($frontend -notmatch 'crossing_outside_segment_geometry' -or $frontend -notmatch 'crossing_unverified_span') {
+    throw "V0.5.62 thiếu nhãn chẩn đoán finite gate."
+  }
+  foreach ($relative in @("ai-service\tests\test_tracking.py", "ai-service\tests\test_worker_context.py", "ai-service\tests\test_guard_transaction.py", "ai-service\tests\test_v0541_benchmark_trace.py")) {
+    $text = Get-Content (Join-Path $root $relative) -Raw -Encoding UTF8
+    if ($text -notmatch 'def test_v0562_') { throw "V0.5.62 thiếu regression trong $relative." }
+  }
+  Write-Host "[OK] Identity Separation + Evidence Provenance V0.5.62" -ForegroundColor Green
+}
+
 function Invoke-Step([string]$Title, [scriptblock]$Action) {
   Write-Host "`n[Traffic AI] $Title" -ForegroundColor Cyan
   & $Action
@@ -1902,6 +1930,7 @@ Assert-TraceLifecycleV0558Contract
 Assert-TraceIdentityV0559Contract
 Assert-StopAckCompatibilityV0560Contract
 Assert-SpanClockClassV0561Contract
+Assert-IdentityProvenanceV0562Contract
 Assert-LegacySemanticCompatibilityV0523R1
 
 Write-Host "`n[Traffic AI] Road Zone + Frame Browser V0.5.11" -ForegroundColor Cyan

@@ -547,6 +547,15 @@ class PipelineWorker(threading.Thread):
                 pending.crossing_x, pending.crossing_y,
             )
         )
+        audit_rows = getattr(self, "_guard_crossing_proposals_this_frame", None)
+        if audit_rows is None:
+            audit_rows = self._guard_crossing_proposals_this_frame = []
+        audit_rows.append(self._crossing_proposal_metadata(
+            pending.track_id, pending.label, pending.direction, pending.confidence,
+            pending.frame_index, pending.source_time_seconds, pending.crossing_method,
+            pending.crossing_x, pending.crossing_y, stage="submitted_after_guard",
+            observed_frame_index=pending.observed_frame_index or pending.frame_index,
+        ))
         self.state.human_guard_deferred_commits += 1
         self._pending_guard_crossings.pop(int(pending.track_id), None)
         self.state.human_guard_pending_crossings = len(self._pending_guard_crossings)
@@ -613,6 +622,25 @@ class PipelineWorker(threading.Thread):
             getattr(self.state, "benchmark_trace_warning", None)
             or f"Benchmark trace {stage} failed: {exc}"
         )
+
+    def _crossing_proposal_metadata(
+        self, track_id: int, label: str, direction: str, confidence: float,
+        source_frame_index: int | None, source_time_seconds: float | None,
+        crossing_method: str | None, crossing_x: float | None, crossing_y: float | None,
+        *, stage: str, observed_frame_index: int,
+    ) -> dict:
+        """Audit producer provenance without claiming backend persistence."""
+        payload = self._event_payload(
+            track_id, label, direction, confidence, None, source_frame_index,
+            source_time_seconds, crossing_method, crossing_x, crossing_y,
+        )
+        return {
+            key: payload[key] for key in (
+                "camera_id", "session_id", "tracking_id", "vehicle_type", "direction",
+                "confidence", "source_frame_index", "source_time_seconds", "crossing_method",
+                "crossing_x", "crossing_y",
+            )
+        } | {"stage": stage, "observed_frame_index": int(observed_frame_index)}
 
     def _write_benchmark_trace(self, trace_file, row: dict):
         """Disable a failed optional writer without interrupting event dispatch."""
@@ -893,6 +921,18 @@ class PipelineWorker(threading.Thread):
             resolved_label, resolved_conf = self._class_policy.final_label(
                 current_label, stable_label, certainty, hits, refined
             )
+            if str(resolved_label) != str(refined[0]):
+                # A rejected correction leaves a primary/smoothed label in
+                # place. The losing refiner observation is not a fresh source
+                # observation of that retained label.
+                labels = getattr(self, "_labels", None)
+                primary_clock_lookup = getattr(labels, "source_frame_for", None)
+                retained_clock = (
+                    primary_clock_lookup(track_id, resolved_label)
+                    if primary_clock_lookup is not None else None
+                )
+                if retained_clock is not None:
+                    source_frame = int(retained_clock)
         if vehicle_family(resolved_label) != vehicle_family(base_display_label):
             return self._class_override_for(track_id, frame_index, base_display_label)
 
@@ -904,12 +944,19 @@ class PipelineWorker(threading.Thread):
         semantic_lock = self._refresh_truck_semantic_lock(
             track_id, frame_index, stable_label, certainty, hits
         )
-        if semantic_lock is not None and resolved_label in {"car", "bus", "truck"}:
-            resolved_label, resolved_conf = semantic_lock
-
+        # Keep the qualified refinement underneath an eligible lock. Copying
+        # the lock into this cache with CAR/BUS's fresh clock would prolong
+        # TRUCK after the lock's own source evidence has expired.
+        age = int(frame_index) - int(source_frame)
+        if age < 0 or age > self._class_refinement_ttl(resolved_label):
+            return self._class_override_for(track_id, frame_index, base_display_label)
+        if existing is not None and int(source_frame) < int(existing[2]):
+            return self._class_override_for(track_id, frame_index, base_display_label)
         self._class_refine_overrides[int(track_id)] = (
             str(resolved_label), float(resolved_conf), int(source_frame)
         )
+        if semantic_lock is not None and resolved_label in {"car", "bus", "truck"}:
+            resolved_label, resolved_conf = semantic_lock
         if resolved_label == "bicycle" and base_display_label != "bicycle" and int(track_id) not in self._bicycle_class_rescue_tracks:
             self._bicycle_class_rescue_tracks.add(int(track_id))
             self.state.bicycle_class_rescues += 1
@@ -1593,6 +1640,7 @@ class PipelineWorker(threading.Thread):
                 gate_trace_tracks = []
                 self._bicycle_xframe_audit_this_frame = []
                 self._class_refine_decision_audit_this_frame = []
+                self._guard_crossing_proposals_this_frame = []
                 frame_start_deferred_commits = self.state.human_guard_deferred_commits
                 # Expire a provisional passage before any returning detection
                 # can commit it. The observed-frame deadline applies equally to
@@ -1847,6 +1895,7 @@ class PipelineWorker(threading.Thread):
                             lineage_size=self._continuity.lineage_size(track_id),
                         )
                         if direction is not None:
+                            gate_trace_track["primary_gate_direction"] = direction
                             span_clock_reconciliation_frame = anchor_span_rescuer.reconciliation_crossing_frame_for(
                                 track_id, direction, frame_index,
                             )
@@ -2031,6 +2080,16 @@ class PipelineWorker(threading.Thread):
                             crossing_point = counter.crossing_point_for(track_id)
                             crossing_x = (crossing_point[0] / width) if crossing_point is not None and width > 0 else None
                             crossing_y = (crossing_point[1] / height) if crossing_point is not None and height > 0 else None
+                            gate_trace_track["crossing_clock_audit"] = {
+                                "direction": direction, "crossing_method": crossing_method,
+                                "geometric_frame_index": crossing_frame_float,
+                                "trusted_span_frame_index": span_clock_reconciliation_frame,
+                                "selected_frame_index": selected_crossing_frame,
+                                "source_frame_index": event_frame_index,
+                                "source_time_seconds": source_time_seconds,
+                                "vehicle_type": event_label,
+                                "producer_decision": "committed_before_submit",
+                            }
 
                             if event_label in TWO_WHEEL_LABELS:
                                 action, _ = self._observe_human_guard(
@@ -2039,6 +2098,7 @@ class PipelineWorker(threading.Thread):
                                 )
                                 gate_trace_track["human_guard_status"] = self._human_guard_policy.status(track_id)
                                 if action == "rejected":
+                                    gate_trace_track["crossing_clock_audit"]["producer_decision"] = "human_guard_rejected"
                                     if context_trace.get("audit") is not None:
                                         context_trace["audit"]["commit_status"] = "rejected"
                                     self._rollback_guard_crossing(
@@ -2051,6 +2111,7 @@ class PipelineWorker(threading.Thread):
                                     )
                                     continue
                                 if action == "pending":
+                                    gate_trace_track["crossing_clock_audit"]["producer_decision"] = "human_guard_pending"
                                     if context_trace.get("audit") is not None:
                                         context_trace["audit"]["commit_status"] = "pending"
                                     # Do not increment dashboard totals and do not
@@ -2220,6 +2281,11 @@ class PipelineWorker(threading.Thread):
                         "crossing_events": len(pending_crossing_events) + (
                             self.state.human_guard_deferred_commits - frame_start_deferred_commits
                         ),
+                        "crossing_proposals": [
+                            self._crossing_proposal_metadata(
+                                *proposal, stage="committed_before_submit", observed_frame_index=frame_index,
+                            ) for proposal in pending_crossing_events
+                        ] + self._guard_crossing_proposals_this_frame,
                         "rejected_outside_road": counter.rejected_outside_road,
                         "rejected_outside_segment": counter.rejected_outside_segment,
                         "rejected_unconfirmed_side": counter.rejected_unconfirmed_side,

@@ -7,7 +7,9 @@ import gzip
 from bisect import bisect_left, bisect_right
 from collections import deque
 from hashlib import sha256
-from math import inf, nextafter
+from math import inf, isfinite, nextafter
+
+from app.counting import segment_crossing_point, signed_distance
 from pathlib import Path
 from typing import Iterable
 from uuid import uuid4
@@ -166,7 +168,10 @@ def _context_decision_key(audit: dict) -> tuple[int, int] | None:
         return None
 
 
-def _gate_span_audit(rows: list[dict], tracking_id: int | None = None, context_updates: list[dict] | None = None) -> dict:
+def _gate_span_audit(
+    rows: list[dict], tracking_id: int | None = None, context_updates: list[dict] | None = None,
+    *, geometry_metadata: dict | None = None,
+) -> dict:
     tracks: dict[int, dict[str, list[float] | str]] = {}
     xframe_audits: list[dict] = []
     context_audits: dict[tuple[int, int], dict] = {}
@@ -229,8 +234,23 @@ def _gate_span_audit(rows: list[dict], tracking_id: int | None = None, context_u
             center_only.append(summary)
         elif min_abs <= 0.020:
             near.append(summary)
+    finite_fields = {}
+    geometry = _finite_geometry_context(geometry_metadata or {})
+    if geometry is None:
+        geometry = next((value for row in rows if (value := _finite_geometry_context(row)) is not None), None)
+    if geometry is not None:
+        window = _TraceWindow(0.0, tracking_id)
+        window.geometry_context = geometry
+        for row in rows:
+            window.observe(row)
+        audited = window.finish()["gate_span_audit"]
+        anchor_span, center_only, near = (audited[key] for key in ("anchor_span", "center_only_span", "near_no_span"))
+        finite_fields = {key: audited[key] for key in (
+            "geometry_basis", "geometry_max_gap_frames", "extension_only_span", "unverified_span",
+        )}
     return {
         "anchor_span": anchor_span, "center_only_span": center_only, "near_no_span": near,
+        **finite_fields,
         # A gate observation belongs to a known benchmark track only when the
         # caller supplied its identity and that identity was present here. A
         # nearby vehicle's geometry cannot identify an otherwise missed GT row.
@@ -251,6 +271,7 @@ def _diagnosis_scope(reason: str, gate_audit: dict, tracking_id: int | None) -> 
         reason_scope = "no_trace_window"
     elif geometry_scope == "matched_track" and reason in {
         "crossing_anchor_span_reject", "crossing_center_only_span", "crossing_near_no_span",
+        "crossing_outside_segment_geometry", "crossing_unverified_span",
     }:
         reason_scope = "matched_track_geometry"
     return {
@@ -261,11 +282,94 @@ def _diagnosis_scope(reason: str, gate_audit: dict, tracking_id: int | None) -> 
     }
 
 
+TRACE_GEOMETRY_MAX_GAP_FRAMES = 45
+
+
+def _finite_geometry_context(row: dict) -> tuple | None:
+    """Use only the recorded processed-frame geometry, never current settings."""
+    if row.get("kind") != "geometry_metadata" or row.get("coordinate_system") != "normalized_processed_frame":
+        return None
+    try:
+        width, height = float(row["frame_width"]), float(row["frame_height"])
+        line = row["line"]
+        if not isfinite(width) or not isfinite(height) or width <= 0 or height <= 0 or len(line) != 2:
+            return None
+        points = [tuple(float(value) for value in point) for point in line]
+        if any(len(point) != 2 or not all(isfinite(value) and 0 <= value <= 1 for value in point) for point in points):
+            return None
+        a, b = [(point[0] * width, point[1] * height) for point in points]
+        if a == b:
+            return None
+        if b[0] < a[0]:
+            a, b = b, a
+        return a, b, max(1.0, min(width, height))
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return None
+
+
+class _FiniteTrackAudit:
+    """Bounded adjacent-observation evidence; a signed extension is not a gate."""
+
+    def __init__(self, geometry):
+        self.geometry = geometry
+        self.previous = None
+        self.last_sides = [0, 0]
+        self.finite = [False, False]
+        self.outside = [False, False]
+        self.unverified = False
+
+    def observe(self, row, item):
+        try:
+            frame = int(row["frame_index"])
+            if frame < 1 or frame != row["frame_index"]:
+                raise ValueError("Invalid source frame")
+            points = [tuple(float(value) for value in item[key]) for key in ("anchor", "center")]
+            if any(len(point) != 2 or not all(isfinite(value) for value in point) for point in points):
+                raise ValueError("Invalid observed point")
+            a, b, scale = self.geometry
+            distances = [signed_distance(point, a, b) / scale for point in points]
+            signed = [float(item[key]) for key in ("anchor_signed", "center_signed")]
+            if any(not isfinite(value) or abs(distance - value) > 0.0001 for distance, value in zip(distances, signed)):
+                raise ValueError("Signed geometry does not match recorded coordinates")
+        except (KeyError, TypeError, ValueError, OverflowError):
+            self.unverified = True
+            self.previous = None
+            return
+        sample = frame, points, distances
+        if self.previous is not None:
+            previous_frame, previous_points, previous_distances = self.previous
+            gap = frame - previous_frame
+            if gap <= 0:
+                # A repeated identical row supplies no new trajectory. Conflicting
+                # aliases at one frame or unordered clocks cannot prove a path.
+                if gap < 0 or points != previous_points:
+                    self.unverified = True
+                return
+            if gap > TRACE_GEOMETRY_MAX_GAP_FRAMES:
+                self.unverified = True
+            else:
+                for index, (before, after) in enumerate(zip(previous_distances, distances)):
+                    side = 1 if after > 0 else -1 if after < 0 else 0
+                    crossed = before * after < 0 or (before == 0 and side and self.last_sides[index] == -side)
+                    if crossed:
+                        point = segment_crossing_point(previous_points[index], points[index], a, b)
+                        if point is None:
+                            self.outside[index] = True
+                        else:
+                            self.finite[index] = True
+        self.previous = sample
+        for index, distance in enumerate(distances):
+            if distance:
+                self.last_sides[index] = 1 if distance > 0 else -1
+
+
 class _TraceWindow:
     def __init__(self, target, track):
         self.target = target
         self.track = track
         self.geometry = {}
+        self.geometry_context = None
+        self.finite_geometry = {}
         self.context = {}
         self.legacy = deque(maxlen=8)
         self.count = 0
@@ -295,6 +399,11 @@ class _TraceWindow:
                 continue
             if self.track is not None and tid != self.track:
                 continue
+            if self.geometry_context is not None:
+                audit = self.finite_geometry.get(tid)
+                if audit is None:
+                    audit = self.finite_geometry[tid] = _FiniteTrackAudit(self.geometry_context)
+                audit.observe(row, item)
             values = self.geometry.get(tid)
             if values is None:
                 self.geometry[tid] = [anchor, anchor, center, center, abs(anchor), str(item.get('label', ''))]
@@ -320,13 +429,45 @@ class _TraceWindow:
                 if self.geometry else 'no_track_evidence',
                 'bicycle_xframe_audit': list(self.legacy),
                 'bicycle_context_audit': list(self.context.values())}
+        if self.geometry_context is not None:
+            gate.update(geometry_basis="finite_segment_observations",
+                        geometry_max_gap_frames=TRACE_GEOMETRY_MAX_GAP_FRAMES,
+                        extension_only_span=[], unverified_span=[])
         for tid, (amin, amax, cmin, cmax, anear, label) in self.geometry.items():
             item = {'track_id': tid, 'label': label, 'anchor_min': round(amin, 6),
                     'anchor_max': round(amax, 6), 'center_min': round(cmin, 6), 'center_max': round(cmax, 6)}
-            if amin < -0.006 and amax > 0.006:
+            anchor_span = amin < -0.006 and amax > 0.006
+            center_span = cmin < -0.006 and cmax > 0.006
+            audit = self.finite_geometry.get(tid)
+            if self.geometry_context is not None:
+                verified = audit is not None and not audit.unverified
+                item.update(
+                    anchor_finite_span=bool(verified and anchor_span and audit.finite[0]),
+                    center_finite_span=bool(verified and center_span and audit.finite[1]),
+                    anchor_extension_only=bool(verified and anchor_span and audit.outside[0] and not audit.finite[0]),
+                    center_extension_only=bool(verified and center_span and audit.outside[1] and not audit.finite[1]),
+                    geometry_unverified=not verified,
+                )
+            if self.geometry_context is None:
+                if anchor_span:
+                    gate['anchor_span'].append(item)
+                elif center_span:
+                    gate['center_only_span'].append(item)
+                elif anear <= 0.020:
+                    gate['near_no_span'].append(item)
+            elif audit is None or audit.unverified:
+                if anchor_span or center_span:
+                    gate['unverified_span'].append(item)
+                elif anear <= 0.020:
+                    gate['near_no_span'].append(item)
+            elif anchor_span and audit.finite[0]:
                 gate['anchor_span'].append(item)
-            elif cmin < -0.006 and cmax > 0.006:
+            elif center_span and audit.finite[1]:
                 gate['center_only_span'].append(item)
+            elif (anchor_span and audit.outside[0]) or (center_span and audit.outside[1]):
+                gate['extension_only_span'].append(item)
+            elif anchor_span or center_span:
+                gate['unverified_span'].append(item)
             elif anear <= 0.020:
                 gate['near_no_span'].append(item)
         output = {'time': self.target, 'gate_span_audit': gate,
@@ -358,6 +499,10 @@ class _TraceWindow:
                 reason = 'crossing_anchor_span_reject'
             elif gate['center_only_span']:
                 reason = 'crossing_center_only_span'
+            elif gate.get('extension_only_span'):
+                reason = 'crossing_outside_segment_geometry'
+            elif gate.get('unverified_span'):
+                reason = 'crossing_unverified_span'
             elif gate['near_no_span']:
                 reason = 'crossing_near_no_span'
             else:
@@ -414,6 +559,12 @@ def diagnose_trace(session_id: int, times: Iterable[float], window_seconds: floa
                     yield row
 
         for row in rows():
+            geometry = _finite_geometry_context(row)
+            if geometry is not None:
+                for item in windows:
+                    if item.geometry_context is None:
+                        item.geometry_context = geometry
+                continue
             try:
                 clock = float(row.get("source_time_seconds", -9999.0))
             except (TypeError, ValueError):

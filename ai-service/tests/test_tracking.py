@@ -1,6 +1,198 @@
 from app.tracking import TrackContinuityResolver, motion_leading_anchor
 
 
+def _v0562_recorded_visible_alias(resolver, *, first_frame=7271):
+    # Session 167: two physical detections coexist after raw 107899 was
+    # stitched to 104160. Seed that existing alias through the public API;
+    # these are recorded centers/boxes, not a model or GT replay.
+    samples = (
+        (7271, (849.012, 744.021), (808.603, 677.041, 889.422, 811.)),
+        (7272, (836.636, 756.926), (800.797, 702.852, 872.475, 811.)),
+    ) if first_frame == 7271 else (
+        (7253, (847.616, 422.838), (811.569, 356.919, 883.664, 488.757)),
+        (7254, (851.724, 429.391), (816.516, 366.675, 886.932, 492.107)),
+    )
+    frame, point, rect = samples[0]
+    resolver.resolve(104160, point, 'motorcycle', frame, 1440, 811, rect=rect)
+    resolver.alias_raw_id(107899, 104160)
+    frame, point, rect = samples[1]
+    resolver.resolve(107899, point, 'motorcycle', frame, 1440, 811, rect=rect)
+
+
+def test_v0562_recorded_alias_first_cannot_reuse_claimed_original_token() -> None:
+    resolver = TrackContinuityResolver()
+    _v0562_recorded_visible_alias(resolver)
+    moving, stitched = resolver.resolve(
+        107899, (825.122, 767.096), 'motorcycle', 7273, 1440, 811,
+        rect=(793.123, 723.193, 857.122, 811.),
+    )
+    heading = resolver.anchor_velocity_for(moving)
+    returning, returning_stitched = resolver.resolve(
+        104160, (809.997, 42.527), 'motorcycle', 7273, 1440, 811, {moving},
+        rect=(792.149, 23.915, 827.845, 61.138),
+    )
+    assert moving == 104160 and not stitched
+    assert returning < 0 and returning != moving and not returning_stitched
+    assert resolver._states[moving].point == (825.122, 767.096)
+    assert resolver.anchor_velocity_for(moving) == heading
+    assert resolver.velocity_for(returning) == (0., 0.)
+    assert resolver.anchor_velocity_for(returning) == (0., 0.)
+    assert resolver.lineage_size(returning) == 1
+
+
+def test_v0562_recorded_first_visible_collision_starts_independent_state() -> None:
+    resolver = TrackContinuityResolver()
+    _v0562_recorded_visible_alias(resolver, first_frame=7253)
+    moving, _ = resolver.resolve(
+        107899, (854.710, 445.602), 'motorcycle', 7255, 1440, 811,
+        rect=(816.802, 378.934, 892.619, 512.270),
+    )
+    returning, _ = resolver.resolve(
+        104160, (810.011, 39.530), 'motorcycle', 7255, 1440, 811, {moving},
+        rect=(792.547, 18.784, 827.475, 60.277),
+    )
+    assert returning != moving
+    assert resolver._states[returning].point == (810.011, 39.530)
+    assert resolver._states[returning].last_raw_id == 104160
+
+
+def test_v0562_original_first_keeps_raw_token_and_splits_alias_into_its_own_token() -> None:
+    resolver = TrackContinuityResolver()
+    _v0562_recorded_visible_alias(resolver)
+    first, _ = resolver.resolve(104160, (809.997, 42.527), 'motorcycle', 7273, 1440, 811)
+    second, stitched = resolver.resolve(107899, (825.122, 767.096), 'motorcycle', 7273, 1440, 811, {first})
+    assert first == 104160 and second == 107899 and not stitched
+    assert resolver.velocity_for(second) == (0., 0.)
+
+
+def test_v0562_assigned_split_survives_next_frame_and_observation_order_change() -> None:
+    resolver = TrackContinuityResolver()
+    _v0562_recorded_visible_alias(resolver)
+    moving, _ = resolver.resolve(107899, (825.122, 767.096), 'motorcycle', 7273, 1440, 811)
+    returning, _ = resolver.resolve(104160, (809.997, 42.527), 'motorcycle', 7273, 1440, 811, {moving})
+    assert returning != moving
+    for frame in (7274, 7275, 7276):
+        upper, upper_stitched = resolver.resolve(104160, (810., 42.), 'motorcycle', frame, 1440, 811)
+        lower, lower_stitched = resolver.resolve(107899, (818., 782.), 'motorcycle', frame, 1440, 811, {upper})
+        assert (upper, lower) == (returning, moving)
+        assert not upper_stitched and not lower_stitched
+
+
+def test_v0562_claimed_alias_can_stitch_to_a_different_compatible_identity() -> None:
+    resolver = TrackContinuityResolver()
+    resolver.resolve(10, (900., 700.), 'motorcycle', 10, 1440, 811)
+    resolver.alias_raw_id(44, 10)
+    resolver.resolve(20, (100., 100.), 'motorcycle', 10, 1440, 811, {10})
+    occupied, _ = resolver.resolve(44, (900., 701.), 'motorcycle', 11, 1440, 811)
+    recovered, stitched = resolver.resolve(10, (101., 102.), 'motorcycle', 11, 1440, 811, {occupied})
+    assert recovered == 20 and stitched
+    assert resolver._states[occupied].point == (900., 701.)
+    assert resolver.lineage_size(recovered) == 2
+
+
+def test_v0562_successive_collision_allocations_are_distinct() -> None:
+    resolver = TrackContinuityResolver()
+    allocated = []
+    for raw in (10, 20, 30):
+        first, _ = resolver.resolve(raw, (100., 100.), 'car', 10, 1000, 1000, set(allocated))
+        second, stitched = resolver.resolve(raw, (900., 900.), 'car', 10, 1000, 1000, {first, *allocated})
+        assert second < 0 and second != first and not stitched
+        allocated.append(second)
+    assert len(set(allocated)) == 3
+
+
+def test_v0562_expiry_does_not_reuse_a_synthetic_identity_or_its_heading() -> None:
+    resolver = TrackContinuityResolver(max_gap_frames=2)
+    original, _ = resolver.resolve(10, (100., 100.), 'car', 1, 1000, 1000)
+    fresh, _ = resolver.resolve(10, (900., 900.), 'car', 1, 1000, 1000, {original})
+    resolver.resolve(10, (900., 888.), 'car', 2, 1000, 1000)
+    assert resolver.anchor_velocity_for(fresh)[1] < 0
+    reused_raw, _ = resolver.resolve(10, (100., 100.), 'car', 19, 1000, 1000)
+    assert reused_raw == 10
+    new_fresh, _ = resolver.resolve(10, (900., 900.), 'car', 19, 1000, 1000, {reused_raw})
+    assert new_fresh < 0 and new_fresh != fresh
+    assert resolver.anchor_velocity_for(fresh) == (0., 0.)
+    assert resolver.anchor_velocity_for(new_fresh) == (0., 0.)
+
+
+def test_v0562_arriving_raw_token_cannot_reuse_a_retired_synthetic_canonical() -> None:
+    resolver = TrackContinuityResolver(max_gap_frames=2)
+    original, _ = resolver.resolve(10, (100., 100.), 'car', 1, 1000, 1000)
+    fresh, _ = resolver.resolve(10, (900., 900.), 'car', 1, 1000, 1000, {original})
+    assert fresh < 0
+    arriving, stitched = resolver.resolve(fresh, (500., 500.), 'car', 18, 1000, 1000)
+    assert arriving < 0 and arriving != fresh and not stitched
+
+
+def test_v0562_allocator_skips_expired_negative_raw_tokens() -> None:
+    resolver = TrackContinuityResolver(max_gap_frames=2)
+    negative, _ = resolver.resolve(-1, (100., 100.), 'car', 1, 1000, 1000)
+    assert negative == -1
+    original, _ = resolver.resolve(10, (100., 100.), 'car', 18, 1000, 1000)
+    fresh, _ = resolver.resolve(10, (900., 900.), 'car', 18, 1000, 1000, {original})
+    assert fresh < 0 and fresh != negative
+
+
+def test_v0562_allocator_keeps_live_negative_raw_identity_separate() -> None:
+    resolver = TrackContinuityResolver()
+    negative, _ = resolver.resolve(-1, (100., 100.), 'car', 1, 1000, 1000)
+    original, _ = resolver.resolve(10, (500., 500.), 'car', 1, 1000, 1000, {negative})
+    fresh, _ = resolver.resolve(10, (900., 900.), 'car', 1, 1000, 1000, {negative, original})
+    assert fresh < 0 and fresh not in {negative, original}
+    kept, _ = resolver.resolve(-1, (100., 101.), 'car', 2, 1000, 1000)
+    assert kept == negative
+
+
+def test_v0562_explicit_negative_alias_target_is_reserved_after_cleanup() -> None:
+    resolver = TrackContinuityResolver(max_gap_frames=2)
+    resolver.alias_raw_id(44, -1)
+    resolver.resolve(44, (100., 100.), 'car', 1, 1000, 1000)
+    original, _ = resolver.resolve(10, (100., 100.), 'car', 18, 1000, 1000)
+    fresh, _ = resolver.resolve(10, (900., 900.), 'car', 18, 1000, 1000, {original})
+    assert fresh < 0 and fresh != -1
+
+
+def test_v0562_collision_guard_applies_to_all_countable_vehicle_families() -> None:
+    for label in ('bicycle', 'motorcycle', 'car', 'truck', 'bus'):
+        resolver = TrackContinuityResolver()
+        resolver.resolve(10, (100., 100.), label, 1, 1000, 1000)
+        resolver.alias_raw_id(44, 10)
+        first, _ = resolver.resolve(44, (101., 100.), label, 2, 1000, 1000)
+        second, stitched = resolver.resolve(10, (900., 900.), label, 2, 1000, 1000, {first})
+        assert second != first and not stitched
+        assert resolver.velocity_for(second) == (0., 0.)
+
+
+def test_v0562_fresh_gate_history_does_not_invent_a_crossing_between_visible_objects() -> None:
+    from app.counting import CountingLine, LineCrossingCounter
+
+    resolver = TrackContinuityResolver()
+    gate = LineCrossingCounter(CountingLine(.1, .5, .9, .5), startup_grace_frames=0)
+    resolver.resolve(10, (500., 600.), 'car', 10, 1000, 1000)
+    resolver.alias_raw_id(44, 10)
+    assert gate.update(10, (500., 600.), 1000, 1000, 10) is None
+    first, _ = resolver.resolve(44, (500., 620.), 'car', 11, 1000, 1000)
+    assert gate.update(first, (500., 620.), 1000, 1000, 11) is None
+    second, _ = resolver.resolve(10, (500., 400.), 'car', 11, 1000, 1000, {first})
+    assert second != first
+    assert gate.update(second, (500., 400.), 1000, 1000, 11) is None
+    assert gate.total_crossings == 0
+    same_second, _ = resolver.resolve(10, (500., 600.), 'car', 12, 1000, 1000)
+    assert same_second == second
+    assert gate.update(same_second, (500., 600.), 1000, 1000, 12) == 'in'
+    assert gate.total_crossings == 1
+
+
+def test_v0562_noncoexisting_alias_keeps_existing_identity_and_stitch_counter() -> None:
+    resolver = TrackContinuityResolver()
+    resolver.resolve(10, (400., 220.), 'truck', 10, 1000, 600)
+    resolver.alias_raw_id(44, 10)
+    for frame in (11, 12, 13):
+        canonical, stitched = resolver.resolve(44, (405., 225.), 'bus', frame, 1000, 600)
+        assert canonical == 10 and not stitched
+    assert resolver.stitch_count == 0 and resolver.heavy_stitch_count == 0
+
+
 def _resolve_v0559(resolver, raw_id, point, label, frame, rect, claimed=None):
     # Exercise actual .58 behavior in differential runs, including its center
     # based stitch decision; missing rectangle support must not be the failure.

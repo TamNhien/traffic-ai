@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './styles.css'
 
-const APP_VERSION = '0.5.61'
+const APP_VERSION = '0.5.62'
 const vehicleLabels = {
   motorcycle: 'Xe máy', bicycle: 'Xe đạp', car: 'Ô tô', bus: 'Xe buýt', truck: 'Xe tải', other: 'Khác'
 }
@@ -13,6 +13,8 @@ const missReasonLabels = {
   crossing_gate_miss: 'Track trong đường nhưng Crossing Gate không phát event',
   crossing_anchor_span_reject: 'Anchor đã băng qua vạch nhưng Gate chưa đóng event',
   crossing_center_only_span: 'Center băng qua nhưng motion-leading anchor chưa đủ span',
+  crossing_outside_segment_geometry: 'Quỹ đạo chỉ cắt đường kéo dài ngoài đoạn vạch đếm',
+  crossing_unverified_span: 'Chưa đủ quỹ đạo quan sát để xác nhận cắt đoạn vạch',
   crossing_near_no_span: 'Track tới sát vạch nhưng quỹ đạo chưa span hai phía',
   crossing_confirmation_reject: 'Crossing chưa đủ xác nhận phía sau vạch',
   crossing_cooldown_reject: 'Crossing bị cooldown chống đếm lặp',

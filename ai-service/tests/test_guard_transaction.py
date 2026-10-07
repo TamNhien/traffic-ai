@@ -46,6 +46,7 @@ def _worker() -> PipelineWorker:
     worker._heavy_center_rescue_tracks = set()
     worker._class_refine_overrides = {}
     worker._class_refine_decision_audit_this_frame = []
+    worker._guard_crossing_proposals_this_frame = []
     worker._event_dispatcher = _Dispatcher()
     worker._save_crossing_snapshot = lambda _cv2, _frame, frame_index: f"frame_{frame_index}.jpg"
     return worker
@@ -594,10 +595,16 @@ def test_v0557_neutral_verifier_cannot_commit_confirmed_pedestrian_crossing() ->
         and isinstance(node.value.func.value, ast.Name)
         and node.value.func.value.id == "pending_crossing_events"
     )
+    clock_audit = next(
+        node for node in crossing.body if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name)
+            and target.value.id == "gate_trace_track" and isinstance(target.slice, ast.Constant)
+            and target.slice.value == "crossing_clock_audit" for target in node.targets)
+    )
     loop = ast.For(
         target=ast.Name(id="_crossing", ctx=ast.Store()),
         iter=ast.List(elts=[ast.Constant(value=77)], ctx=ast.Load()),
-        body=[guard, record, append], orelse=[],
+        body=[clock_audit, guard, record, append], orelse=[],
     )
     code = compile(ast.fix_missing_locations(ast.Module(body=[loop], type_ignores=[])), str(source_path), "exec")
     counter = _Counter()
@@ -612,6 +619,8 @@ def test_v0557_neutral_verifier_cannot_commit_confirmed_pedestrian_crossing() ->
         "gate_trace_track": {}, "TWO_WHEEL_LABELS": {"bicycle", "motorcycle"},
         "pending_crossing_events": [], "crossing_method": "direct",
         "event_frame_index": 102, "source_time_seconds": 4.04, "crossing_x": .5, "crossing_y": .5,
+        "crossing_frame_float": 101.7, "span_clock_reconciliation_frame": None,
+        "selected_crossing_frame": 102.0,
     }
 
     exec(code, env)
@@ -619,6 +628,7 @@ def test_v0557_neutral_verifier_cannot_commit_confirmed_pedestrian_crossing() ->
     assert counter.revoked == [(77, "in")]
     assert worker._human_guard_policy.status(77) == "rejected"
     assert env["gate_trace_track"]["human_guard_status"] == "rejected"
+    assert env["gate_trace_track"]["crossing_clock_audit"]["producer_decision"] == "human_guard_rejected"
     assert worker.state.total_count == 0
     assert env["pending_crossing_events"] == []
     assert worker._event_dispatcher.payloads == []
@@ -856,6 +866,74 @@ def test_v0558_healthy_trace_keeps_source_clock_and_session_identity() -> None:
     assert row["frame_index"] == 522 and row["source_time_seconds"] == 20.84
     assert len(worker._event_dispatcher.payloads) == 1
     assert worker.state.benchmark_trace_warning is None
+
+
+def test_v0562_frame_trace_identifies_proposal_without_claiming_persistence() -> None:
+    import io
+    import json
+
+    worker = _worker()
+    writer = io.StringIO()
+    _execute_trace_dispatch(worker, writer)
+    row = json.loads(writer.getvalue())
+    assert len(row["crossing_proposals"]) == row["crossing_events"] == 1
+    proposal = row["crossing_proposals"][0]
+    assert proposal["stage"] == "committed_before_submit"
+    assert proposal["observed_frame_index"] == 522
+    assert proposal["source_frame_index"] == 519
+    assert proposal["source_time_seconds"] == 20.72
+    payload = worker._event_dispatcher.payloads[0]
+    for key in ("tracking_id", "vehicle_type", "direction", "confidence", "source_frame_index",
+                "source_time_seconds", "crossing_method", "crossing_x", "crossing_y"):
+        assert proposal[key] == payload[key]
+    assert "snapshot_path" not in proposal and "model_id" not in proposal
+    assert "persisted" not in proposal and worker.state.benchmark_trace_warning is None
+
+
+def test_v0562_guard_commit_audit_keeps_original_clock_and_producer_stage() -> None:
+    worker = _worker()
+    pending = _pending()
+    pending.observed_frame_index = 522
+    worker._pending_guard_crossings[77] = pending
+    worker._commit_guard_crossing(object(), pending)
+    audit = worker._guard_crossing_proposals_this_frame[0]
+    assert audit["stage"] == "submitted_after_guard"
+    assert audit["observed_frame_index"] == 522
+    assert audit["source_frame_index"] == 519 and audit["source_time_seconds"] == 20.72
+    assert audit["tracking_id"] == 77 and audit["direction"] == "in"
+    assert audit["crossing_x"] == .51 and audit["crossing_y"] == .62
+    assert len(worker._event_dispatcher.payloads) == 1 and worker.state.total_count == 1
+
+
+def test_v0562_failed_guard_admission_never_claims_submitted_event() -> None:
+    import pytest
+
+    worker = _worker()
+    pending = _pending()
+    worker._pending_guard_crossings[77] = pending
+
+    def closed_dispatcher(_payload):
+        raise RuntimeError("Dispatcher admission closed")
+
+    worker._event_dispatcher.submit = closed_dispatcher
+    with pytest.raises(RuntimeError, match="admission closed"):
+        worker._commit_guard_crossing(object(), pending)
+    assert worker._guard_crossing_proposals_this_frame == []
+    assert worker.state.human_guard_deferred_commits == 0
+    assert worker._event_dispatcher.payloads == []
+
+
+def test_v0562_proposal_metadata_preserves_signed_identity_without_side_effects() -> None:
+    worker = _worker()
+    audit = worker._crossing_proposal_metadata(
+        -3, "car", "out", .9, 16050, 641.9812345, "direct", .51234567, .61234567,
+        stage="committed_before_submit", observed_frame_index=16051,
+    )
+    assert audit["tracking_id"] == -3 and audit["vehicle_type"] == "car"
+    assert audit["source_time_seconds"] == 641.9812
+    assert audit["crossing_x"] == .512346 and audit["crossing_y"] == .612346
+    assert worker.state.total_count == 0 and worker._event_dispatcher.payloads == []
+    assert "snapshot_path" not in audit and "model_id" not in audit
 
 
 def _execute_trace_startup(worker, path):

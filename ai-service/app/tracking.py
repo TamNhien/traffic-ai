@@ -80,6 +80,14 @@ class TrackContinuityResolver:
         )
         self._raw_to_canonical: dict[int, int] = {}
         self._states: dict[int, _IdentityState] = {}
+        # V0.5.62: a raw tracker token can also be an occupied canonical ID.
+        # Keep collision-only identities in a separate, decreasing namespace.
+        # Never reset this counter on TTL cleanup: the worker's gate/class
+        # histories may outlive a continuity state. Normally ByteTrack IDs are
+        # nonnegative; remember caller-supplied negative tokens too, so a later
+        # synthetic allocation cannot reuse one after its motion state expires.
+        self._next_synthetic_canonical_id = -1
+        self._reserved_negative_ids: set[int] = set()
         # A reliable heading belongs to the canonical identity, separately from
         # its measured velocity. Deceleration must not move a previously leading
         # contact point back through the box to the stationary bottom fallback.
@@ -112,6 +120,8 @@ class TrackContinuityResolver:
         # Otherwise a reused ID after a long silence revives stale motion state.
         self._cleanup(frame_index)
         raw_id = int(raw_id)
+        if raw_id < 0:
+            self._reserved_negative_ids.add(raw_id)
         claimed = claimed_canonical_ids or set()
         canonical = self._raw_to_canonical.get(raw_id)
         if canonical is not None and canonical not in claimed:
@@ -163,7 +173,7 @@ class TrackContinuityResolver:
                 best = (score, candidate_id)
 
         stitched = best is not None
-        canonical = best[1] if best is not None else raw_id
+        canonical = best[1] if best is not None else self._fresh_canonical_id(raw_id, claimed)
         self._raw_to_canonical[raw_id] = canonical
         self._canonical_raw_ids.setdefault(canonical, set()).add(raw_id)
         self._update_state(canonical, raw_id, point, label, frame_index, rect)
@@ -174,6 +184,27 @@ class TrackContinuityResolver:
         self._cleanup(frame_index)
         return canonical, stitched
 
+    def _fresh_canonical_id(self, raw_id: int, claimed: set[int]) -> int:
+        """Choose a fresh identity without overwriting a visible alias owner.
+
+        When raw 44 aliases canonical 10, both 44 and the returning raw 10 may
+        coexist in one frame. The second observation must not fall back to the
+        already claimed 10. A fresh canonical starts with its own motion and
+        lineage; no gate/class history is transferred by this resolver.
+        """
+        already_synthetic = self._next_synthetic_canonical_id < raw_id < 0
+        if raw_id not in self._states and raw_id not in claimed and not already_synthetic:
+            return raw_id
+        mapped_ids = set(self._raw_to_canonical.values())
+        candidate = self._next_synthetic_canonical_id
+        while (
+            candidate in self._reserved_negative_ids or candidate in self._states
+            or candidate in claimed or candidate in mapped_ids
+        ):
+            candidate -= 1
+        self._next_synthetic_canonical_id = candidate - 1
+        return candidate
+
     def alias_raw_id(self, raw_id: int, canonical_id: int) -> int | None:
         """Bind a duplicate raw ID and report any displaced canonical ID.
 
@@ -182,6 +213,7 @@ class TrackContinuityResolver:
         """
         raw_id = int(raw_id)
         canonical_id = int(canonical_id)
+        self._reserved_negative_ids.update(value for value in (raw_id, canonical_id) if value < 0)
         previous = self._raw_to_canonical.get(raw_id)
         self._raw_to_canonical[raw_id] = canonical_id
         self._canonical_raw_ids.setdefault(canonical_id, set()).add(raw_id)

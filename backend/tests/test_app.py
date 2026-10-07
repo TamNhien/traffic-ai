@@ -20,7 +20,7 @@ def test_root_metadata() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["name"] == "Traffic AI"
-    assert payload["version"] == "0.5.61"
+    assert payload["version"] == "0.5.62"
     assert payload["docs"] == "/docs"
     assert payload["health"] == "/api/health"
 
@@ -158,7 +158,7 @@ def test_benchmark_clone_compatibility_rejects_different_line() -> None:
 
 
 def test_backend_version_metadata() -> None:
-    assert app.version == "0.5.61"
+    assert app.version == "0.5.62"
 
 
 def test_v0531_startup_crossing_signature_guard_is_narrow() -> None:
@@ -179,7 +179,7 @@ def test_v0533_ground_truth_mark_update_schema() -> None:
 
 
 def test_v0533_version() -> None:
-    assert app.version == "0.5.61"
+    assert app.version == "0.5.62"
 
 
 def test_v0533_ground_truth_mark_update_keeps_timecode() -> None:
@@ -1403,3 +1403,17 @@ def test_v0559_settled_terminal_stop_and_explicit_failure_remain_terminal() -> N
         )
     assert _stop_completion_matches_session({'camera_id': 1, 'session_id': 163, 'status': 'error', 'pending_events': 1}, 1, 163)
     assert _stop_completion_matches_session({'camera_id': 1, 'session_id': 163, 'status': 'stopped'}, 1, None)
+
+
+def test_v0562_signed_canonical_event_keeps_tracking_and_source_clock() -> None:
+    from app.schemas.event import VehicleEventCreate
+
+    event = VehicleEventCreate(
+        camera_id=1, session_id=167, tracking_id=-1,
+        vehicle_type="motorcycle", direction="in", confidence=.9,
+        source_frame_index=7273, source_time_seconds=290.88,
+        crossing_method="direct", crossing_x=.5, crossing_y=.6,
+    )
+    assert event.tracking_id == -1 and event.session_id == 167
+    assert event.source_frame_index == 7273 and event.source_time_seconds == 290.88
+    assert event.vehicle_type.value == "motorcycle" and event.direction.value == "in"

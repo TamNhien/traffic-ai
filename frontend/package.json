@@ -1,7 +1,7 @@
 {
   "name": "traffic-ai-frontend",
   "private": true,
-  "version": "0.5.61",
+  "version": "0.5.62",
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
@@ -20,8 +20,5 @@
   "engines": {
     "node": ">=26.10.0"
   },
-  "packageManager": "npm@12.2.0",
-  "overrides": {
-    "source-map-js": "1.2.2"
-  }
+  "packageManager": "npm@12.2.0"
 }

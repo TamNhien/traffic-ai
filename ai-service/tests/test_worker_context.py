@@ -1031,7 +1031,9 @@ def test_v0557_consensus_proof_preserves_existing_truck_semantic_protection() ->
         7, 130, "car", "car", .99, 20, "car", ("bus", .63),
     )
     assert result == ("truck", .90)
-    assert worker._class_refine_overrides[7] == ("truck", .90, 130)
+    # The eligible lock still protects the decision, while the cache retains
+    # the actual underlying consensus rather than copying the lock's label.
+    assert worker._class_refine_overrides[7] == ("bus", .63, 130)
 
 
 def test_v0557_consensus_proof_cannot_cross_vehicle_family() -> None:
@@ -1338,3 +1340,135 @@ def test_v0561_fresh_car_crossing_override_does_not_beat_stronger_same_frame_tru
     worker._refine_consensus.update(5, 201, "truck", 0.91, "domain")
     assert worker._fresh_car_crossing_override(5, 201, ("car", 0.87)) is None
     assert worker.state.truck_lock_demotion_rescues == 0
+
+
+def test_v0562_car_observation_cannot_extend_expired_truck_lock_through_override_cache() -> None:
+    from app.classification import TruckSemanticLock
+
+    worker = _class_worker()
+    worker._truck_semantic_lock = TruckSemanticLock(ttl_frames=30)
+    worker._truck_semantic_lock.observe(7, 100, stable_label="truck", certainty=.90, hits=4)
+    assert worker._remember_class_refinement(
+        7, 129, "car", "car", .90, 8, "car", ("car", .90),
+    ) == ("truck", .90)
+    assert worker._class_refine_overrides[7] == ("car", .90, 129)
+    assert worker._class_override_for(7, 130, "car") == ("truck", .90)
+    assert worker._class_override_for(7, 131, "car") == ("car", .90)
+    assert worker.state.truck_class_rescues == 1
+
+
+def test_v0562_locked_bus_consensus_retains_its_actual_source_clock_and_reappears_after_lock() -> None:
+    from app.classification import TruckSemanticLock
+
+    worker = _class_worker()
+    worker._truck_semantic_lock = TruckSemanticLock(ttl_frames=30)
+    worker._truck_semantic_lock.observe(7, 100, stable_label="truck", certainty=.90, hits=4)
+    refined = ("bus", .83)
+    worker._class_refine_consensus_proof[7] = (129, refined)
+    worker._class_refine_consensus_source_frame = {7: (129, 110)}
+    assert worker._remember_class_refinement(
+        7, 129, "car", "car", .99, 8, "car", refined,
+    ) == ("truck", .90)
+    assert worker._class_refine_overrides[7] == ("bus", .83, 110)
+    assert worker._class_override_for(7, 131, "car") == refined
+    assert worker._class_override_for(7, 350, "car") == refined
+    assert worker._class_override_for(7, 351, "car") is None
+
+
+def test_v0562_rejected_car_demotion_uses_retained_primary_truck_clock() -> None:
+    from app.classification import TrackLabelSmoother, TruckSemanticLock
+
+    worker = _class_worker()
+    worker._labels = TrackLabelSmoother()
+    worker._truck_semantic_lock = TruckSemanticLock(ttl_frames=30)
+    for frame in (90, 95, 100):
+        worker._labels.update(7, "truck", .90, frame_index=frame)
+    worker._labels.update(7, "car", .10, frame_index=129)
+    worker._remember_class_refinement(7, 129, "car", "truck", .90, 3, "truck", ("car", .60))
+    assert worker._class_refine_overrides[7] == ("truck", .90, 100)
+    assert worker._class_override_for(7, 340, "car") == ("truck", .90)
+    assert worker._class_override_for(7, 341, "car") is None
+
+
+def test_v0562_expired_retained_primary_cannot_become_fresh_override() -> None:
+    from app.classification import TrackLabelSmoother, TruckSemanticLock
+
+    worker = _class_worker()
+    worker._labels = TrackLabelSmoother()
+    worker._truck_semantic_lock = TruckSemanticLock(ttl_frames=30)
+    for frame in (90, 95, 100):
+        worker._labels.update(7, "truck", .90, frame_index=frame)
+    assert worker._remember_class_refinement(
+        7, 400, "car", "truck", .90, 3, "truck", ("car", .60),
+    ) is None
+    assert worker._class_refine_overrides == {}
+    assert worker._truck_semantic_lock._locks == {}
+
+
+def test_v0562_future_retained_primary_cannot_become_current_override() -> None:
+    from app.classification import TrackLabelSmoother
+
+    worker = _class_worker()
+    worker._labels = TrackLabelSmoother()
+    for frame in (200, 201, 202):
+        worker._labels.update(7, "truck", .90, frame_index=frame)
+    assert worker._remember_class_refinement(
+        7, 129, "car", "truck", .90, 3, "truck", ("car", .60),
+    ) is None
+    assert worker._class_refine_overrides == {}
+    assert worker._truck_semantic_lock._locks == {}
+
+
+def test_v0562_older_retained_primary_cannot_replace_newer_qualified_correction() -> None:
+    from app.classification import TrackLabelSmoother
+
+    worker = _class_worker()
+    worker._labels = TrackLabelSmoother()
+    worker._labels.update(7, "truck", .90, frame_index=100)
+    worker._class_refine_overrides[7] = ("car", .85, 120)
+    assert worker._remember_class_refinement(
+        7, 129, "car", "truck", .75, 2, "truck", ("car", .60),
+    ) == ("car", .85)
+    assert worker._class_refine_overrides[7] == ("car", .85, 120)
+
+
+def test_v0562_actual_fresh_truck_promotion_keeps_current_clock_and_rescue_counter() -> None:
+    worker = _class_worker()
+    assert worker._remember_class_refinement(
+        7, 129, "car", "car", .80, 8, "car", ("truck", .70),
+    ) == ("truck", .80)
+    assert worker._class_refine_overrides[7] == ("truck", .80, 129)
+    assert worker.state.truck_class_rescues == 1
+
+
+def test_v0562_genuine_truck_consensus_remains_eligible_after_older_lock_expires() -> None:
+    from app.classification import TruckSemanticLock
+
+    worker = _class_worker()
+    worker._truck_semantic_lock = TruckSemanticLock(ttl_frames=30)
+    worker._truck_semantic_lock.observe(7, 100, stable_label="truck", certainty=.90, hits=4)
+    refined = ("truck", .83)
+    worker._class_refine_consensus_proof[7] = (129, refined)
+    worker._class_refine_consensus_source_frame = {7: (129, 110)}
+    assert worker._remember_class_refinement(
+        7, 129, "car", "car", .99, 8, "car", refined,
+    ) == ("truck", .90)
+    assert worker._class_refine_overrides[7] == ("truck", .83, 110)
+    assert worker._class_override_for(7, 131, "car") == refined
+
+
+def test_v0562_verified_fresh_car_crossing_still_overrides_eligible_global_lock() -> None:
+    from app.classification import TruckSemanticLock
+
+    worker = _class_worker()
+    worker._truck_semantic_lock = TruckSemanticLock(ttl_frames=30)
+    worker._truck_semantic_lock.observe(7, 100, stable_label="truck", certainty=.90, hits=4)
+    worker._refine_consensus.update(7, 128, "car", .86, "general")
+    worker._refine_consensus.update(7, 129, "car", .88, "general")
+    result = worker._resolve_crossing_class_refinement(
+        7, 129, "car", "car", .90, 8, "car", ("car", .88),
+    )
+    assert result[0] == "car" and result[1] > .90
+    assert worker._truck_semantic_lock._locks[7] == (.90, 100)
+    assert worker._class_refine_overrides[7] == ("car", .90, 129)
+    assert worker.state.truck_lock_demotion_rescues == 1
