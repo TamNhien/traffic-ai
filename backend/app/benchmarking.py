@@ -6,7 +6,7 @@ from datetime import datetime
 from hashlib import sha256
 from io import BytesIO
 import json
-from math import inf
+from math import inf, isfinite
 from typing import Iterable, Mapping, Any
 from urllib.parse import urlsplit, urlunsplit
 from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile
@@ -473,6 +473,61 @@ def _global_temporal_pairs(
     return pairs
 
 
+def _missed_matching_audit(
+    mark: TimedCrossing,
+    gt: list[TimedCrossing],
+    ai: list[TimedCrossing],
+    pairs: list[tuple[int, int]],
+    tolerance: float,
+) -> dict | None:
+    """Expose nearby events already used by the current temporal assignment.
+
+    A missed mark's unmatched review candidate is a different list: an event
+    close to this mark may already belong to another GT pair. Use the actual
+    pair indices and unrounded source clocks so this explanation cannot imply
+    that the backend lost an event or that two marks are the same vehicle.
+    """
+    if not isfinite(mark.source_time_seconds) or not isfinite(tolerance):
+        return None
+    neighbors: list[tuple[float, int, int, int]] = []
+    for gt_index, ai_index in pairs:
+        assigned = gt[gt_index]
+        event = ai[ai_index]
+        if not isfinite(assigned.source_time_seconds) or not isfinite(event.source_time_seconds):
+            continue
+        delta = event.source_time_seconds - mark.source_time_seconds
+        if abs(delta) <= tolerance:
+            neighbors.append((abs(delta), event.id, gt_index, ai_index))
+    if not neighbors:
+        return None
+    neighbors.sort()
+    records: list[dict] = []
+    for _, _, gt_index, ai_index in neighbors[:4]:
+        assigned = gt[gt_index]
+        event = ai[ai_index]
+        records.append({
+            "ai_event_id": event.id,
+            "ai_time": event.source_time_seconds,
+            "delta_seconds": event.source_time_seconds - mark.source_time_seconds,
+            "tracking_id": event.tracking_id,
+            "direction": event.direction,
+            "vehicle_type": event.vehicle_type,
+            "assigned_ground_truth_id": assigned.id,
+            "assigned_ground_truth_time": assigned.source_time_seconds,
+            "assigned_ground_truth_direction": assigned.direction,
+            "assigned_ground_truth_vehicle_type": assigned.vehicle_type,
+            "assigned_delta_seconds": event.source_time_seconds - assigned.source_time_seconds,
+        })
+    return {
+        "scope": "temporal_neighbor_assignment",
+        "identity_scope": "physical_identity_unproven",
+        "ground_truth_time": mark.source_time_seconds,
+        "window_seconds": tolerance,
+        "nearby_matched_events": records,
+        "omitted_count": max(0, len(neighbors) - len(records)),
+    }
+
+
 def match_crossings(ground_truth: Iterable[Any], ai_events: Iterable[Any], tolerance_seconds: float = 0.75) -> dict:
     """Global one-to-one temporal matching for counting benchmarks.
 
@@ -515,12 +570,16 @@ def match_crossings(ground_truth: Iterable[Any], ai_events: Iterable[Any], toler
     for gt_index, mark in enumerate(gt):
         if gt_index in matched_gt:
             continue
-        missed.append({
+        miss = {
             "ground_truth_id": mark.id,
             "time": round(mark.source_time_seconds, 3),
             "direction": mark.direction,
             "vehicle_type": mark.vehicle_type,
-        })
+        }
+        matching_audit = _missed_matching_audit(mark, gt, ai, pairs, tolerance)
+        if matching_audit is not None:
+            miss["matching_audit"] = matching_audit
+        missed.append(miss)
 
     unmatched_ai = set(range(len(ai))) - matched_ai
     false_positive_events = [ai[index] for index in sorted(unmatched_ai, key=lambda i: (ai[i].source_time_seconds, ai[i].id))]

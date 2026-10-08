@@ -323,12 +323,12 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.63") { throw "VERSION phải là 0.5.63, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0077_delivery_prescan_v0563.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0077_delivery_prescan_v0563.py." }
+  if ($version -ne "0.5.64") { throw "VERSION phải là 0.5.64, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0078_replay_audit_v0564.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0078_replay_audit_v0564.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0077_delivery_prescan_v0563"' -or $migrationText -notmatch 'down_revision = "0076_identity_audit_v0562"' -or $migrationText -notmatch "value='0.5.63'") {
-    throw "Migration 0077_delivery_prescan_v0563 không đúng contract V0.5.63."
+  if ($migrationText -notmatch 'revision = "0078_replay_audit_v0564"' -or $migrationText -notmatch 'down_revision = "0077_delivery_prescan_v0563"' -or $migrationText -notmatch "value='0.5.64'") {
+    throw "Migration 0078_replay_audit_v0564 không đúng contract V0.5.64."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
@@ -1360,7 +1360,7 @@ function Assert-VerifiedAnchorSpanBikeAuditV0541Contract {
   if ($trace -notmatch 'crossing_anchor_span_reject' -or $trace -notmatch 'crossing_center_only_span' -or $trace -notmatch 'crossing_near_no_span') { throw "V0.5.41 thiếu Gate-Span diagnosis chi tiết." }
   if ($frontend -notmatch 'Bike X-scan' -or $frontend -notmatch 'Anchor-span') { throw "Frontend V0.5.41 thiếu telemetry mới." }
   if ($frontend -match 'counting-semantics' -or $frontend -match 'INFERENCE ·' -or $frontend -match 'Dashboard chỉ giữ trạng thái phiên hiện tại') { throw "Frontend V0.5.41 chưa compact Dashboard theo yêu cầu." }
-  if ($styles -notmatch 'main\{[^}]*max-width:none' -or $styles -notmatch 'minmax\(460px') { throw "Frontend V0.5.41 chưa dùng hết chiều rộng desktop." }
+  if ($styles -notmatch 'main\{[^}]*max-width:none' -or $styles -notmatch '@media\(min-width:1500px\)\{\.content-grid\{grid-template-columns:repeat\(2,minmax\(0,1fr\)\)') { throw "Frontend V0.5.41 chưa dùng hết chiều rộng desktop." }
   if ($countingTests -notmatch 'test_v0541_direction_is_screen_stable_when_gate_endpoints_are_reversed') { throw "V0.5.41 thiếu regression test IN/OUT top-down ổn định." }
   if ($frontend -match '<p className="hint"><strong>V0\.5\.40</strong> thêm') { throw "Dashboard vẫn còn changelog dài V0.5.40." }
   if ($envExample -notmatch 'AI_BICYCLE_CONTEXT_XFRAME_HISTORY=18' -or $envExample -notmatch 'AI_GATE_ANCHOR_SPAN_RECOVERY=1') { throw "V0.5.41 thiếu runtime defaults." }
@@ -1414,7 +1414,7 @@ function Assert-FullSourceContractClosureV0542Contract {
   if ($frontend -match 'INFERENCE ·' -or $frontend -match 'counting-semantics') {
     throw "V0.5.42 làm Dashboard compact bị dài trở lại."
   }
-  if ($styles -notmatch 'main\{[^}]*max-width:none' -or $styles -notmatch 'minmax\(460px') {
+  if ($styles -notmatch 'main\{[^}]*max-width:none' -or $styles -notmatch '@media\(min-width:1500px\)\{\.content-grid\{grid-template-columns:repeat\(2,minmax\(0,1fr\)\)') {
     throw "V0.5.42 làm mất bố cục full-width desktop."
   }
   Write-Host "[OK] Full-source Contract Closure + Compact Telemetry Compatibility V0.5.42" -ForegroundColor Green
@@ -1882,6 +1882,31 @@ function Assert-DeliveryPrescanV0563Contract {
   Write-Host "[OK] Gate Class Prescan + Backend Delivery Evidence V0.5.63" -ForegroundColor Green
 }
 
+function Assert-ReplayAuditV0564Contract {
+  Write-Host "`n[Traffic AI] Crossing Class Admission + Matching Evidence V0.5.64" -ForegroundColor Cyan
+  $worker = Get-Content (Join-Path $root "ai-service\app\worker.py") -Raw -Encoding UTF8
+  $benchmark = Get-Content (Join-Path $root "backend\app\benchmarking.py") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  $styles = Get-Content (Join-Path $root "frontend\src\styles.css") -Raw -Encoding UTF8
+  if ($worker -notmatch 'def _crossing_class_refinement_admission' -or $worker -notmatch 'admitted_deterministic_all_frames' -or $worker -notmatch 'deterministic_all_frames') {
+    throw "V0.5.64 thiếu admission riêng cho crossing của deterministic all-frames video."
+  }
+  if ($worker -notmatch 'crossing_class_refinement_audit' -or $worker -notmatch 'target_sample_attempted' -or $worker -notmatch 'target_opinion_available' -or $worker -notmatch 'crossing_class_admission\["source_time_seconds"\]') {
+    throw "V0.5.64 thiếu trace admission và source clock crossing gốc."
+  }
+  if ($benchmark -notmatch 'def _missed_matching_audit' -or $benchmark -notmatch 'temporal_neighbor_assignment' -or $benchmark -notmatch 'physical_identity_unproven' -or $benchmark -notmatch 'neighbors\[:4\]') {
+    throw "V0.5.64 thiếu evidence ghép hiện tại, giới hạn 4 event và scope danh tính chưa xác minh."
+  }
+  if ($frontend -notmatch 'function MatchingAudit' -or $frontend -notmatch 'benchmark-evidence-stack' -or $styles -notmatch 'class-audit-row>\.benchmark-evidence-stack\{grid-area:audit\}') {
+    throw "V0.5.64 thiếu UI matching audit hoặc stack riêng tránh chồng bằng chứng."
+  }
+  foreach ($relative in @("ai-service\tests\test_worker_context.py", "backend\tests\test_benchmarking.py")) {
+    $text = Get-Content (Join-Path $root $relative) -Raw -Encoding UTF8
+    if ($text -notmatch 'def test_v0564_') { throw "V0.5.64 thiếu regression trong $relative." }
+  }
+  Write-Host "[OK] Crossing Class Admission + Matching Evidence V0.5.64" -ForegroundColor Green
+}
+
 function Invoke-Step([string]$Title, [scriptblock]$Action) {
   Write-Host "`n[Traffic AI] $Title" -ForegroundColor Cyan
   & $Action
@@ -1961,6 +1986,7 @@ Assert-StopAckCompatibilityV0560Contract
 Assert-SpanClockClassV0561Contract
 Assert-IdentityProvenanceV0562Contract
 Assert-DeliveryPrescanV0563Contract
+Assert-ReplayAuditV0564Contract
 Assert-LegacySemanticCompatibilityV0523R1
 
 Write-Host "`n[Traffic AI] Road Zone + Frame Browser V0.5.11" -ForegroundColor Cyan

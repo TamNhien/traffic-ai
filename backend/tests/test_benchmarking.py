@@ -15,6 +15,149 @@ def test_benchmark_exact_match() -> None:
     assert result["counting_recall"] == 1.0
 
 
+def test_v0564_missed_audit_exposes_event_already_assigned_to_other_gt() -> None:
+    # Synthetic reproduction of the observed distinction, not a reconstruction
+    # of session 169's GT list: the delivered 69.4566 s event can be assigned
+    # elsewhere while the unmatched review list shows the 70.52 s event.
+    gt = [item(1, 69.4566, "in", "car"), item(2, 69.457, "out", "motorcycle")]
+    ai = [
+        rich_item(9828, 69.4566, "out", "motorcycle", tracking_id=20863),
+        rich_item(9829, 70.52, "out", "motorcycle", tracking_id=17578),
+    ]
+    result = match_crossings(gt, ai)
+    miss = result["missed_items"][0]
+    audit = miss["matching_audit"]
+    assert miss["ground_truth_id"] == 2
+    assert miss["review_candidate"]["ai_event_id"] == 9829
+    assert miss["review_candidate"]["outside_scoring_window"] is True
+    assert audit["scope"] == "temporal_neighbor_assignment"
+    assert audit["identity_scope"] == "physical_identity_unproven"
+    assert audit["ground_truth_time"] == 69.457
+    assert audit["window_seconds"] == 0.75 and audit["omitted_count"] == 0
+    neighbor = audit["nearby_matched_events"][0]
+    assert neighbor == {
+        "ai_event_id": 9828, "ai_time": 69.4566,
+        "delta_seconds": 69.4566 - 69.457, "tracking_id": 20863,
+        "direction": "out", "vehicle_type": "motorcycle",
+        "assigned_ground_truth_id": 1, "assigned_ground_truth_time": 69.4566,
+        "assigned_ground_truth_direction": "in", "assigned_ground_truth_vehicle_type": "car",
+        "assigned_delta_seconds": 0.0,
+    }
+    # The closer pair still wins even though its class and direction are wrong.
+    assert result["matched"] == 1 and result["missed"] == 1 and result["false_positives"] == 1
+    assert result["class_accuracy"] == 0.0 and result["direction_accuracy"] == 0.0
+    assert result["matched_items"][0]["ground_truth_id"] == 1
+    assert result["matched_items"][0]["ai_event_id"] == 9828
+
+
+def test_v0564_assignment_audit_uses_raw_clocks_at_tolerance_boundary() -> None:
+    from math import inf, nextafter
+
+    missed_time = 10.0004
+    boundary_time = missed_time + 0.75
+    for event_time, included in (
+        (nextafter(boundary_time, -inf), True),
+        (boundary_time, True),
+        (nextafter(boundary_time, inf), False),
+    ):
+        result = match_crossings(
+            [item(1, missed_time), item(2, event_time)], [item(11, event_time)], 0.75
+        )
+        miss = result["missed_items"][0]
+        assert miss["ground_truth_id"] == 1 and miss["time"] == 10.0
+        assert result["matched_items"][0]["ai_time"] == 10.75
+        assert ("matching_audit" in miss) is included
+        if included:
+            neighbor = miss["matching_audit"]["nearby_matched_events"][0]
+            assert neighbor["ai_time"] == event_time
+            assert neighbor["delta_seconds"] == event_time - missed_time
+
+
+def test_v0564_assignment_audit_caps_four_and_ties_by_event_id() -> None:
+    gt = [item(100, 100.0)] + [item(index, 100.125) for index in range(1, 7)]
+    ai = [rich_item(index, 100.125, tracking_id=index + 1000) for index in range(206, 200, -1)]
+    reference = match_crossings(gt, ai)
+    assert reference == match_crossings(reversed(gt), reversed(ai))
+    assert reference["matched"] == 6 and reference["missed"] == 1
+    audit = reference["missed_items"][0]["matching_audit"]
+    assert audit["omitted_count"] == 2
+    assert [record["ai_event_id"] for record in audit["nearby_matched_events"]] == [201, 202, 203, 204]
+    assert [record["assigned_ground_truth_id"] for record in audit["nearby_matched_events"]] == [1, 2, 3, 4]
+
+
+def test_v0564_assignment_audit_orders_distance_before_event_id() -> None:
+    result = match_crossings(
+        [item(1, 100.0), item(2, 100.05), item(3, 100.1)],
+        [item(11, 100.1), item(900, 100.05)],
+    )
+    records = result["missed_items"][0]["matching_audit"]["nearby_matched_events"]
+    assert [record["ai_event_id"] for record in records] == [900, 11]
+    assert records[0]["delta_seconds"] == 100.05 - 100.0
+    assert records[1]["delta_seconds"] == 100.1 - 100.0
+
+
+def test_v0564_assignment_audit_preserves_inputs_metrics_and_review_fields() -> None:
+    from copy import deepcopy
+
+    gt = [
+        {"id": 1, "source_time_seconds": 10.0, "direction": "in", "vehicle_type": "bicycle", "note": "keep"},
+        {"id": 2, "source_time_seconds": 10.1, "direction": "out", "vehicle_type": "truck"},
+    ]
+    ai = [
+        {"id": 11, "source_time_seconds": 10.0, "direction": "in", "vehicle_type": "motorcycle", "tracking_id": 77, "private_field": "never copied"},
+        {"id": 12, "source_time_seconds": 11.0, "direction": "out", "vehicle_type": "truck", "tracking_id": 88},
+    ]
+    original = deepcopy((gt, ai))
+    result = match_crossings(iter(gt), iter(ai))
+    assert (gt, ai) == original
+    for key, value in {
+        "ground_truth_total": 2, "ai_total": 2, "matched": 1, "missed": 1,
+        "false_positives": 1, "count_error": 0, "absolute_count_error": 0,
+        "counting_precision": 0.5, "counting_recall": 0.5, "counting_f1": 0.5,
+        "direction_accuracy": 1.0, "class_accuracy": 0.0, "class_mismatches": 1,
+        "unmatched_review_links": 1,
+    }.items():
+        assert result[key] == value
+    miss = result["missed_items"][0]
+    assert miss["ground_truth_id"] == 2 and miss["time"] == 10.1
+    assert miss["review_candidate"]["ai_event_id"] == 12
+    assert miss["review_candidate"]["delta_seconds"] == 0.9
+    assert result["false_positive_items"][0]["review_ground_truth"]["ground_truth_id"] == 2
+    assert result["class_mismatch_items"][0]["ground_truth_id"] == 1
+    assert result["per_class"]["bicycle"]["ground_truth"] == 1
+    assert result["per_direction"]["out"]["ai"] == 1
+    assert set(miss["matching_audit"]["nearby_matched_events"][0]) == {
+        "ai_event_id", "ai_time", "delta_seconds", "tracking_id", "direction", "vehicle_type",
+        "assigned_ground_truth_id", "assigned_ground_truth_time", "assigned_ground_truth_direction",
+        "assigned_ground_truth_vehicle_type", "assigned_delta_seconds",
+    }
+    assert "private_field" not in str(miss["matching_audit"])
+
+
+def test_v0564_assignment_audit_absent_without_nearby_assigned_event() -> None:
+    result = match_crossings([item(1, 10.0), item(2, 20.0)], [item(11, 20.0)])
+    assert result["missed_items"] == [{
+        "ground_truth_id": 1, "time": 10.0, "direction": "in", "vehicle_type": "motorcycle",
+    }]
+    no_matches = match_crossings([item(1, 10.0)], [item(11, 10.9)])
+    assert "matching_audit" not in no_matches["missed_items"][0]
+    assert no_matches["missed_items"][0]["review_candidate"]["ai_event_id"] == 11
+
+
+def test_v0564_assignment_audit_omits_nonfinite_source_clocks() -> None:
+    from math import inf, nan
+    from app.benchmarking import _missed_matching_audit, _timed
+
+    mark = _timed(item(1, 10.0))
+    assigned = _timed(item(2, 10.1))
+    event = _timed(item(11, 10.1))
+    for bad_time in (nan, inf, -inf):
+        assert _missed_matching_audit(_timed(item(1, bad_time)), [assigned], [event], [(0, 0)], 0.75) is None
+        assert _missed_matching_audit(mark, [_timed(item(2, bad_time))], [event], [(0, 0)], 0.75) is None
+        assert _missed_matching_audit(mark, [assigned], [_timed(item(11, bad_time))], [(0, 0)], 0.75) is None
+        assert _missed_matching_audit(mark, [assigned], [event], [(0, 0)], bad_time) is None
+
+
 def test_v0559_gzip_export_keeps_original_metadata_without_inflating_trace() -> None:
     from datetime import datetime, timezone
     from hashlib import sha256

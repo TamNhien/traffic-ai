@@ -1,96 +1,88 @@
-# Kiểm tra Traffic AI V0.5.63
+# Kiểm tra Traffic AI V0.5.64
 
-## Kết quả hiện tại
+## Kết quả thực hiện
 
-- **687 test functions offline đạt, 0 lỗi: 599 AI + 88 backend.** Giữ toàn bộ684 test-function identities baseline .62; thêm38, hiện có722 definitions. 722 không phải số full pytest đã chạy.
-- **35 HTTP/ORM/app integration tests chưa chạy: 3 AI + 32 backend.** Test còn nguyên trong source; không dùng unavailable dependency/module làm pass.
-- **591 kiểm tra tĩnh đạt**: AST/signature/payload/source-clock/version/migration/PS source contracts; **132 Python files** parse/compile thành công.
-- **77 migrations**, revision unique/parent đầy đủ/không cycle. Head `0077_delivery_prescan_v0563`, parent `0076_identity_audit_v0562`. Upgrade chỉ cập nhật schema_version0.5.63, downgrade0.5.62.
-- **38 local release checks đạt**: actual isolated Git/workflow artifact execution và static/simulation/Bash syntax checks đã phân loại. Không push GitHub/tạo Release thật/chạy PowerShell publisher.
-- **30 frontend checks đạt**: actual Babel AST handlers dưới Node VM; JSX parser/conditions, component evidence mới actual Babel transform rồi chạy với controlled JSX element factory. Không phải React DOM/browser/Vite build.
-- Full source **192 files =189 UTF-8 text +3 binary assets**, giữ đủ191 paths .62, chỉ thêm migration0077. **17 PS scripts UTF-8 no-BOM/CRLF**, text source/config khác LF.
+| Phạm vi | Kết quả |
+|---|---|
+| Test functions offline thực thi | **707 đạt, 0 lỗi**: 612 AI +95 backend |
+| HTTP/ORM/app integration chưa chạy | **35**: 3 AI +32 backend; đúng 35 identities của .63 |
+| Test definitions trong source | **742**: giữ đủ722 cũ, thêm20 |
+| Kiểm tra tĩnh source/contracts | **612 đạt** |
+| Python parse/compile | **133 files** |
+| Alembic | **78 migrations**, head/parent duy nhất hợp lệ, không cycle |
+| Release cục bộ | **38 đạt**: 17 executed +14 static +4 simulation +3 Bash syntax |
+| Frontend | **40 đạt**: Babel/Node VM và controlled JSX, không phải browser/Vite build |
+| Full source | **193 files**: 190 UTF-8 text +3 binary assets |
+| Code/config đóng băng sau test | **191 SHA256**, hai tài liệu review riêng |
 
-38 functions mới gồm11 worker-context/prescan,12 dispatcher,7 trace proposal/receipt,5 worker trace/lifecycle và3 backend metadata scope. Targeted/differential counts dưới đây là bằng chứng bổ sung, không cộng vào687.
+707 là số test functions thực sự chạy qua offline harness, không phải số full pytest. 742 bao gồm35 integration chưa chạy. Giữ nguyên toàn bộ722 test-function identities của baseline .63. Hai mươi test mới gồm13 worker-context/admission và7 benchmark assignment audit.
 
-Harness thực thi actual source test functions, với pytest tối thiểu (`approx`, `raises`, tmp_path, monkeypatch). Worker/backend helper trích AST vì thiếu HTTP/ORM; tracking/classification/counting/Human Guard, NumPy và Pydantic dùng module thực. Dispatcher dùng thread/queue/retry thật với HTTP Client kiểm soát. Model opinions là fixture/recorded evidence, không phải inference thật. Không claim full pytest/dependency pins.
+Harness dùng NumPy2.3.5 và Pydantic2.13.5 thực; actual modules counting/classification/tracking/Human Guard và test functions thực. Worker/pure backend helpers trích AST để tránh HTTP/ORM dependencies thiếu; pytest shim chỉ cung cấp approx/raises/tmp_path/monkeypatch. Dispatcher dùng queue/thread/retry thực với HTTP client được kiểm soát. Opinions là fixtures, không phải model inference thật.
 
-## Baseline và input
+Frontend dùng Babel parser/transform đã cài, actual source slices trong Node VM và controlled JSX element factory. AnnotationEditor và benchmark state/handlers/scoring controls giữ nguyên sau khi bỏ đúng wrappers/components bổ sung. 10 ca UI mới kiểm tra cây JSX, scope/cap/invalid evidence và CSS grid; không cộng riêng vào40. Không có Chromium để kiểm tra pixel layout.
 
-Baseline đúng full source V0.5.62 đã giao: **191 files /426,488 byte**, SHA256 `0ffa19a281c6eee6699f134493ed7e88f2b13a9eb0e53fbec3e6afa406174c8a`. CRC/path an toàn/duy nhất; mọi source byte giải nén khớp ZIP. Không lấy loose checkout đã sửa làm oracle.
+## Baseline và input đã xác minh
 
-Ảnh V0.5.62 session168/benchmark45: GT149/AI149/khớp135/lọt14/dư14/Recall=Precision=F1=90.6%/class98.5%/2 sai loại/IN68OUT81. Worker195/backend gộp46/DB149 timed events/Human Guard30/IntegrityOK. GT sao chép benchmark44. So với .61, F1 89.9%→90.6%, class99.3%→98.5%. Hai lỗi: bicycle289.450 IN→MC vàCAR641.981 OUT→TRUCK. Đây là input chạy .62 trên máy người dùng, không phải kết quả .63.
+Baseline là full source .63 đã giao: **440,606 byte /192 files**, SHA256 `7a3b78a98f96e2d56d1f9e63ab6bae425fff820444c35f81e1cb20253abf3d0c`. ZIP CRC/path an toàn/duy nhất và byte extraction đã kiểm tra. Giữ đủ192 paths, thêm duy nhất `backend/alembic/versions/0078_replay_audit_v0564.py`.
 
-RAR mới **81,062,189 byte**, SHA256 `e20d30497f9b2ed2e4a2057c6197b9574a81b796602b7a673d6d413f65028334`;195 members an toàn/duy nhất =194 JPG +1 JSONL. Đã xem194 ảnh qua5 contact sheets và ảnh mục tiêu, tất cảsession168/1440×811/f4–23454.
+Ảnh .63 session169 / benchmark46: GT149/AI149/khớp135/lọt14/dư14/Recall=Precision=F1=90.6%/class98.5%/2 lỗi/IN68OUT81. Worker195/backend gộp46/DB149 timed events/Human Guard30/IntegrityOK. Hai lỗi bicycle289.450 IN→MC và CAR641.981 OUT→TRUCK. Đây là **input .63 trên máy người dùng**, chưa có replay hoặc F1 .64.
 
-Trace **196,204,733 byte /23,652 dòng**, SHA256 `75763e361a7b8271b6ecd89b19ed5a3c4ccbf9d967a2b2a0a574da1546f1e4ad`:23,650 observation +2 metadata headers,271,208 gate observations,2037 class audits,195 proposals (194 committed_before_submit +1 submitted_after_guard).42 canonical âm,26,238 negative-ID observations,9 negative-ID proposals;0 duplicate canonical groups trong gate observations cùng frame. Không suy ra mọi identity vật lý đều đúng.
+RAR81,071,069byte, SHA256 `1ba987864f2b8f5b5b243e52f91046d8d6fe3d87dbc9feeceb5d451abca53d2b`;195 safe unique regular members =194 JPG +1 JSONL. Tất cả JPEG decode thành công, session169/1440×811; đã xem đủ194 ảnh qua5 contact sheets và2 screenshots.
 
-Geometry dùng recorded processed-frame header, không lấy camera hiện tại/fit infinite line. Chưa có benchmark export events.json/ground-truth.json mới; không khẳng định exact physical GT attribution hoặc backend dedup reason chỉ từ proposal/timecode gần nhau.
+Trace196,235,528byte, SHA256 `35c7faa5a0c15771b548be0d4368f47c270a41caa2ac028627fb0a6645ad27ba`:23,848 dòng =23,650 observation frame1–23,650 +2 metadata headers +195 terminal receipts +1 delivery summary. Có271,208 gate tracks,2110 class audits,195 proposals. Proposal và receipt khớp đủ11 source fields gốc.
 
-## Class sampling
+Terminal receipts **149 created +46 deduplicated**, tất cả attempt1. Created IDs9818–9966 đầy đủ;46 dedup references đều resolve tới created event. Footer drain_complete=true/pending0/dropped0. Các receipt mục tiêu:
 
-**217 targeted functions đạt =116 classification +101 context**, gồm11 mới. Actual .62 ZIP differential có210 positive controls +5 semantic AssertionError regressions; .63 đạt215 assertion chung. Hai test dùng helper mới loại khỏi differential, không lấy TypeError/missing API làm bằng chứng lỗi.
+| Backend ID | Canonical | Hướng / source time |
+|---|---:|---|
+| 9826 | 12492 | IN58.8925 |
+| 9828 | 20863 | OUT69.4566 |
+| 9829 | 17578 | OUT70.52 |
+| 9914 | 254023 | TRUCK OUT641.9311 |
 
-CAR canonical254023: .61 cóCAR.838867 ởf16049 vàCAR.858887 ởcrossingf16050, đủ .80/two-consecutive policy. .62 cóCAR.716797 từf16007 vàCAR.858887 crossing;f16049 không inference nên eligibleTRUCKlock thắng. .62 cache/source clock không phải nguyên nhân được chứng minh của sampling phase khác nhau.
+GT69.457 đang lọt nhưng source69.4566 được tạo event9828, nên receipt này không chứng minh nguyên nhân dedup. Review candidate70.52 là event chưa ghép. Chưa có events.json/ground-truth.json để chứng minh event9828 đang ghép với GT nào, GT trùng hoặc physical identity. Matching audit mới sẽ cung cấp assignments của **report mới hiện tại**, không tái tạo benchmark46 bằng dữ liệu thiếu.
 
-`_truck_lock_prescan_candidate` nhận displayTRUCK/live nonfuture lock gần đoạn vạch bằng finite-segment distance có sẵn. Deferred refinement giữ pass periodic thường trước; extra sample dùng slot còn dư sau crossing và queue thường. Default budget2 giữ nguyên; due MC/bicycle giữ priority cũ, target đã crossing không prescan lại; no-opinion cùng frame không nhân đôi inference.
+## Hồi quy và đối chiếu source .63
 
-Threshold.80/hai frame liên tiếp/TTL/consensus/heavy-tie/source-veto giữ nguyên. classification.py/116 test và cache/resolve/observe/fresh-CAR methods .62 byte-identical. Probe4 cadence phases16004/16007/16008/16048 dùng actual methods vàopinions kiểm soát: .62 CAR chỉphase16004, .63 CAR cả4. Không phải video/model replay. GPU work có thể tăng cục bộ; busy budget vẫn có thể thiếu CAR proof.
+13 test worker mới thực thi actual crossing branch trích từ run(): kiểm tra lag0/.36/2.0; model/flag/label/budget/cache/future observation; shared per-frame slots; live/non-deterministic/all-frame conditions; CAR .80/two-frame/TRUCK veto; periodic/prescan gate giữ nguyên; source clock event khác frame quan sát và attempted sample không có opinion.
 
-Xe đạp GT289.450 vẫn có detection muộn/target khác. Không tạo model opinion giả, hạ bicycle veto hoặc sửa GT/window để đạt score. Không bảo đảm class/F1 cải thiện trước replay.
+12 differential cases chạy actual worker code từ **ZIP .63** với cùng controlled opinions/budget. Chỉ all-frame deterministic video crossing được bỏ lag gate; cases còn lại giữ admission/policy. Các số này là bằng chứng bổ sung, không cộng vào707. Không khẳng định lag gây lỗi session169 vì trace .63 không ghi admission/lag. Counter model-target attempt không được diễn giải là inference thành công; target_sample_attempted và target_opinion_available tách riêng.
 
-## Dispatcher terminal audit và worker lifecycle
+7 test matching mới kiểm tra event đã ghép cho GT khác, raw-clock tolerance boundary, tie order/cap4, signed deltas, hướng/class độc lập với assignment, không mutate inputs và legacy metrics. **400 differential cases /428 audited missed items** so với actual benchmarking.py trong ZIP .63: bỏ trường matching_audit mới thì mọi report field cũ giữ nguyên.
 
-**21 actual threaded dispatcher tests đạt =9 cũ +12 mới.** Actual .62 ZIP giữ9 test cũ đạt;7 cặp .62/.63 giữ số POST, payload, retry delays và mọi state counter. .63 thêm terminal record; đây là observability mới, không phải claim sửa thuật toán delivery.
+Independent comparison giữ nguyên từng byte3 policy modules counting.py/classification.py/async_tasks.py và23 core methods, gồm backend delivery/dedup, temporal matcher, unmatched review và worker class policy/deferred refinement. match_crossings chỉ thêm optional audit attachment đã xác minh; không đổi objective/tolerance hoặc scores. Tracking source cũng giữ nguyên. Không nới Gate/cooldown/dedup/class confidence để ép khớp GT.
 
-Queue1024 có drain/dropped counter. Request đã xử lý đến finite retry outcome ghi một terminal receipt:11 source event fields gốc, kind=event_delivery/audit_only, stage backend_acknowledged/delivery_failed, outcome created/deduplicated/acknowledged_unknown/failed, attempts, optional positive non-bool integer backend ID và fixed whitelist dedup reason.
+## Source contracts và phiên bản
 
-Header0/1 phân biệt tạo/gộp; thiếu header không tự suy ra created. Body absent/invalid/non-object hoặc ID bool/float/string không chặn delivery. Bỏ body/token/URL/snapshot/model path/error text. Audit ngoài retry exception boundary: audit exception/full queue không resend HTTP hoặc mất event tiếp theo; queue đầy tăng dropped. Client initialization failure vẫn pending/flush=False theo .62, không tạo terminal receipt cho request chưa xử lý.
+VERSION/frontend/API health/start message0.5.64 đồng bộ. Head `0078_replay_audit_v0564`, parent `0077_delivery_prescan_v0563`; upgrade schema_version0.5.64, downgrade0.5.63, không đổi schema/GT/events. Revision dưới32 ký tự.
 
-5 worker tests mới xác nhận single writer, late receipt trước close, EOF footer complete/dropped/pending, failed flush giữ error, trace I/O failure không đổi delivery. Test tích hợp dùng **actual EventDispatcher thread→actual worker writer→actual diagnose_trace**, giữ ID−1/source69.4566/backend event12 và không coi receipt là frame counter. Review độc lập phát hiện discriminator thiếu ở handoff đầu; source cuối thêm kind/audit_only và integration regression đạt.
+New contract `Assert-ReplayAuditV0564Contract` được khai báo và gọi; các historical functions giữ lại. Rà soát độc lập949 source regex predicates,659 internal imported symbols và117 frontend runtime-field pairs, không còn findings. Hai guard legacy .41/.42 còn yêu cầu minmax460px đã đổi sang đúng media rule ≥1500px/two equal columns, giữ max-width:none; tránh test.ps1 bác bỏ layout50/50 đã sửa.
 
-Worker drain dispatcher timeout=None trước trace close/camera publication/gzip; camera/session còn draining qua optional closure. EOF delivery_summary là toàn phiên, không giả observation/sourceclock. Existing .58/.59 AST fixtures cấp đủ context cho thứ tự mới; giữ identities/assertions về không publish failed trace, không finish/release trước drain.
+17 PowerShell scripts UTF-8 no-BOM/CRLF; source/config text khác LF. Đây là kiểm tra source/encoding/contracts; không giả lập thành PowerShell runtime pass.
 
-## Diagnosis và API/UI scope
+npm Docker/CI/packageManager12.2.0 đối chiếu official npm CLI latest ngày08/10/2026; Node pin26.10.0 giữ nguyên. Runtime kiểm tra thực là Python3.12.14/Node24.19.0/npm11.9.0. Không tuyên bố đã cài npm12.2.0 toàn cục trên máy người dùng hoặc môi trường đóng gói.
 
-**56 trace functions đạt =49 retained +7 mới.** Actual .62 differential:5 semantic regressions/3 negative controls;160 decoded JSON legacy cases giống hệt (80 headerless +80 finite geometry, không newfields). Actual196.2MB trace old/new pair khoảng5.670s: counters/finite geometry fields giống hệt; no-ID reasons giữ nguyên.
+## Giới hạn kiểm tra
 
-20863 cóOUTproposal69.4566 ởobservation1739. Isolated Gate reconstruction từ anchors tái hiệngeometric1737.415736/source69.45662944; GT ảnh69.457 vẫnmiss/nearestDB70.52. Chứng minh upstream proposal, không chứng minh dispatch/persist/dedup hoặc đúng GT. Nearby12492IN58.89246877 và17578OUT70.52 tái hiện nhưng không ép gắn với GT59.446/69.457.
+Môi trường thiếu pytest/FastAPI/SQLAlchemy/Alembic/httpx2/cv2/Torch/pwsh/Docker. Không chạy full dependency-pinned pytest, HTTP/ORM/database/migration thực, PowerShell native, Docker build/npm audit/Vite build, React DOM/browser, GPU/model/video replay. Test integration vẫn nguyên trong source để scripts/test.ps1 chạy trên máy đủ Docker.
 
-Known canonical có validated source-window receipt/proposal trả crossing_delivery_observed/crossing_proposal_observed và matched_track_delivery/proposal. Unknown canonical vẫn nearby_time_window; không dùng clock gần nhau làm proofGT. Bounded8 records/loại/window, original source clock routing kể cả guard/ack carrier muộn; validation bỏ sai session/clock/enum/private fields. Receipt/footer không vào geometry/counters. Proposal backend_persistence=unverified; receipt là phản hồi backend, không bảo đảm đúng physicalGT.
+Release checks dùng isolated local Git và artifact workflow execution; không push GitHub hay tạo Release thật. publish.ps1 vẫn test→commit→push→tag→Actions/CLI fallback; source/tag/release target protection giữ nguyên.
 
-Footer dropped/drain/pending có session_global scope; không phải số của matched track. Duplicate requests nhận copy độc lập. Streaming giữ request byte boundary và legacy two-pass context refresh, không giữ full JSONL/trajectory trong RAM.
-
-3 backend pure tests xác nhận negative canonical filtering/private-field omission/cap8/malformed records/unknownforeigntrack scope và không đổi scoring. API copy/sanitize newaudit; diagnosis không newfields giữ legacy attach semantics.
-
-Frontend30 checks gồm25 kiểm tra cũ với guard phù hợp và5 mới: matched/nearby reasons, evidence clock/outcome, legacy malformed records, unknown-ack privacy. AnnotationEditor byte-exact. GroundTruthBenchmark mọi handler/state/scoring/render controls byte-exact với .62 sau chỉ bỏ2 evidence additions và div wrapper. New JSX actual Babel transform +controlled element factory; không claim browser DOM/layout.
-
-## Full source, môi trường và release
-
-PS contract mới `Assert-DeliveryPrescanV0563Contract` khai báo/gọi sau .62; historical contracts giữ nguyên. Inspection riêng935 source predicates (934 individual +valid paired .46 alternative),657 internal imports và117 frontend field pairs không lệch; không cộng vào591.
-
-190 code/config hashes frozen sau final passing batch; README/VERIFICATION kiểm tra riêng. Counting.py/tracking.py, matching/scoring, backend dedup predicates, model/taxonomy/environment budget pins giữ nguyên.192paths giữ toàn baseline, chỉ thêm migration0077, không rewrite table/data.
-
-38 release checks xác nhận immutable tagged ZIP/TAR/README/checksum và VERSION/tag/HEAD/fallback trong local isolated Git. Không PowerShell/GitHub Actions từ xa/publish thật; khi chạy publish.ps1, script đọc VERSION tạo tagv0.5.63.
-
-Môi trường thực: Python3.12.14/NumPy2.3.5/Pydantic2.13.5/Node24.19/npm11.9. pytest/FastAPI/SQLAlchemy/httpx/httpx2/cv2/Torch/pwsh/Docker không có trong primary/systemPython. Fresh package-index probe HTTP403, không cài/giả dependency pin rồi báo full suite.
-
-Docker/CI giữ Node26.10.0/npm12.2.0. [npm CLI latest](https://github.com/npm/cli/releases/latest) đối chiếu07/10/2026 vẫnv12.2.0. Chưa chạy Docker/full pytest/HTTPORM/PostgreSQL concurrency/migration thật/PowerShell/npm-Vite/browser layout/model-video replay. **Chưa có F1/Recall/Precision mới của V0.5.63.**
-
-## Đầy đủ lệnh Windows
+## Chạy trên Windows
 
 ```powershell
 cd D:\LienThongDH\DoAn\traffic-ai
 
 Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
 
-# Kiểm tra
+# Test
 .\scripts\test.ps1
 
 # Khởi động
 .\scripts\start.ps1
 
-# Tự test, commit, push GitHub, tạo tag v0.5.63 và Release
+# Tự test, commit, push GitHub, tạo tag v0.5.64 và Release
 .\scripts\publish.ps1
 ```
 
-Mở https://traffic-ai.test:8443, Ctrl+F5. Chạy cùng clip/vạch/Road, tạo benchmark mới, sao chép149GT tương thích từ benchmark45, Đối chiếu lại→Tải hồ sơ benchmark. Gửi ZIP hồ sơ kèm screenshot; cần events.json/ground-truth.json và .63 receipts để xác định downstream cause. Camera archive giữ session_<id>_benchmark-trace.jsonl đã đóng cùng JPG.
+Mở https://traffic-ai.test:8443, Ctrl+F5. Replay cùng clip/vạch/Road Zone, sao chép149 GT từ benchmark46 tương thích, Đối chiếu lại và Tải hồ sơ benchmark. Giữ cùng tolerance0.75s khi so sánh. Cần full ZIP hồ sơ cùng screenshots để đánh giá F1 .64 và xác định GT/event assignments.

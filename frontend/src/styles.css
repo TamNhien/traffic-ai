@@ -89,7 +89,7 @@
 .panel .class-audit-row{grid-template-columns:minmax(86px,auto) minmax(0,1fr);grid-template-areas:"time gt" "ai ai" "edit edit";gap:6px 8px;align-items:center}.panel .class-audit-row>.time-link{grid-area:time;justify-self:start;white-space:nowrap;padding:4px 6px}.panel .class-audit-row>span{grid-area:gt;min-width:0;line-height:1.3;overflow-wrap:anywhere}.panel .class-audit-row>em{grid-area:ai;min-width:0;line-height:1.3;overflow-wrap:anywhere}.panel .class-audit-row>.gt-class-edit{grid-area:edit;min-width:0;max-width:none;width:100%}.benchmark-diff-list{scrollbar-gutter:stable;padding-right:4px}@media(max-width:720px){.panel .class-audit-row{grid-template-columns:1fr;grid-template-areas:"time" "gt" "ai" "edit"}}
 
 /* V0.5.41 dashboard compact/full-width refinement */
-@media(min-width:1500px){.content-grid{grid-template-columns:minmax(0,1.72fr) minmax(460px,.92fr)}.crossing-quality{grid-template-columns:repeat(4,minmax(0,1fr))}.vehicle-list{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(min-width:1500px){.content-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.crossing-quality{grid-template-columns:repeat(4,minmax(0,1fr))}.vehicle-list{grid-template-columns:repeat(2,minmax(0,1fr))}}
 
 /* V0.5.43: panels keep intrinsic height; a tall telemetry column no longer stretches Camera Preview. */
 .content-grid>.panel{align-self:start}
@@ -113,5 +113,11 @@
 .benchmark-report-panel .diff-row,.benchmark-report-panel .audit-diff-row{width:100%;min-width:0;padding:9px 10px;margin:0}
 
 .panel .class-audit-row{grid-template-areas:"time gt" "ai ai" "edit edit" "audit audit"}
-.bicycle-context-audit{grid-area:audit;min-width:0;color:#9db1c8;font-size:.72rem;line-height:1.45;overflow-wrap:anywhere}.bicycle-context-audit summary{cursor:pointer;color:#7dd3fc;padding:4px 0}.bicycle-context-record{margin-top:7px;padding:7px 9px;border-left:2px solid #1e3654;background:#081525;border-radius:5px}.bicycle-context-record strong{font-size:.72rem}.bicycle-context-record p{margin:4px 0}
+/* V0.5.64: one grid cell owns the evidence stack; each disclosure keeps its own flow row. */
+.panel .class-audit-row>.benchmark-evidence-stack{grid-area:audit}
+.benchmark-evidence-stack{display:grid;gap:6px;min-width:0;width:100%;align-items:start}
+.benchmark-evidence-stack:empty{display:none}
+.benchmark-audit-card{display:grid;gap:6px;min-width:0}
+.benchmark-audit-card>.benchmark-evidence-stack{padding:0 10px 5px}
+.bicycle-context-audit{min-width:0;width:100%;color:#9db1c8;font-size:.72rem;line-height:1.45;overflow-wrap:anywhere}.bicycle-context-audit summary{cursor:pointer;color:#7dd3fc;padding:4px 0;line-height:1.45;white-space:normal;overflow-wrap:anywhere}.bicycle-context-audit summary:focus-visible{outline:2px solid #5eead4;outline-offset:2px;border-radius:3px}.bicycle-context-record{margin-top:7px;padding:7px 9px;border-left:2px solid #1e3654;background:#081525;border-radius:5px}.bicycle-context-record strong{font-size:.72rem}.bicycle-context-record p{margin:4px 0}
 @media(max-width:720px){.panel .class-audit-row{grid-template-areas:"time" "gt" "ai" "edit" "audit"}}

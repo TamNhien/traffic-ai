@@ -1039,6 +1039,62 @@ class PipelineWorker(threading.Thread):
                 confidence = max(confidence, fresh_car[1])
         return event_label, confidence
 
+    def _crossing_class_refinement_admission(
+        self, track_id: int, frame_index: int, display_label: str, slots_used: int,
+    ) -> dict:
+        """Keep deterministic all-frame crossing evidence off the wall clock.
+
+        Non-deterministic video still obeys its lag limit. Periodic
+        work keeps that limit in the caller. This only admits the bounded
+        crossing sample; it never supplies a class opinion or another slot.
+        """
+        from math import isfinite
+
+        source_type = str(self.payload.source_type)
+        deterministic_all_frames = (
+            source_type == "video"
+            and getattr(self.state, "deterministic_video_replay", False) is True
+            and getattr(self.state, "frame_policy", None) == "all-frames"
+        )
+        lag = float(self.state.playback_lag_seconds)
+        limit = float(self.refine_max_lag)
+        used = max(0, int(slots_used))
+        budget = max(0, int(self.refine_max_per_frame))
+        cached = self._class_refine_last_observation.get(int(track_id))
+        same_frame_cached = cached is not None and int(cached[0]) == int(frame_index)
+        models_available = self._refiner_model is not None or self._general_refiner_model is not None
+        request_inference = False
+        if same_frame_cached:
+            reason = "same_frame_cached"
+        elif not self.refine_at_crossing:
+            reason = "refinement_disabled"
+        elif str(display_label) not in AMBIGUOUS_CLASSES:
+            reason = "unsupported_label"
+        elif used >= budget:
+            reason = "target_budget_exhausted"
+        elif source_type == "video" and not deterministic_all_frames and not lag <= limit:
+            reason = "video_lag_limited"
+        elif cached is not None and int(cached[0]) > int(frame_index):
+            reason = "future_observation_cached"
+        elif not models_available:
+            reason = "models_unavailable"
+        else:
+            request_inference = True
+            reason = (
+                "admitted_deterministic_all_frames" if deterministic_all_frames
+                else "admitted_video_within_lag" if source_type == "video"
+                else "admitted_live"
+            )
+        return {
+            "observed_frame_index": int(frame_index), "admission_reason": reason,
+            "request_inference": request_inference, "same_frame_cached": same_frame_cached,
+            "deterministic_all_frames": deterministic_all_frames,
+            "models_available": models_available,
+            "playback_lag_seconds": lag if isfinite(lag) else None,
+            "lag_limit_seconds": limit if isfinite(limit) else None,
+            "slots_used_before": used, "slot_budget": budget,
+        }
+
     def _truck_lock_prescan_candidate(
         self, track_id: int, frame_index: int, display_label: str, gate_distance_ratio: float,
     ) -> bool:
@@ -2038,29 +2094,29 @@ class PipelineWorker(threading.Thread):
                             crossing_class_refine_track_ids.add(int(track_id))
                             crossing_this_frame = True
                             refined = None
-                            lag_allows_refine = (
-                                self.payload.source_type != "video"
-                                or self.state.playback_lag_seconds <= self.refine_max_lag
+                            crossing_class_admission = self._crossing_class_refinement_admission(
+                                track_id, frame_index, display_label, refines_used_this_frame,
                             )
                             # Every supported class may spend a crossing slot.
                             # Periodic candidates run only after all tracks have
                             # made their geometry decisions, so ordinary road
                             # traffic cannot starve a later crossing this frame.
                             cached_refine = self._class_refine_last_observation.get(int(track_id))
+                            # did_refine charges an attempted target sample; it
+                            # does not prove predict succeeded or found the target.
+                            crossing_class_admission["target_sample_attempted"] = False
                             if cached_refine is not None and cached_refine[0] == int(frame_index):
                                 refined = cached_refine[1]
-                            elif (
-                                self.refine_at_crossing
-                                and display_label in AMBIGUOUS_CLASSES
-                                and lag_allows_refine
-                                and refines_used_this_frame < self.refine_max_per_frame
-                            ):
+                            elif crossing_class_admission["request_inference"]:
                                 refined, did_refine = self._observe_class_refiner(
                                     track_id, frame_index, analysis_frame, rect, display_label,
                                     device, use_half, force=True,
                                 )
                                 if did_refine:
                                     refines_used_this_frame += 1
+                                crossing_class_admission["target_sample_attempted"] = bool(did_refine)
+                            crossing_class_admission["target_opinion_available"] = refined is not None
+                            gate_trace_track["crossing_class_refinement_audit"] = crossing_class_admission
 
                             event_label, policy_conf = self._resolve_crossing_class_refinement(
                                 track_id, frame_index, current_label, stable_label, class_certainty,
@@ -2131,6 +2187,8 @@ class PipelineWorker(threading.Thread):
                             crossing_point = counter.crossing_point_for(track_id)
                             crossing_x = (crossing_point[0] / width) if crossing_point is not None and width > 0 else None
                             crossing_y = (crossing_point[1] / height) if crossing_point is not None and height > 0 else None
+                            crossing_class_admission["source_frame_index"] = event_frame_index
+                            crossing_class_admission["source_time_seconds"] = source_time_seconds
                             gate_trace_track["crossing_clock_audit"] = {
                                 "direction": direction, "crossing_method": crossing_method,
                                 "geometric_frame_index": crossing_frame_float,

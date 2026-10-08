@@ -564,7 +564,7 @@ def _class_worker() -> PipelineWorker:
     return worker
 
 
-def _execute_frame_class_work(worker, tracks, *, initial_used=0):
+def _execute_frame_class_work(worker, tracks, *, initial_used=0, frame_index=100, label="motorcycle", source_path=None):
     """Execute the real production loop's class-work statements in track order.
 
     Only camera transport/inference is supplied by the fixture. This deliberately
@@ -575,7 +575,7 @@ def _execute_frame_class_work(worker, tracks, *, initial_used=0):
     from pathlib import Path
     import app.worker as worker_module
 
-    source_path = Path(worker_module.__file__)
+    source_path = Path(source_path or worker_module.__file__)
     tree = ast.parse(source_path.read_text(encoding="utf-8"))
     cls = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "PipelineWorker")
     run = next(node for node in cls.body if isinstance(node, ast.FunctionDef) and node.name == "run")
@@ -609,7 +609,7 @@ def _execute_frame_class_work(worker, tracks, *, initial_used=0):
     collect_code = compile_nodes(track_loop.body[start:end])
     crossing_code = compile_nodes(crossing.body[:stop])
     env = {
-        "self": worker, "frame_index": 100, "width": 1000, "height": 1000,
+        "self": worker, "frame_index": frame_index, "width": 1000, "height": 1000,
         "analysis_frame": object(), "device": "cpu", "use_half": False,
         "counter": SimpleNamespace(road_zone=None, line=SimpleNamespace(denormalize=lambda *_: ((100, 500), (900, 500)))),
         "vehicle_family": __import__("app.classification", fromlist=["vehicle_family"]).vehicle_family,
@@ -620,9 +620,10 @@ def _execute_frame_class_work(worker, tracks, *, initial_used=0):
     for tid, anchor, crossing_direction in tracks:
         env.update({
             "track_id": tid, "anchor": anchor, "rect": (anchor[0] - 10, anchor[1] - 10, anchor[0] + 10, anchor[1] + 10),
-            "current_label": "motorcycle", "stable_label": "motorcycle", "display_label": "motorcycle",
-            "base_display_label": "motorcycle", "class_certainty": .95, "class_hits": 10,
+            "current_label": label, "stable_label": label, "display_label": label,
+            "base_display_label": label, "class_certainty": .95, "class_hits": 10,
             "confidence_f": .30, "direction": crossing_direction,
+            "gate_trace_track": {},
         })
         exec(collect_code, env)
         if crossing_direction:
@@ -1663,3 +1664,226 @@ def test_v0563_one_lock_prescan_cannot_replace_two_consecutive_car_wins() -> Non
     assert worker._fresh_car_crossing_override(254023, 16049, ("car", .86)) is None
     assert worker._fresh_car_crossing_override(254023, 16050, ("car", .86)) is None
     assert getattr(worker.state, "truck_lock_demotion_rescues", 0) == 0
+
+
+def _v0564_deterministic_class_worker(lag=2.0):
+    worker = _class_worker()
+    worker.state.deterministic_video_replay = True
+    worker.state.frame_policy = "all-frames"
+    worker.state.playback_lag_seconds = lag
+    return worker
+
+
+def test_v0564_actual_crossing_collects_second_fresh_car_vote_at_all_replay_lags() -> None:
+    # These are controlled refiner opinions, not a claim that this CAR vote
+    # will be returned by a model when session 169 is replayed on Windows.
+    for lag in (0.0, .36, 2.0):
+        worker = _v0564_deterministic_class_worker(lag)
+        candidate = _v0563_locked_truck_candidate(worker)
+        worker._refiner_model = None
+        worker._refine_crossing_label = lambda *_args, **_kwargs: ("car", .86)
+        assert worker._run_deferred_class_refinements(
+            [candidate], 16049, object(), "cpu", False, 0, set(),
+        ) == 1
+
+        env = _execute_frame_class_work(
+            worker, [(254023, (500, 510), "OUT")], frame_index=16050, label="truck",
+        )
+
+        audit = env["gate_trace_track"]["crossing_class_refinement_audit"]
+        assert env["event_label"] == "car"
+        assert env["refines_used_this_frame"] == 1
+        assert worker.state.class_refine_checks == 2
+        assert worker.state.truck_lock_demotion_rescues == 1
+        assert worker._truck_semantic_lock.snapshot_for(254023, 16050, "truck") is not None
+        assert audit["admission_reason"] == "admitted_deterministic_all_frames"
+        assert audit["observed_frame_index"] == 16050
+        assert audit["playback_lag_seconds"] == lag
+        assert audit["slots_used_before"] == 0 and audit["slot_budget"] == 1
+        assert audit["request_inference"] and audit["target_sample_attempted"]
+        assert audit["target_opinion_available"]
+
+
+def test_v0564_crossing_lag_bypass_requires_video_determinism_and_all_frames() -> None:
+    for deterministic, policy in ((False, "all-frames"), (True, "live-latest"), (False, "live-latest")):
+        worker = _v0564_deterministic_class_worker()
+        worker.state.deterministic_video_replay = deterministic
+        worker.state.frame_policy = policy
+        calls = []
+        worker._observe_class_refiner = lambda *_args, **_kwargs: calls.append(1) or (("bicycle", .95), True)
+
+        env = _execute_frame_class_work(worker, [(7, (500, 510), "IN")])
+
+        assert calls == [] and env["refines_used_this_frame"] == 0
+        audit = env["gate_trace_track"]["crossing_class_refinement_audit"]
+        assert audit["admission_reason"] == "video_lag_limited"
+        assert not audit["deterministic_all_frames"]
+        assert not audit["request_inference"] and not audit["target_sample_attempted"]
+
+
+def test_v0564_non_deterministic_video_retains_inclusive_lag_limit() -> None:
+    for lag, expected in ((.35, 1), (.350001, 0)):
+        worker = _class_worker()
+        worker.state.playback_lag_seconds = lag
+        calls = []
+        worker._observe_class_refiner = lambda *_args, **_kwargs: calls.append(1) or (("motorcycle", .9), True)
+
+        env = _execute_frame_class_work(worker, [(7, (500, 510), "IN")])
+
+        assert len(calls) == expected and env["refines_used_this_frame"] == expected
+        assert env["gate_trace_track"]["crossing_class_refinement_audit"]["admission_reason"] == (
+            "admitted_video_within_lag" if expected else "video_lag_limited"
+        )
+
+
+def test_v0564_live_source_keeps_existing_crossing_lag_behavior() -> None:
+    worker = _v0564_deterministic_class_worker()
+    worker.payload.source_type = "rtsp"
+    calls = []
+    worker._observe_class_refiner = lambda *_args, **_kwargs: calls.append(1) or (("motorcycle", .9), True)
+
+    env = _execute_frame_class_work(worker, [(7, (500, 510), "IN")])
+
+    assert calls == [1] and env["refines_used_this_frame"] == 1
+    audit = env["gate_trace_track"]["crossing_class_refinement_audit"]
+    assert audit["admission_reason"] == "admitted_live"
+    assert not audit["deterministic_all_frames"]
+
+
+def test_v0564_deterministic_crossing_preserves_disabled_label_and_slot_guards() -> None:
+    for disabled, label, initial_used, expected in (
+        (True, "motorcycle", 0, "refinement_disabled"),
+        (False, "other", 0, "unsupported_label"),
+        (False, "motorcycle", 1, "target_budget_exhausted"),
+    ):
+        worker = _v0564_deterministic_class_worker()
+        worker.refine_at_crossing = not disabled
+        calls = []
+        worker._observe_class_refiner = lambda *_args, **_kwargs: calls.append(1) or (("bicycle", .95), True)
+
+        env = _execute_frame_class_work(worker, [(7, (500, 510), "IN")], initial_used=initial_used, label=label)
+
+        assert calls == [] and env["refines_used_this_frame"] == initial_used
+        assert env["gate_trace_track"]["crossing_class_refinement_audit"]["admission_reason"] == expected
+
+
+def test_v0564_deterministic_multiple_crossings_share_original_frame_budget() -> None:
+    worker = _v0564_deterministic_class_worker()
+    calls = []
+    worker._observe_class_refiner = lambda track, *_args, **_kwargs: calls.append(track) or (("motorcycle", .9), True)
+
+    env = _execute_frame_class_work(worker, [(7, (500, 510), "IN"), (8, (500, 515), "OUT")])
+
+    assert calls == [7] and env["refines_used_this_frame"] == 1
+    assert env["gate_trace_track"]["crossing_class_refinement_audit"]["admission_reason"] == "target_budget_exhausted"
+
+
+def test_v0564_same_frame_crossing_cache_cannot_spend_or_invent_another_opinion() -> None:
+    for cached in (None, ("bicycle", .95)):
+        worker = _v0564_deterministic_class_worker()
+        worker._class_refine_last_observation[7] = (100, cached)
+        calls = []
+        worker._observe_class_refiner = lambda *_args, **_kwargs: calls.append(1) or (("bicycle", .99), True)
+
+        env = _execute_frame_class_work(worker, [(7, (500, 510), "IN")], initial_used=1)
+
+        assert calls == [] and env["refines_used_this_frame"] == 1
+        audit = env["gate_trace_track"]["crossing_class_refinement_audit"]
+        assert audit["admission_reason"] == "same_frame_cached"
+        assert audit["same_frame_cached"] and not audit["target_sample_attempted"]
+        assert audit["target_opinion_available"] is (cached is not None)
+
+
+def test_v0564_missing_models_cannot_create_crossing_evidence_or_spend_slots() -> None:
+    worker = _v0564_deterministic_class_worker()
+    worker._refiner_model = worker._general_refiner_model = None
+
+    env = _execute_frame_class_work(worker, [(7, (500, 510), "IN")])
+
+    assert worker.state.class_refine_checks == 0 and env["refines_used_this_frame"] == 0
+    assert worker._class_refine_last_observation == {}
+    audit = env["gate_trace_track"]["crossing_class_refinement_audit"]
+    assert audit["admission_reason"] == "models_unavailable"
+    assert not audit["models_available"] and not audit["target_opinion_available"]
+
+
+def test_v0564_future_observation_is_not_crossing_frame_evidence() -> None:
+    worker = _v0564_deterministic_class_worker()
+    worker._class_refine_last_observation[7] = (101, ("bicycle", .95))
+
+    env = _execute_frame_class_work(worker, [(7, (500, 510), "IN")])
+
+    assert env["refines_used_this_frame"] == 0
+    assert worker._class_refine_last_observation[7] == (101, ("bicycle", .95))
+    audit = env["gate_trace_track"]["crossing_class_refinement_audit"]
+    assert audit["admission_reason"] == "future_observation_cached"
+    assert not audit["target_opinion_available"]
+
+
+def test_v0564_attempted_sample_without_target_does_not_claim_class_evidence() -> None:
+    worker = _v0564_deterministic_class_worker()
+    worker._refine_crossing_label = lambda *_args, **_kwargs: None
+
+    env = _execute_frame_class_work(worker, [(7, (500, 510), "IN")])
+
+    assert env["refines_used_this_frame"] == 1 and worker.state.class_refine_checks == 1
+    assert worker._class_refine_last_observation[7] == (100, None)
+    assert worker._class_refine_overrides == {}
+    audit = env["gate_trace_track"]["crossing_class_refinement_audit"]
+    assert audit["request_inference"] and audit["target_sample_attempted"]
+    assert not audit["target_opinion_available"]
+    assert "inference_performed" not in audit
+
+
+def test_v0564_deterministic_crossing_keeps_stronger_truck_veto_and_two_frame_threshold() -> None:
+    for domain, general in ((None, ("car", .79)), (("truck", .91), ("car", .86)), (None, ("car", .86))):
+        worker = _v0564_deterministic_class_worker()
+        _v0563_locked_truck_candidate(worker)
+        worker._refine_crossing_label = lambda *_args, **kwargs: (
+            domain if kwargs["model"] is worker._refiner_model else general
+        )
+        # Only one actual source frame is admitted here: even .86 CAR cannot
+        # replace the two distinct consecutive CAR-winning frame contract.
+        env = _execute_frame_class_work(worker, [(254023, (500, 510), "OUT")], frame_index=16050, label="truck")
+
+        assert env["event_label"] == "truck" and env["refines_used_this_frame"] == 1
+        assert getattr(worker.state, "truck_lock_demotion_rescues", 0) == 0
+
+
+def test_v0564_deterministic_crossing_does_not_unthrottle_periodic_or_lock_prescan() -> None:
+    worker = _v0564_deterministic_class_worker()
+    worker._truck_semantic_lock.observe(7, 100, stable_label="truck", certainty=.90, hits=4)
+    calls = []
+    worker._observe_class_refiner = lambda *_args, **_kwargs: calls.append(1) or (("car", .9), True)
+
+    env = _execute_frame_class_work(worker, [(7, (500, 510), None)], label="truck")
+
+    assert calls == [] and env["refines_used_this_frame"] == 0
+    assert env["periodic_class_refine_candidates"] == []
+
+
+def test_v0564_crossing_admission_audit_uses_selected_source_clock_without_overwriting_observation() -> None:
+    import ast
+    from pathlib import Path
+    import app.worker as worker_module
+
+    worker = _v0564_deterministic_class_worker()
+    env = _execute_frame_class_work(worker, [(7, (500, 510), "IN")], frame_index=16050)
+    tree = ast.parse(Path(worker_module.__file__).read_text(encoding="utf-8"))
+    cls = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "PipelineWorker")
+    run = next(node for node in cls.body if isinstance(node, ast.FunctionDef) and node.name == "run")
+    clock_assignments = [
+        node for node in ast.walk(run) if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name)
+                and target.value.id == "crossing_class_admission" and isinstance(target.slice, ast.Constant)
+                and target.slice.value in {"source_frame_index", "source_time_seconds"} for target in node.targets)
+    ]
+    assert len(clock_assignments) == 2
+    # The selected interpolated event clock can precede the actual crossing
+    # inference frame. Execute the production assignments without relabeling it.
+    env.update({"event_frame_index": 16049, "source_time_seconds": 641.9311})
+    exec(compile(ast.fix_missing_locations(ast.Module(body=clock_assignments, type_ignores=[])), worker_module.__file__, "exec"), env)
+    audit = env["gate_trace_track"]["crossing_class_refinement_audit"]
+    assert audit["observed_frame_index"] == 16050
+    assert audit["source_frame_index"] == 16049 and audit["source_time_seconds"] == 641.9311
+    assert "confidence" not in audit and "backend_event_id" not in audit

@@ -1,12 +1,12 @@
-# Traffic AI V0.5.63 — Mẫu class sát vạch và phản hồi backend
+# Traffic AI V0.5.64 — Mẫu class tại crossing và bằng chứng ghép GT
 
-Nâng cấp từ đúng full source V0.5.62 đã giao: giữ đủ **191 đường dẫn cũ**, thêm migration0077. Đơn vị đếm là **lượt cắt vạch**; cùng phương tiện quay lại và cắt vạch lần nữa được tính thêm một lượt.
+Nâng cấp từ full source **V0.5.63 đã giao**, giữ đủ 192 đường dẫn cũ và thêm migration0078. Đơn vị đếm là **lượt cắt vạch**; cùng phương tiện quay lại cắt vạch lần nữa được tính thêm một lượt.
 
-## Benchmark đầu vào V0.5.62
+## Benchmark đầu vào V0.5.63
 
-Ảnh mới: session168 / benchmark45, sao chép149 GT từ benchmark44.
+Ảnh session169 / benchmark46, sao chép149 GT từ benchmark45:
 
-| Chỉ số | V0.5.62 đã chạy trên máy người dùng |
+| Chỉ số | V0.5.63 đã chạy trên máy người dùng |
 |---|---:|
 | Ground truth / AI đếm | 149 / 149 |
 | Khớp | 135 |
@@ -15,105 +15,75 @@ Nâng cấp từ đúng full source V0.5.62 đã giao: giữ đủ **191 đườ
 | Class đúng / sai loại | 98.5% / 2 |
 | IN / OUT | 68 / 81 |
 
-So với ảnh V0.5.61: khớp134→135, F1 89.9%→90.6%, lọt/dư15→14; class99.3%→98.5%. Hai hàng sai loại: xe đạp04:49.450 IN→xe máy và ô tô10:41.981 OUT→xe tải. Worker195 proposal, backend gộp46, DB149 timed events, Human Guard loại30; Integrity OK. Phân bốAI146 xe máy/1 xe đạp/2 xe tải.
+Hai lỗi loại xe còn lại: xe đạp04:49.450 IN→xe máy và ô tô10:41.981 OUT→xe tải. Worker195 proposal, backend gộp46, DB149 timed events, Human Guard loại30; Integrity OK. AI146 xe máy/1 xe đạp/2 xe tải. Các điểm số trên là **input V0.5.63**, chưa phải kết quả replay V0.5.64.
 
-RAR mới có **194 JPG duy nhất + 1 JSONL**, tất cả ảnh phiên168/1440×811; đã xem5 contact sheet và ảnh mục tiêu. Trace196,204,733byte /23,652 dòng gồm23,650 observation và2 metadata header;195 proposal gồm194 `committed_before_submit` và1 `submitted_after_guard`. Có42 canonical âm, không còn nhóm canonical trùng trong cùng frame ở trace này. Đây là kiểm tra input thực, không chứng minh mọi track đã ghép đúng danh tính vật lý.
+RAR cung cấp194 JPG và JSONL session169. Trace có195 terminal receipts: **149 created +46 deduplicated**; tất cả ở attempt1, footer drain_complete=true/pending0/dropped0. Mỗi receipt dedup tham chiếu một event created trong trace. Source OUT69.4566 của canonical20863 được tạo thành event9828; OUT70.52 của canonical17578 tạo event9829. Vì vậy không thể quy hàng GT69.457 bị lọt cho backend gộp chỉ dựa vào thời gian gần nhau. Chưa có events.json/ground-truth.json của benchmark46 để xác định event đã được ghép với GT nào.
 
-**Chưa replay V0.5.63, chưa có F1 mới.** Giữ GT149, matching window0.75s, global matching, model/taxonomy, Road Zone và Gate/cooldown/dedup. `counting.py`, `tracking.py`, `classification.py` và test tương ứng giữ nguyên byte từ .62.
+## Thay đổi V0.5.64
 
-## Thay đổi V0.5.63
+### Lấy mẫu phân loại tại crossing của replay toàn bộ frame
 
-### Lấy mẫu thêm TRUCK gần đoạn vạch bằng ngân sách còn dư
+Source .63 dùng điều kiện playback lag theo thời gian thực để quyết định lấy mẫu refiner tại crossing, cả khi video chọn deterministic/all-frames. Máy chậm có thể bỏ mẫu crossing mặc dù vẫn đọc đủ source frames.
 
-Trace quanh ô tô10:41.981 cho thấy vấn đề cadence. Trong .61, canonical254023 có CAR.838867 ởf16049 vàCAR.858887 ở crossingf16050: đủ hai frame liên tiếp theo policy .80 hiện có. Trong .62, CAR.716797 trước đó ởf16007, f16049 không suy luận; crossingf16050 chỉ có một CAR win, nên live TRUCK lock vẫn thắng. Đây là thiếu mẫu bằng chứng trước crossing, không phải lỗi cache/source clock .62 đã sửa.
+`.64` chỉ bỏ **lag gate tại crossing** khi source là video, deterministic_video_replay=true và frame_policy=all-frames. Vẫn giữ class-refine flag, nhãn được hỗ trợ, model khả dụng, cache/source clock và ngân sách mỗi frame. Video ngoài chế độ này giữ lag gate; nguồn live giữ hành vi admission cũ. Lượt periodic/prescan vẫn giữ điều kiện tải cũ; đây không phải cam kết toàn bộ inference độc lập với tốc độ máy.
 
-`.63` giữ queue thường và crossing ưu tiên trước. Sau lượt thường, nếu còn slot thì lấy mẫu frame hiện tại cho TRUCK có lock còn hiệu lực gần **đoạn vạch hữu hạn**. Không lấy frame tương lai, không đổi .80/hai frame liên tiếp/TTL/veto/consensus; giữ ưu tiên periodic MC/bicycle và `AI_REFINE_MAX_PER_FRAME=2`. Xa đoạn vạch/lock hết hạn hoặc future lock không được lấy thêm.
+Giữ ngưỡng CAR .80, hai frame liên tiếp, TTL, consensus, semantic lock và bicycle veto. Không tạo opinion hoặc nhãn giả khi thiếu model/ngân sách. Trace ghi admission reason, frame quan sát, lag/limit, slot đã dùng, model khả dụng, lượt lấy mẫu đã thử, opinion có hay không và source clock crossing gốc. Đây là metadata audit, không tạo event hoặc sửa điểm số.
 
-217 test class/context đạt, gồm11 mới. Actual .62 ZIP differential:210 control đạt +5 assertion regression; .63 đạt215 assertion chung, không dùng thiếu helper mới làm bằng chứng lỗi. Probe4 pha cadence cho cùng opinions có kiểm soát cho thấy lấy mẫu thêm giảm phụ thuộc pha. Đây không phải inference/replay model thật.
+Trace .63 có general CAR .838867 ởf16049 nhưng không có class audit ởf16050. Vì trace cũ chưa ghi admission/lag, **không khẳng định lag là nguyên nhân cụ thể của lần chạy169**, và không hứa lỗi ô tô đã hết trước khi replay model thật.
 
-Inference cục bộ có thể tăng khi còn slot; khi ngân sách đã dùng hết thì không hứa có CAR proof thứ hai. Sampling chỉ tạo cơ hội thu bằng chứng, không tạo nhãn hoặc crossing. Lỗi xe đạp04:49.450 vẫn có dấu vết detect muộn/target khác; không hạ bicycle veto để ép khớp GT.
+### Giải thích event lân cận đã ghép với GT khác
 
-### Ghi phản hồi backend cho từng event đã xử lý
+Review candidate của hàng lọt trước đây chỉ lấy từ AI event chưa được ghép. `.64` bổ sung `matching_audit` cho missed GT nếu có event lân cận **đã ghép**: event ID/source time/track/hướng/loại và GT ID/time/hướng/loại mà phép ghép hiện tại đã chọn.
 
-Dispatcher thêm queue audit giới hạn1024. Sau khi request hoàn tất retry policy, ghi một terminal record với camera/session/canonical, class/hướng, **source frame/time gốc**, method/điểm cắt, số lần thử, outcome và event ID backend hợp lệ nếu có:
+Chỉ dùng pair indices và source clocks chưa làm tròn trong cùng report; tối đa4 record, sắp theo khoảng cách thời gian và event ID, ghi số record bị lược. Cửa sổ đúng bằng scoring tolerance. Scope là temporal_neighbor_assignment, danh tính phương tiện vật lý vẫn chưa được chứng minh. Evidence này giúp phân biệt một event đã lưu nhưng được ghép với GT khác với một candidate còn dư; không tự gán event cho GT lọt.
 
-| Outcome | Ý nghĩa |
-|---|---|
-| created | Backend trả header xác nhận tạo event |
-| deduplicated | Backend trả header gộp trùng, kèm reason đã whitelist |
-| acknowledged_unknown | Response thành công nhưng backend cũ không nêu tạo hay gộp |
-| failed | Request đã hết retry mà chưa nhận response thành công |
+**Global matching vẫn tối đa số cặp và tối thiểu tổng sai lệch thời gian.** Không dùng class/hướng để chọn cặp; class/hướng chấm riêng. Giữ tolerance0.75s mặc định, review candidates, toàn bộ metrics, GT, Gate/cooldown, tracking và backend dedup.
 
-Record không chứa token, backend URL, snapshot/model path, response body hay error text. Body thiếu/không phải JSON hoặc ID bool/không phải positive integer không chặn delivery. Audit lỗi/queue đầy không retry HTTP thêm, không đổi counters; queue đầy tăng `delivery_audit_dropped`. Client không khởi tạo được vẫn có pending/flush=False như .62, không tự tạo terminal receipt cho việc chưa xử lý.
+### Sửa bố cục bằng chứng và dashboard
 
-Worker là writer JSONL duy nhất, drain receipts trong lúc chạy và **sau dispatcher EOF drain, trước close/publish/gzip**. Footer `delivery_summary` ghi drain complete/pending/dropped của **toàn phiên**, không tạo observation frame/time giả. Lỗi trace vẫn không chặn delivery. Camera/session giữ trạng thái draining đến khi delivery và optional artifact closure kết thúc.
+Hai disclosure trong hàng sai loại trước đây cùng chiếm grid-area audit, làm chồng chữ. Một wrapper sở hữu ô grid; từng disclosure nằm ở một hàng riêng. Hàng lọt nhóm nút tua và bằng chứng cùng card, controls không lồng nhau. Sửa dashboard ở màn hình ≥1500px về hai cột bằng nhau; GT/Report vẫn50/50. Giữ state, handlers, scoring controls và AnnotationEditor.
 
-### Diagnosis phân biệt proposal và kết quả gửi
+## Hồ sơ benchmark cho lần phân tích tiếp theo
 
-Canonical20863 có proposal OUT source69.4566 tạiobservation1739; primary Gate replay từ anchors tái hiện69.456629. Ảnh benchmark vẫn báo lọt GT69.457 và nearest DB event70.52. Proposal sát GT không tự chứng minh đúng phương tiện GT hoặc đã lưu DB; cần events.json/ground-truth.json và receipt để xác định downstream cause. Vì chưa có DB export nên không nới Gate/cooldown/dedup.
+Sau khi phiên hoàn tất, bấm **Tải hồ sơ benchmark**. ZIP gồm ground-truth.json, events.json, report.json, config.json, manifest.json và benchmark-trace.jsonl.gz khi trace đóng thành công. Đây là cách lấy cả GT/event assignments thay vì chỉ ảnh và thư mục camera.
 
-Khi truy vấn đúng canonical, .62 bỏ qua proposal và vẫn báo Gate reject. `.63` trả `crossing_proposal_observed` hoặc `crossing_delivery_observed` cùng source evidence đã scope. Khi chưa biết canonical của event/GT, các record vẫn là **track lân cận**, reason cũ giữ nguyên; không gắn proposal gần thời gian thành nguyên nhân chắc chắn của GT lọt.
+Backend ưu tiên gzip từ AI service, fallback raw cho service cũ; cap128MiB cho representation truyền qua HTTP và deadline20s. Kiểm tra hash gzip, identity content encoding, certificate/stat signature của trace đóng; không inflate trace vào RAM hoặc tạo observation giả. Trace không lấy được thì manifest ghi lý do, report vẫn tải được. Geometry dùng header lịch sử của worker, không lấy camera hiện tại thay thế.
 
-Diagnosis giữ tối đa8 proposal và8 receipt mỗi cửa sổ, whitelist fields và lọc bằng source clock gốc. Guard/ack đến muộn không làm đổi timestamp crossing. Receipt/footer là audit-only: không tăng detection/rejection/event counters hoặc finite geometry evidence. Proposal ghi `backend_persistence=unverified`; backend response không tự chứng minh đúng GT. Traces cũ không có fields mới giữ decoded JSON legacy.
+Giữ proposal/receipt audit cap8 và phân biệt matched canonical với track lân cận. URL metadata bỏ credentials/query/fragment; không export môi trường, model paths hoặc weights. Giữ JSONL trong thư mục camera khi nén ảnh; chỉ JPG không đủ provenance.
 
-Report thêm mục **Dấu vết crossing và phản hồi backend** ở hàng lọt và sai loại, hiển thị source time, canonical, stage/outcome, event ID và lý do gộp bằng tiếng Việt. API lọc lại đúng matched canonical, bỏ private fields và giữ cap8. Giữ mọi benchmark handler/state và scoring controls; UI additions không đổi GT hay kết quả matching.
-
-## Hồ sơ benchmark để phân tích lần tiếp theo
-
-Nút **Tải hồ sơ benchmark** trong Report tải `traffic-ai-benchmark-<id>-session-<id>.zip` gồm:
-
-| File | Nội dung |
-|---|---|
-| manifest.json | ID, thời điểm export, hash/size từng file và trạng thái trace |
-| report.json | Báo cáo từ cùng danh sách GT/event được export |
-| ground-truth.json | Mốc GT, class, hướng và timecode |
-| events.json | Event DB, track, source time/frame và crossing method |
-| session.json | Metadata phiên được chọn lọc |
-| config.json | Geometry/tolerance benchmark; camera hiện tại ghi riêng |
-| benchmark-trace.jsonl.gz | Trace đóng thành công, nén nguyên vẹn và có hash nguồn/gzip |
-| benchmark-trace.jsonl | Fallback trace raw từ AI service cũ, nếu <=128MiB |
-
-API: `GET /api/benchmarks/{id}/export`; AI có `/benchmark-traces/{session_id}/download-gzip` cho trace có certificate đóng hợp lệ và `/download` raw tương thích. Backend ưu tiên gzip, fallback raw khi service cũ trả404. Giữ **128MiB cho representation truyền qua HTTP** và deadline20s; backend không giải nén trace vào RAM. Content-Encoding phải identity để không bị HTTP client tự inflate. Manifest có encoding, số byte/hash của nguồn và gzip; hash gzip được kiểm tra với bytes nhận được. Gzip source đã đóng phải còn đúng stat signature; file thay đổi/ghi tiếp hoặc artifact/certificate lỗi không được coi là trace hoàn tất.
-
-Nếu trace thiếu/quá lớn/timeout/không hợp lệ, manifest ghi rõ và report ZIP vẫn tải được; không cắt trace hoặc tạo điểm quan sát giả. Tải sau khi phiên hoàn tất. JSONL raw trong thư mục camera và endpoint raw giữ nguyên; gzip canonical giúp **Tải hồ sơ benchmark** bao gồm file phiên163 thực tế lớn hơn128MiB mà không tăng cap.
-
-URL metadata bỏ user/password/query/fragment; video chỉ giữ tên. Không lấy environment/settings, model paths hay video/model weights. Header geometry mới là cấu hình worker thực dùng, ở đúng kích thước frame đã xử lý; camera hiện tại ghi riêng và không thay thế geometry lịch sử. Trace mới có primary/stable class, override/lock source clocks và ordinary domain/general opinions theo target. Audit class chi tiết vẫn nằm trong **raw/gzip trace**. Diagnosis và Report nay thêm proposal/receipt đã lọc theo source clock và canonical; trace cũ không có các fields mới giữ output legacy. Geometry vẫn dùng header lịch sử hợp lệ của worker.
-
-Gửi ZIP hồ sơ cùng screenshot. Khi nén thư mục ảnh camera, giữ `session_<id>_benchmark-trace.jsonl`; chỉ JPG không cung cấp đầy đủ event/track/source-clock provenance.
-
-## Version, môi trường và database
+## Version và môi trường
 
 | Thành phần | Giá trị |
 |---|---|
-| VERSION / Frontend / Backend / AI Service | 0.5.63 |
-| Alembic head | `0077_delivery_prescan_v0563` |
-| Parent | `0076_identity_audit_v0562` |
-| schema_version | 0.5.63 |
+| VERSION / Frontend / Backend / AI Service | 0.5.64 |
+| Alembic head | `0078_replay_audit_v0564` |
+| Parent | `0077_delivery_prescan_v0563` |
+| schema_version | 0.5.64 |
 | npm trong Docker / CI / packageManager | 12.2.0 |
 | Node.js trong Docker / CI | 26.10.0 |
 
-npm12.2.0 đã đối chiếu [npm CLI latest](https://github.com/npm/cli/releases/latest) ngày07/10/2026; giữ Node26.10.0 theo cấu hình hiện có. Giữ quy trình publish test→commit→push→tag→Release. Migration 0077 chỉ cập nhật schema version, giữ dữ liệu/GT. Camera Preview/Vehicle Count và GT/Report giữ bố cục 50/50. V0.5.63 đạt **687 test functions offline**, **591 kiểm tra tĩnh**, **38 kiểm tra release cục bộ** và **30 kiểm tra frontend**. 35 test HTTP/ORM chưa chạy; không kế thừa số full pytest từ tài liệu bản trước. Phạm vi và môi trường được ghi rõ trong `VERIFICATION.md`.
+npm12.2.0 được đối chiếu [npm CLI latest](https://github.com/npm/cli/releases/latest) ngày08/10/2026. Giữ pin đồng bộ Docker/CI/packageManager và Node26.10.0. Migration0078 chỉ cập nhật schema_version, giữ dữ liệu và GT. Phạm vi kiểm tra thực hiện, số test và giới hạn môi trường nằm trong `VERIFICATION.md`. Chưa chạy Docker/PowerShell/HTTP-ORM integration/browser/model replay trong môi trường đóng gói; chưa có F1 V0.5.64.
 
 ## Đầy đủ lệnh test, start và tự động publish
 
-Giải nén full source vào thư mục dự án; giữ `.env`, video, model weights và dữ liệu đang dùng. Cần Docker Desktop chạy; cần Git/GitHub CLI cho publish và checkout nhánh `main`.
+Giải nén full source vào thư mục dự án; giữ .env, video, model weights và dữ liệu hiện có. Docker Desktop cần chạy; publish cần Git/GitHub CLI và checkout nhánh main.
 
 ```powershell
 cd D:\LienThongDH\DoAn\traffic-ai
 
 Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
 
-# Kiểm tra
+# Test
 .\scripts\test.ps1
 
 # Khởi động
 .\scripts\start.ps1
 
-# Tự test, commit, push, tạo tag và GitHub Release
+# Tự test, commit, push GitHub, tạo tag v0.5.64 và Release
 .\scripts\publish.ps1
 ```
 
-Mở **https://traffic-ai.test:8443**, nhấn `Ctrl + F5`. Chạy lại đúng clip, cùng vạch/Road Zone; tạo benchmark cho session mới, sao chép GT 149 từ benchmark45 tương thích và bấm **Đối chiếu lại**. Sau đó bấm **Tải hồ sơ benchmark** để lấy ZIP dùng cho lần phân tích tiếp theo.
+Mở **https://traffic-ai.test:8443**, nhấn Ctrl+F5. Replay đúng clip, cùng vạch/Road Zone; tạo benchmark cho session mới, sao chép149 GT từ **benchmark46** tương thích và bấm **Đối chiếu lại**. Sau đó tải ZIP hồ sơ benchmark kèm screenshot để kiểm tra kết quả .64.
 
 Nếu chưa đăng nhập GitHub CLI, chạy một lần:
 
@@ -122,25 +92,16 @@ gh auth login
 gh auth setup-git
 ```
 
-Nếu chưa cấu hình Git author, đặt `git config --global user.name` và `git config --global user.email` bằng thông tin của bạn.
-
-Publish tự đọc VERSION để tạo tag **v0.5.63**, mặc định repository `TamNhien/traffic-ai`. Script kiểm thử source đã chuẩn hóa, commit/push/tag, chờ đúng Actions run theo tag/SHA/push và tạo Release có ZIP, TAR.GZ, README, SHA256SUMS. Fallback CLI bổ sung đủ asset từ tag và hoàn tất Release tạo dở.
-
-Nếu bị gián đoạn, xử lý lỗi mạng/quyền truy cập rồi chạy lại `publish.ps1` khi source không đổi. Thay đổi source sau tag đã có cần tăng version; script không di chuyển hoặc ghi đè tag. `-NoWait` chỉ đẩy source/tag rồi trả về khi Release còn đang chờ.
-
-Đổi repository đích hoặc chạy lại workflow của tag đã có:
+Publish đọc VERSION để tạo tag **v0.5.64**, mặc định repository TamNhien/traffic-ai: test→commit→push→tag→chờ Actions đúng tag/SHA/push→Release. Asset gồm ZIP, TAR.GZ, README, SHA256SUMS; CLI fallback hoàn tất release tạo dở. Khi gián đoạn, xử lý lỗi mạng/quyền rồi chạy lại khi source không đổi. Source đổi sau tag đã có cần tăng version; script không di chuyển hoặc ghi đè tag. -NoWait trả về khi release còn chờ.
 
 ```powershell
+# Repository khác
 .\scripts\publish.ps1 -Owner TEN_GITHUB -Repository TEN_REPO
 
-gh workflow run release.yml --repo TamNhien/traffic-ai -f tag=v0.5.63
-```
+# Chạy lại workflow cho tag hiện tại
+gh workflow run release.yml --repo TamNhien/traffic-ai -f tag=v0.5.64
 
-Khi dùng npm ngoài Docker trên Windows, dùng Node.js 26.10.0 như cấu hình dự án:
-
-```powershell
+# Cập nhật npm ngoài Docker, sau khi dùng Node tương thích
 npm install -g npm@latest
 npm --version
 ```
-
-Chi tiết kiểm tra thực hiện và giới hạn môi trường đóng gói có trong `VERIFICATION.md`.
