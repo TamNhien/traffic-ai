@@ -897,6 +897,7 @@ class RefineEvidenceAccumulator:
         *,
         max_age_frames: int = 2,
         min_confidence: float = 0.80,
+        required_source: str | None = None,
     ) -> tuple[int, float, float, int | None]:
         """Return strong, very-recent four-wheel wins without stale-history veto.
 
@@ -906,6 +907,9 @@ class RefineEvidenceAccumulator:
         alive. Only distinct source frames inside a tiny age window qualify, and
         the requested label must beat every BUS/CAR/TRUCK opinion on that same
         frame. Historical evidence outside the window cannot veto the result.
+        When a source is required, only that source supplies the requested
+        label's score and clock; every source still supplies competing labels.
+        This prevents a generic CAR vote from qualifying domain CAR evidence.
         """
         selected_label = str(label)
         if selected_label not in HEAVY_CLASSES:
@@ -914,17 +918,25 @@ class RefineEvidenceAccumulator:
         max_age = max(0, int(max_age_frames))
         threshold = max(0.0, min(1.0, float(min_confidence)))
         by_frame: dict[int, dict[str, float]] = {}
-        for observed_frame, observed_label, confidence, _source in self._samples.get(int(track_id), ()):
+        selected_by_source: dict[int, float] = {}
+        for observed_frame, observed_label, confidence, source in self._samples.get(int(track_id), ()):
             age = current - int(observed_frame)
             if age < 0 or age > max_age or observed_label not in HEAVY_CLASSES:
                 continue
             frame = by_frame.setdefault(int(observed_frame), {})
             frame[observed_label] = max(frame.get(observed_label, 0.0), float(confidence))
+            if observed_label == selected_label and source == required_source:
+                selected_by_source[int(observed_frame)] = max(
+                    selected_by_source.get(int(observed_frame), 0.0), float(confidence),
+                )
 
         winning: dict[int, float] = {}
         competing_labels = HEAVY_CLASSES - {selected_label}
         for observed_frame, frame in by_frame.items():
-            confidence = frame.get(selected_label, 0.0)
+            confidence = (
+                frame.get(selected_label, 0.0) if required_source is None
+                else selected_by_source.get(observed_frame, 0.0)
+            )
             competing = max((frame.get(other, 0.0) for other in competing_labels), default=0.0)
             if confidence >= threshold and confidence > competing:
                 winning[observed_frame] = confidence * (0.992 ** (current - observed_frame))

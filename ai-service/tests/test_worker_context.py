@@ -1466,6 +1466,10 @@ def test_v0562_verified_fresh_car_crossing_still_overrides_eligible_global_lock(
     worker._truck_semantic_lock.observe(7, 100, stable_label="truck", certainty=.90, hits=4)
     worker._refine_consensus.update(7, 128, "car", .86, "general")
     worker._refine_consensus.update(7, 129, "car", .88, "general")
+    # V0.5.65: a live semantic TRUCK lock needs independent domain CAR
+    # corroboration on both qualifying frames, rather than generic CAR alone.
+    worker._refine_consensus.update(7, 128, "car", .86, "domain")
+    worker._refine_consensus.update(7, 129, "car", .88, "domain")
     result = worker._resolve_crossing_class_refinement(
         7, 129, "car", "car", .90, 8, "car", ("car", .88),
     )
@@ -1513,8 +1517,10 @@ def test_v0563_locked_truck_near_gate_samples_missing_previous_car_frame() -> No
     result = worker._resolve_crossing_class_refinement(
         254023, 16050, "truck", "truck", .9269068210965732, 25, "truck", refined,
     )
-    assert result[0] == "car" and result[1] > .97
-    assert worker.state.truck_lock_demotion_rescues == 1
+    # Both generic CAR opinions were sampled. They do not prove that a
+    # qualified delivery-van TRUCK identity is a passenger car.
+    assert result[0] == "truck" and result[1] > .99
+    assert getattr(worker.state, "truck_lock_demotion_rescues", 0) == 0
     assert worker._truck_semantic_lock.snapshot_for(254023, 16050, "truck") is not None
 
 
@@ -1691,10 +1697,11 @@ def test_v0564_actual_crossing_collects_second_fresh_car_vote_at_all_replay_lags
         )
 
         audit = env["gate_trace_track"]["crossing_class_refinement_audit"]
-        assert env["event_label"] == "car"
+        assert env["event_label"] == "truck"
         assert env["refines_used_this_frame"] == 1
         assert worker.state.class_refine_checks == 2
-        assert worker.state.truck_lock_demotion_rescues == 1
+        assert getattr(worker.state, "truck_lock_demotion_rescues", 0) == 0
+        assert env["gate_trace_track"]["crossing_truck_class_resolution_audit"]["decision_reason"] == "qualified_truck_requires_domain_car"
         assert worker._truck_semantic_lock.snapshot_for(254023, 16050, "truck") is not None
         assert audit["admission_reason"] == "admitted_deterministic_all_frames"
         assert audit["observed_frame_index"] == 16050
@@ -1887,3 +1894,193 @@ def test_v0564_crossing_admission_audit_uses_selected_source_clock_without_overw
     assert audit["observed_frame_index"] == 16050
     assert audit["source_frame_index"] == 16049 and audit["source_time_seconds"] == 641.9311
     assert "confidence" not in audit and "backend_event_id" not in audit
+
+
+def test_v0565_recorded_van_passages_retain_qualified_truck_identity() -> None:
+    # Session 170 recorded primary/stable TRUCK and domain=None for both
+    # passages. These are actual observed scores, not a model replay.
+    for tid, frame, certainty, hits, lock_conf, previous_car, current_car in (
+        (254023, 16050, .9269068210965732, 25, .9958174520916362, .8388671875, .85888671875),
+        (-22, 22059, .9728584359403218, 28, .9863460658386041, .90380859375, .9482421875),
+    ):
+        worker = _class_worker()
+        worker._truck_semantic_lock.observe(tid, frame, stable_label="truck", certainty=lock_conf, hits=hits)
+        worker._refine_consensus.update(tid, frame - 1, "car", previous_car, "general")
+        worker._refine_consensus.update(tid, frame, "car", current_car, "general")
+        trace = {}
+        result = worker._resolve_crossing_class_refinement(
+            tid, frame, "truck", "truck", certainty, hits, "truck", ("car", current_car),
+            decision_trace=trace,
+        )
+        assert result == ("truck", lock_conf)
+        assert getattr(worker.state, "truck_lock_demotion_rescues", 0) == 0
+        assert trace["decision_reason"] == "qualified_truck_requires_domain_car"
+        assert trace["car_winning_frames"] == 2 and trace["car_latest_frame_index"] == frame
+        assert trace["domain_car_winning_frames"] == 0 and trace["domain_car_latest_frame_index"] is None
+        assert not trace["demotion_accepted"]
+        assert worker._truck_semantic_lock._locks[tid] == (lock_conf, frame)
+        assert worker._class_refine_overrides[tid][0::2] == ("car", frame)
+
+
+def test_v0565_live_truck_lock_can_demote_with_two_fresh_winning_domain_car_frames() -> None:
+    worker = _class_worker()
+    worker._truck_semantic_lock.observe(7, 100, stable_label="truck", certainty=.90, hits=4)
+    for frame, confidence in ((128, .86), (129, .88)):
+        worker._refine_consensus.update(7, frame, "car", confidence, "domain")
+        worker._refine_consensus.update(7, frame, "car", .92, "general")
+    before = dict(worker._truck_semantic_lock._locks)
+    trace = {}
+    result = worker._resolve_crossing_class_refinement(
+        7, 129, "car", "car", .95, 10, "car", ("car", .92), decision_trace=trace,
+    )
+    assert result[0] == "car" and result[1] > .99
+    assert worker.state.truck_lock_demotion_rescues == 1
+    assert trace["decision_reason"] == "fresh_domain_car_overrides_truck" and trace["demotion_accepted"]
+    assert trace["domain_car_winning_frames"] == 2 and trace["domain_car_latest_frame_index"] == 129
+    assert worker._truck_semantic_lock._locks == before
+
+
+def test_v0565_missing_old_future_or_unknown_domain_car_cannot_demote_lock() -> None:
+    for samples in (
+        (), ((98, .90, "domain"), (99, .90, "domain")),
+        ((102, .90, "domain"), (103, .90, "domain")),
+        ((100, .90, "unknown"), (101, .90, "unknown")),
+        ((100, .90, "domain"), (101, .90, "general")),
+    ):
+        worker = _class_worker()
+        worker._truck_semantic_lock.observe(7, 100, stable_label="truck", certainty=.90, hits=4)
+        for frame in (100, 101):
+            worker._refine_consensus.update(7, frame, "car", .95, "general")
+        for frame, confidence, source in samples:
+            worker._refine_consensus.update(7, frame, "car", confidence, source)
+        trace = {}
+        assert worker._fresh_car_crossing_override(7, 101, ("car", .95), decision_trace=trace) is None
+        assert trace["decision_reason"] == "qualified_truck_requires_domain_car"
+        assert not trace["demotion_accepted"]
+        assert getattr(worker.state, "truck_lock_demotion_rescues", 0) == 0
+
+
+def test_v0565_domain_car_threshold_and_stronger_truck_veto_remain_strict() -> None:
+    for domain_conf, competing_label, competing_conf in (
+        (.79, "truck", 0.0), (.86, "truck", .90), (.86, "bus", .86),
+    ):
+        worker = _class_worker()
+        worker._truck_semantic_lock.observe(7, 100, stable_label="truck", certainty=.90, hits=4)
+        for frame in (100, 101):
+            worker._refine_consensus.update(7, frame, "car", .99, "general")
+            worker._refine_consensus.update(7, frame, "car", domain_conf, "domain")
+            worker._refine_consensus.update(7, frame, competing_label, competing_conf, "general")
+        assert worker._fresh_car_crossing_override(7, 101, ("car", .99)) is None
+        assert getattr(worker.state, "truck_lock_demotion_rescues", 0) == 0
+
+
+def test_v0565_clear_car_without_qualified_truck_lock_keeps_normal_class_policy() -> None:
+    worker = _class_worker()
+    trace = {}
+    result = worker._resolve_crossing_class_refinement(
+        7, 101, "car", "car", .95, 10, "car", ("car", .86), decision_trace=trace,
+    )
+    assert result == ("car", .95) and trace == {}
+    assert worker._truck_semantic_lock._locks == {}
+    assert getattr(worker.state, "truck_lock_demotion_rescues", 0) == 0
+
+
+def test_v0565_expired_truck_lock_does_not_require_domain_for_normal_car() -> None:
+    from app.classification import TruckSemanticLock
+
+    worker = _class_worker()
+    worker._truck_semantic_lock = TruckSemanticLock(ttl_frames=30)
+    worker._truck_semantic_lock.observe(7, 100, stable_label="truck", certainty=.90, hits=4)
+    worker._refine_consensus.update(7, 130, "car", .86, "general")
+    worker._refine_consensus.update(7, 131, "car", .88, "general")
+    trace = {}
+    result = worker._resolve_crossing_class_refinement(
+        7, 131, "car", "car", .95, 10, "car", ("car", .88), decision_trace=trace,
+    )
+    assert result == ("car", .95) and trace == {}
+    assert worker._truck_semantic_lock._locks == {}
+
+
+def test_v0565_future_truck_lock_cannot_guard_current_normal_car() -> None:
+    worker = _class_worker()
+    worker._truck_semantic_lock.observe(7, 102, stable_label="truck", certainty=.90, hits=4)
+    before = dict(worker._truck_semantic_lock._locks)
+    assert worker._resolve_crossing_class_refinement(
+        7, 101, "car", "car", .95, 10, "car", ("car", .88),
+    ) == ("car", .95)
+    assert worker._truck_semantic_lock._locks == before
+
+
+def test_v0565_rejected_generic_car_demotion_does_not_renew_semantic_lock_clock() -> None:
+    from app.classification import TruckSemanticLock
+
+    worker = _class_worker()
+    worker._truck_semantic_lock = TruckSemanticLock(ttl_frames=30)
+    worker._truck_semantic_lock.observe(7, 100, stable_label="truck", certainty=.90, hits=4)
+    worker._refine_consensus.update(7, 128, "car", .86, "general")
+    worker._refine_consensus.update(7, 129, "car", .88, "general")
+    assert worker._resolve_crossing_class_refinement(
+        7, 129, "car", "car", .95, 10, "car", ("car", .88),
+    )[0] == "truck"
+    assert worker._truck_semantic_lock._locks[7] == (.90, 100)
+    assert worker._class_refine_overrides[7] == ("car", .95, 129)
+    assert worker._class_override_for(7, 130, "car") == ("truck", .90)
+    assert worker._class_override_for(7, 131, "car") == ("car", .95)
+
+
+def test_v0565_configured_three_frame_domain_policy_cannot_use_two_frames() -> None:
+    worker = _class_worker()
+    worker.truck_lock_car_demotion_frames = 3
+    worker._truck_semantic_lock.observe(7, 100, stable_label="truck", certainty=.90, hits=4)
+    for frame in (100, 101, 102):
+        worker._refine_consensus.update(7, frame, "car", .90, "general")
+    for frame in (101, 102):
+        worker._refine_consensus.update(7, frame, "car", .90, "domain")
+    assert worker._fresh_car_crossing_override(7, 102, ("car", .90)) is None
+    worker._refine_consensus.update(7, 100, "car", .90, "domain")
+    assert worker._fresh_car_crossing_override(7, 102, ("car", .90))[0] == "car"
+
+
+def test_v0565_actual_crossing_without_domain_model_retains_truck_with_same_budget() -> None:
+    worker = _v0564_deterministic_class_worker()
+    worker._refiner_model = None
+    worker._truck_semantic_lock.observe(-22, 22059, stable_label="truck", certainty=.98, hits=28)
+    worker._refine_consensus.update(-22, 22058, "car", .90380859375, "general")
+    worker._refine_crossing_label = lambda *_args, **_kwargs: ("car", .9482421875)
+    env = _execute_frame_class_work(worker, [(-22, (500, 510), "IN")], frame_index=22059, label="truck")
+    assert env["event_label"] == "truck" and env["refines_used_this_frame"] == 1
+    assert worker.state.class_refine_checks == 1 and worker.state.general_refine_checks == 1
+    assert worker.state.domain_refine_checks == 0
+    assert env["gate_trace_track"]["crossing_truck_class_resolution_audit"]["decision_reason"] == "qualified_truck_requires_domain_car"
+    assert env["gate_trace_track"]["crossing_class_refinement_audit"]["target_sample_attempted"]
+
+
+def test_v0565_actual_truck_resolution_audit_keeps_observation_and_crossing_clocks_separate() -> None:
+    import ast
+    from pathlib import Path
+    import app.worker as worker_module
+
+    worker = _v0564_deterministic_class_worker()
+    worker._truck_semantic_lock.observe(254023, 16050, stable_label="truck", certainty=.99, hits=25)
+    worker._refine_consensus.update(254023, 16049, "car", .86, "general")
+    worker._refine_crossing_label = lambda *_args, **kwargs: (
+        None if kwargs["model"] is worker._refiner_model else ("car", .88)
+    )
+    env = _execute_frame_class_work(worker, [(254023, (500, 510), "OUT")], frame_index=16050, label="truck")
+    audit = env["gate_trace_track"]["crossing_truck_class_resolution_audit"]
+    tree = ast.parse(Path(worker_module.__file__).read_text(encoding="utf-8"))
+    cls = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "PipelineWorker")
+    run = next(node for node in cls.body if isinstance(node, ast.FunctionDef) and node.name == "run")
+    assignments = [
+        node for node in ast.walk(run) if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name)
+                and target.value.id == "crossing_truck_class_resolution" and isinstance(target.slice, ast.Constant)
+                and target.slice.value in {"source_frame_index", "source_time_seconds", "vehicle_type"} for target in node.targets)
+    ]
+    assert len(assignments) == 3
+    env.update({"event_frame_index": 16049, "source_time_seconds": 641.9311})
+    exec(compile(ast.fix_missing_locations(ast.Module(body=assignments, type_ignores=[])), worker_module.__file__, "exec"), env)
+    assert audit["observed_frame_index"] == 16050 and audit["source_frame_index"] == 16049
+    assert audit["source_time_seconds"] == 641.9311 and audit["vehicle_type"] == "truck"
+    assert audit["decision_reason"] == "qualified_truck_requires_domain_car" and not audit["demotion_accepted"]
+    assert "backend_event_id" not in audit

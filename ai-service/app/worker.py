@@ -974,18 +974,35 @@ class PipelineWorker(threading.Thread):
 
     def _fresh_car_crossing_override(
         self, track_id: int, frame_index: int, refined: tuple[str, float] | None,
+        *, decision_trace: dict | None = None,
     ) -> tuple[str, float] | None:
-        """Let repeated fresh CAR evidence beat only a stale TRUCK crossing lock.
+        """Require domain CAR corroboration before demoting a live TRUCK lock.
 
         This does not clear the semantic lock globally. It is a crossing-only
         decision requiring two distinct, very recent target-aware CAR-winning
         frames at high confidence, with the newest win on the crossing frame.
+        Generic COCO CAR includes delivery vans. A qualified TRUCK lock needs
+        equally fresh, winning domain CAR evidence on those distinct frames;
+        an absent domain opinion never proves the target is a passenger car.
         """
-        if refined is None or str(refined[0]) != "car":
-            return None
         threshold = float(getattr(self, "truck_lock_car_demotion_conf", 0.80))
         required_frames = max(2, int(getattr(self, "truck_lock_car_demotion_frames", 2)))
+        lock = self._truck_semantic_lock.snapshot_for(track_id, frame_index, "truck")
+        if decision_trace is not None:
+            decision_trace.update({
+                "observed_frame_index": int(frame_index),
+                "confidence_threshold": threshold, "required_frames": required_frames,
+                "max_age_frames": required_frames - 1,
+                "qualified_truck_lock": lock,
+                "car_winning_frames": 0, "car_latest_frame_index": None,
+                "domain_car_winning_frames": 0, "domain_car_latest_frame_index": None,
+                "decision_reason": "no_fresh_car_opinion", "demotion_accepted": False,
+            })
+        if refined is None or str(refined[0]) != "car":
+            return None
         if float(refined[1]) < threshold:
+            if decision_trace is not None:
+                decision_trace["decision_reason"] = "car_below_threshold"
             return None
         hits, fused, strongest, latest = self._refine_consensus.recent_four_wheel_wins(
             track_id,
@@ -994,8 +1011,31 @@ class PipelineWorker(threading.Thread):
             max_age_frames=required_frames - 1,
             min_confidence=threshold,
         )
+        if decision_trace is not None:
+            decision_trace.update({
+                "car_winning_frames": hits, "car_latest_frame_index": latest,
+                "decision_reason": "insufficient_consecutive_car_wins",
+            })
         if hits < required_frames or latest != int(frame_index) or strongest < threshold:
             return None
+        if lock is not None:
+            domain_hits, _domain_fused, domain_strongest, domain_latest = self._refine_consensus.recent_four_wheel_wins(
+                track_id, frame_index, "car", max_age_frames=required_frames - 1,
+                min_confidence=threshold, required_source="domain",
+            )
+            if decision_trace is not None:
+                decision_trace.update({
+                    "domain_car_winning_frames": domain_hits,
+                    "domain_car_latest_frame_index": domain_latest,
+                    "decision_reason": "qualified_truck_requires_domain_car",
+                })
+            if domain_hits < required_frames or domain_latest != int(frame_index) or domain_strongest < threshold:
+                return None
+        if decision_trace is not None:
+            decision_trace.update({
+                "decision_reason": "fresh_domain_car_overrides_truck" if lock is not None else "fresh_car_without_truck_lock",
+                "demotion_accepted": True,
+            })
         tid = int(track_id)
         demotion_tracks = getattr(self, "_truck_lock_demotion_tracks", None)
         if demotion_tracks is None:
@@ -1009,6 +1049,7 @@ class PipelineWorker(threading.Thread):
     def _resolve_crossing_class_refinement(
         self, track_id: int, frame_index: int, current_label: str, stable_label: str,
         certainty: float, hits: int, base_display_label: str, refined: tuple[str, float] | None,
+        *, decision_trace: dict | None = None,
     ) -> tuple[str, float]:
         if (
             refined is not None
@@ -1033,7 +1074,9 @@ class PipelineWorker(threading.Thread):
             event_label = remembered[0]
             confidence = max(confidence, remembered[1])
         if event_label == "truck":
-            fresh_car = self._fresh_car_crossing_override(track_id, frame_index, refined)
+            fresh_car = self._fresh_car_crossing_override(
+                track_id, frame_index, refined, decision_trace=decision_trace,
+            )
             if fresh_car is not None:
                 event_label = fresh_car[0]
                 confidence = max(confidence, fresh_car[1])
@@ -2118,10 +2161,14 @@ class PipelineWorker(threading.Thread):
                             crossing_class_admission["target_opinion_available"] = refined is not None
                             gate_trace_track["crossing_class_refinement_audit"] = crossing_class_admission
 
+                            crossing_truck_class_resolution = {}
                             event_label, policy_conf = self._resolve_crossing_class_refinement(
                                 track_id, frame_index, current_label, stable_label, class_certainty,
                                 class_hits, base_display_label, refined,
+                                decision_trace=crossing_truck_class_resolution,
                             )
+                            if crossing_truck_class_resolution:
+                                gate_trace_track["crossing_truck_class_resolution_audit"] = crossing_truck_class_resolution
 
                             # V0.5.34 crossing-only bicycle context rescue.  The
                             # strict V0.5.33 policy remains the default; only a
@@ -2189,6 +2236,10 @@ class PipelineWorker(threading.Thread):
                             crossing_y = (crossing_point[1] / height) if crossing_point is not None and height > 0 else None
                             crossing_class_admission["source_frame_index"] = event_frame_index
                             crossing_class_admission["source_time_seconds"] = source_time_seconds
+                            if crossing_truck_class_resolution:
+                                crossing_truck_class_resolution["source_frame_index"] = event_frame_index
+                                crossing_truck_class_resolution["source_time_seconds"] = source_time_seconds
+                                crossing_truck_class_resolution["vehicle_type"] = event_label
                             gate_trace_track["crossing_clock_audit"] = {
                                 "direction": direction, "crossing_method": crossing_method,
                                 "geometric_frame_index": crossing_frame_float,

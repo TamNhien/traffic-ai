@@ -323,12 +323,12 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.64") { throw "VERSION phải là 0.5.64, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0078_replay_audit_v0564.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0078_replay_audit_v0564.py." }
+  if ($version -ne "0.5.65") { throw "VERSION phải là 0.5.65, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0079_van_semantics_v0565.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0079_van_semantics_v0565.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0078_replay_audit_v0564"' -or $migrationText -notmatch 'down_revision = "0077_delivery_prescan_v0563"' -or $migrationText -notmatch "value='0.5.64'") {
-    throw "Migration 0078_replay_audit_v0564 không đúng contract V0.5.64."
+  if ($migrationText -notmatch 'revision = "0079_van_semantics_v0565"' -or $migrationText -notmatch 'down_revision = "0078_replay_audit_v0564"' -or $migrationText -notmatch "value='0.5.65'") {
+    throw "Migration 0079_van_semantics_v0565 không đúng contract V0.5.65."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
@@ -1177,7 +1177,7 @@ function Assert-TruckSemanticLockV0530Contract {
   if ($worker -notmatch '_merge_canonical_track_state' -or $worker -notmatch '_four_wheel_duplicate_pairs' -or $worker -notmatch 'AI_TRUCK_SEMANTIC_LOCK_FRAMES') { throw "V0.5.30 thiếu worker wiring semantic lock / unique 4W telemetry." }
   if ($runtime -notmatch 'truck_semantic_locks') { throw "Runtime V0.5.30 thiếu truck semantic telemetry." }
   if ($routes -notmatch 'heavy-semantic-signature') { throw "Backend V0.5.30 thiếu cross-ID CAR/TRUCK semantic dedup." }
-  if ($frontend -notmatch 'truck_semantic_locks' -or $frontend -notmatch 'truck_crossing_tracks' -or $frontend -notmatch 'four_wheel_duplicate_suppressed' -or $frontend -notmatch 'Van/xe tải đã được xác nhận') { throw "Frontend V0.5.30 thiếu warning/telemetry semantic cho truck/canonical 4W." }
+  if ($frontend -notmatch 'truck_semantic_locks' -or $frontend -notmatch 'truck_crossing_tracks' -or $frontend -notmatch 'four_wheel_duplicate_suppressed' -or $frontend -notmatch 'Cần kiểm tra lại loại xe tại lúc cắt vạch') { throw "Frontend V0.5.30 thiếu warning/telemetry semantic cho truck/canonical 4W." }
   if ($envExample -notmatch 'AI_TRUCK_SEMANTIC_LOCK_FRAMES=450' -or $start -notmatch 'AI_TRUCK_SEMANTIC_LOCK_CONF') { throw "V0.5.30 thiếu runtime defaults semantic lock." }
   if ($classTests -notmatch 'test_v0530_truck_semantic_lock_holds_through_closeup_car_flip' -or $trackingTests -notmatch 'test_v0530_alias_reports_displaced_canonical_for_state_merge' -or $countingTests -notmatch 'test_v0530_merge_track_preserves_preline_history_for_four_wheel_alias') { throw "V0.5.30 thiếu regression tests cho van/truck." }
   Write-Host "[OK] Truck Semantic Lock + Canonical 4W Fusion V0.5.30" -ForegroundColor Green
@@ -1907,6 +1907,30 @@ function Assert-ReplayAuditV0564Contract {
   Write-Host "[OK] Crossing Class Admission + Matching Evidence V0.5.64" -ForegroundColor Green
 }
 
+function Assert-VanSemanticsV0565Contract {
+  Write-Host "`n[Traffic AI] Domain-supported Van/Truck Semantics V0.5.65" -ForegroundColor Cyan
+  $worker = Get-Content (Join-Path $root "ai-service\app\worker.py") -Raw -Encoding UTF8
+  $classification = Get-Content (Join-Path $root "ai-service\app\classification.py") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  if ($classification -notmatch 'required_source: str \| None = None' -or $classification -notmatch 'selected_by_source' -or $classification -notmatch 'source == required_source') {
+    throw "V0.5.65 thiếu CAR evidence theo đúng nguồn mà vẫn giữ aggregate default."
+  }
+  if ($worker -notmatch 'required_source="domain"' -or $worker -notmatch 'qualified_truck_requires_domain_car' -or $worker -notmatch 'domain_hits < required_frames') {
+    throw "V0.5.65 thiếu domain corroboration trước khi đổi khóa TRUCK còn hiệu lực thành CAR."
+  }
+  if ($worker -notmatch 'crossing_truck_class_resolution_audit' -or $worker -notmatch 'domain_car_winning_frames' -or $worker -notmatch 'crossing_truck_class_resolution\["source_time_seconds"\]') {
+    throw "V0.5.65 thiếu lý do class và source clock gốc tại crossing."
+  }
+  if ($frontend -notmatch 'Cần kiểm tra lại loại xe tại lúc cắt vạch' -or $frontend -notmatch 'van chở hàng được đánh dấu là Xe tải' -or $frontend -match 'V0\.5\.30 giữ class TRUCK qua đoạn áp sát vạch') {
+    throw "V0.5.65 cảnh báo van còn khẳng định policy cũ hoặc thiếu hướng dẫn review GT."
+  }
+  foreach ($relative in @("ai-service\tests\test_classification.py", "ai-service\tests\test_worker_context.py")) {
+    $text = Get-Content (Join-Path $root $relative) -Raw -Encoding UTF8
+    if ($text -notmatch 'def test_v0565_') { throw "V0.5.65 thiếu regression trong $relative." }
+  }
+  Write-Host "[OK] Domain-supported Van/Truck Semantics V0.5.65" -ForegroundColor Green
+}
+
 function Invoke-Step([string]$Title, [scriptblock]$Action) {
   Write-Host "`n[Traffic AI] $Title" -ForegroundColor Cyan
   & $Action
@@ -1987,6 +2011,7 @@ Assert-SpanClockClassV0561Contract
 Assert-IdentityProvenanceV0562Contract
 Assert-DeliveryPrescanV0563Contract
 Assert-ReplayAuditV0564Contract
+Assert-VanSemanticsV0565Contract
 Assert-LegacySemanticCompatibilityV0523R1
 
 Write-Host "`n[Traffic AI] Road Zone + Frame Browser V0.5.11" -ForegroundColor Cyan

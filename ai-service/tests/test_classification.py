@@ -1339,3 +1339,69 @@ def test_v0561_recent_car_win_rejects_same_frame_heavy_competitor() -> None:
     evidence.update(9, 100, "truck", 0.90, "domain")
     evidence.update(9, 101, "car", 0.88, "general")
     assert evidence.recent_four_wheel_wins(9, 101, "car", max_age_frames=1, min_confidence=0.80)[0] == 1
+
+
+def test_v0565_domain_car_wins_cannot_borrow_generic_confidence_or_source() -> None:
+    evidence = RefineEvidenceAccumulator()
+    for frame in (100, 101):
+        evidence.update(7, frame, "car", .99, "general")
+        evidence.update(7, frame, "car", .79, "domain")
+    assert evidence.recent_four_wheel_wins(7, 101, "car", max_age_frames=1)[0] == 2
+    assert evidence.recent_four_wheel_wins(
+        7, 101, "car", max_age_frames=1, required_source="domain",
+    ) == (0, 0.0, 0.0, None)
+    assert evidence.recent_four_wheel_wins(
+        7, 101, "car", max_age_frames=1, required_source="unknown",
+    ) == (0, 0.0, 0.0, None)
+
+
+def test_v0565_domain_car_competes_with_every_source_without_borrowing_car_score() -> None:
+    evidence = RefineEvidenceAccumulator()
+    for frame in (100, 101):
+        evidence.update(7, frame, "car", .85, "domain")
+        evidence.update(7, frame, "car", .99, "general")
+    evidence.update(7, 100, "truck", .86, "general")
+    evidence.update(7, 101, "bus", .85, "domain")
+    assert evidence.recent_four_wheel_wins(7, 101, "car", max_age_frames=1)[0] == 2
+    assert evidence.recent_four_wheel_wins(
+        7, 101, "car", max_age_frames=1, required_source="domain",
+    ) == (0, 0.0, 0.0, None)
+
+
+def test_v0565_domain_car_requires_current_distinct_source_frames() -> None:
+    evidence = RefineEvidenceAccumulator()
+    for frame in (98, 100, 102):
+        evidence.update(7, frame, "car", .90, "domain")
+    # Multiple retries and another model on the same frame are one hit.
+    evidence.update(7, 100, "car", .95, "domain")
+    evidence.update(7, 101, "car", .95, "general")
+    assert evidence.recent_four_wheel_wins(
+        7, 101, "car", max_age_frames=1, required_source="domain",
+    ) == (1, .95 * .992, .95 * .992, 100)
+
+
+def test_v0565_domain_car_two_frame_support_retains_own_confidence() -> None:
+    evidence = RefineEvidenceAccumulator()
+    evidence.update(7, 100, "car", .80, "domain")
+    evidence.update(7, 101, "car", .81, "domain")
+    evidence.update(7, 100, "car", .99, "general")
+    evidence.update(7, 101, "car", .99, "general")
+    hits, fused, strongest, source_frame = evidence.recent_four_wheel_wins(
+        7, 101, "car", max_age_frames=1, required_source="domain",
+    )
+    assert hits == 2 and source_frame == 101 and strongest == .81
+    assert abs(fused - (1.0 - (1.0 - .80 * .992) * (1.0 - .81))) < 1e-12
+
+
+def test_v0565_domain_car_rebind_keeps_source_clock_and_deduplicates_retries() -> None:
+    evidence = RefineEvidenceAccumulator()
+    evidence.update(9, 100, "car", .86, "domain")
+    evidence.update(-22, 100, "car", .86, "domain")
+    evidence.update(-22, 101, "car", .88, "domain")
+    evidence.merge_track(9, -22)
+    assert evidence.recent_four_wheel_wins(
+        -22, 101, "car", max_age_frames=1, required_source="domain",
+    )[0::3] == (2, 101)
+    assert evidence.recent_four_wheel_wins(
+        9, 101, "car", max_age_frames=1, required_source="domain",
+    ) == (0, 0.0, 0.0, None)
