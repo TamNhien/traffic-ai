@@ -1,4 +1,12 @@
-# Kiểm tra Traffic AI V0.5.66
+# Kiểm tra Traffic AI V0.5.67
+
+## Kết quả thực hiện cho lần nâng cấp này
+
+- Dựa trên full source ZIP V0.5.66 do người dùng tải lên, không hồi quy về bản cũ.
+- Trace RAR session172: 23.650 frame records, 195 `event_delivery` (149 `created`, 46 `deduplicated`), một metadata session, một geometry header và một delivery summary. Mốc OUT GT 69.457s có persisted DB event OUT 69.4566s (event10275); không thể kết luận điều kiện ghép GT từ trace không có bản export đầy đủ.
+- Backend pytest: **140 passed**, gồm 5 regression V0.5.67; AI pytest: **631 passed**, tổng 771. Do môi trường không cài `httpx2`/`psycopg`, backend dùng SQLite memory và shim `httpx2->httpx` chỉ ở ngoài ZIP; AI dùng shim tương tự và thư mục tạm cho dữ liệu.
+- Đây là unit/synthetic integration test của source thực, không xác nhận Docker/PowerShell, model inference/GPU, hoặc F1 mới trên clip. Không chạy lệnh publish/GitHub trong môi trường đóng gói.
+- Benchmark matching vẫn nguyên tắc timestamp-only one-to-one ±tolerance. Temporal competition chỉ thêm evidence read-only khi có event thực trong cửa sổ; không sửa GT/event/scores/timeout/dedup.
 
 ## Kết quả thực hiện
 

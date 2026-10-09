@@ -121,3 +121,22 @@
 .benchmark-audit-card>.benchmark-evidence-stack{padding:0 10px 5px}
 .bicycle-context-audit{min-width:0;width:100%;color:#9db1c8;font-size:.72rem;line-height:1.45;overflow-wrap:anywhere}.bicycle-context-audit summary{cursor:pointer;color:#7dd3fc;padding:4px 0;line-height:1.45;white-space:normal;overflow-wrap:anywhere}.bicycle-context-audit summary:focus-visible{outline:2px solid #5eead4;outline-offset:2px;border-radius:3px}.bicycle-context-record{margin-top:7px;padding:7px 9px;border-left:2px solid #1e3654;background:#081525;border-radius:5px}.bicycle-context-record strong{font-size:.72rem}.bicycle-context-record p{margin:4px 0}
 @media(max-width:720px){.panel .class-audit-row{grid-template-areas:"time" "gt" "ai" "edit" "audit"}}
+
+
+/* V0.5.67: readable, non-overlapping temporal competition evidence. */
+.benchmark-temporal-explainer span {
+  display: block;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+}
+.benchmark-temporal-note {
+  font-size: 0.76rem;
+  line-height: 1.45;
+  color: #a9d6f7;
+  padding: 0.4rem 0.6rem;
+  margin-top: 0.35rem;
+  border-left: 2px solid #3b82f6;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}

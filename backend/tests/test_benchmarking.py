@@ -7,6 +7,55 @@ def item(idx, time, direction="in", vehicle_type="motorcycle"):
     return SimpleNamespace(id=idx, source_time_seconds=time, direction=direction, vehicle_type=vehicle_type)
 
 
+
+def test_v0567_equal_totals_do_not_hide_unmatched_timecodes() -> None:
+    result = match_crossings([item(1, 10.0)], [item(11, 12.0)], 0.75)
+    assert result["ground_truth_total"] == result["ai_total"] == 1
+    assert (result["matched"], result["missed"], result["false_positives"]) == (0, 1, 1)
+    assert result["counting_f1"] == 0
+    audit = result["temporal_assignment_audit"]
+    assert audit["count_totals_equal"] is True
+    assert audit["scoring_unchanged"] is True
+    assert audit["missed_without_persisted_event_in_window"] == 1
+    assert "temporal_evidence" not in result["missed_items"][0]
+
+
+def test_v0567_missed_mark_can_have_event_claimed_by_another_gt() -> None:
+    # Two GT marks compete for one genuinely persisted event.
+    result = match_crossings([item(1, 1.0), item(2, 1.2)], [item(11, 1.12)], 0.15)
+    assert result["matched"] == 1 and result["missed"] == 1
+    assert result["matched_items"][0]["ground_truth_id"] == 2
+    evidence = result["missed_items"][0]["temporal_evidence"]
+    assert evidence["status"] == "persisted_event_claimed_by_other_gt"
+    assert evidence["candidate_count"] == 1
+    assert evidence["nearby_persisted_events"][0]["ai_event_id"] == 11
+    assert evidence["nearby_persisted_events"][0]["assigned_ground_truth_id"] == 2
+    assert evidence["identity_proven"] is False
+    assert result["temporal_assignment_audit"]["missed_with_claimed_persisted_event"] == 1
+
+
+def test_v0567_false_positive_near_gt_already_claimed_by_ai() -> None:
+    result = match_crossings([item(1, 1.0)], [item(11, 1.01), item(12, 1.04)], 0.15)
+    assert result["matched"] == 1 and result["false_positives"] == 1
+    nearby = result["false_positive_items"][0]["temporal_evidence"]["nearby_ground_truth"]
+    assert nearby[0]["ground_truth_id"] == 1
+    assert nearby[0]["assigned_ai_event_id"] == 11
+    assert result["temporal_assignment_audit"]["false_positives_near_assigned_ground_truth"] == 1
+
+
+def test_v0567_direction_never_rewrites_temporal_score() -> None:
+    result = match_crossings([item(1, 10, "in")], [item(11, 10, "out")], 0.75)
+    assert result["matched"] == 1
+    assert result["direction_accuracy"] == 0
+    assert result["temporal_assignment_audit"]["scoring_unchanged"] is True
+
+
+def test_v0567_unscored_empty_gt_has_no_competition_audit() -> None:
+    result = match_crossings([], [item(11, 10)], 0.75)
+    assert result["temporal_assignment_audit"] is None
+    assert result["report_readiness"]["scoring_available"] is False
+
+
 def test_benchmark_exact_match() -> None:
     result = match_crossings([item(1, 1.0)], [item(11, 1.02)], 0.10)
     assert result["matched"] == 1

@@ -323,12 +323,12 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.66") { throw "VERSION phải là 0.5.66, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0080_benchmark_ready_v0566.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0080_benchmark_ready_v0566.py." }
+  if ($version -ne "0.5.67") { throw "VERSION phải là 0.5.67, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0081_temporal_audit_v0567.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0081_temporal_audit_v0567.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0080_benchmark_ready_v0566"' -or $migrationText -notmatch 'down_revision = "0079_van_semantics_v0565"' -or $migrationText -notmatch "value='0.5.66'") {
-    throw "Migration 0080_benchmark_ready_v0566 không đúng contract V0.5.66."
+  if ($migrationText -notmatch 'revision = "0081_temporal_audit_v0567"' -or $migrationText -notmatch 'down_revision = "0080_benchmark_ready_v0566"' -or $migrationText -notmatch "value='0.5.67'") {
+    throw "Migration 0081_temporal_audit_v0567 không đúng contract V0.5.67."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
@@ -1950,6 +1950,20 @@ function Assert-BenchmarkReadinessV0566Contract {
   Write-Host "[OK] Ground Truth Readiness V0.5.66" -ForegroundColor Green
 }
 
+function Assert-TemporalAssignmentV0567Contract {
+  Write-Host "`n[Traffic AI] Temporal Assignment Evidence V0.5.67" -ForegroundColor Cyan
+  $benchmark = Get-Content (Join-Path $root "backend\app\benchmarking.py") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  $tests = Get-Content (Join-Path $root "backend\tests\test_benchmarking.py") -Raw -Encoding UTF8
+  if ($benchmark -notmatch 'def _attach_temporal_assignment_evidence' -or $benchmark -notmatch '"scoring_unchanged": True' -or $benchmark -notmatch '"identity_proven": False') {
+    throw "V0.5.67 thiếu audit phân biệt timecode và định danh vật lý."
+  }
+  if ($frontend -notmatch 'temporal_assignment_audit' -or $frontend -notmatch 'Tổng GT = AI' -or $tests -notmatch 'def test_v0567_equal_totals') {
+    throw "V0.5.67 thiếu UI hoặc regression cho GT=AI nhưng lọt/dư."
+  }
+  Write-Host "[OK] Temporal Assignment Evidence V0.5.67" -ForegroundColor Green
+}
+
 function Invoke-Step([string]$Title, [scriptblock]$Action) {
   Write-Host "`n[Traffic AI] $Title" -ForegroundColor Cyan
   & $Action
@@ -2032,6 +2046,7 @@ Assert-DeliveryPrescanV0563Contract
 Assert-ReplayAuditV0564Contract
 Assert-VanSemanticsV0565Contract
 Assert-BenchmarkReadinessV0566Contract
+Assert-TemporalAssignmentV0567Contract
 Assert-LegacySemanticCompatibilityV0523R1
 
 Write-Host "`n[Traffic AI] Road Zone + Frame Browser V0.5.11" -ForegroundColor Cyan

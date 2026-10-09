@@ -528,6 +528,122 @@ def _missed_matching_audit(
     }
 
 
+
+def _attach_temporal_assignment_evidence(
+    gt: list[TimedCrossing],
+    ai: list[TimedCrossing],
+    pairs: list[tuple[int, int]],
+    missed_items: list[dict],
+    false_positive_items: list[dict],
+    tolerance: float,
+) -> dict:
+    """Audit timestamp competition without inventing physical vehicle identities.
+
+    A GT mark can remain unmatched even with a persisted event inside its
+    scoring window when that event is already used by a different GT mark.
+    This is not proof that the AI failed to detect the vehicle, or that
+    the mark and the nearby event depict the same physical object.
+
+    Audit is read-only: pair assignments, classes, directions, tolerance,
+    and scores are never changed.
+    """
+    by_gt = {gt_index: ai_index for gt_index, ai_index in pairs}
+    by_ai = {ai_index: gt_index for gt_index, ai_index in pairs}
+    gt_index_by_id = {item.id: index for index, item in enumerate(gt)}
+    ai_index_by_id = {item.id: index for index, item in enumerate(ai)}
+    misses_with_competition = 0
+    misses_without_nearby_ai = 0
+    misses_with_unassigned_ai = 0
+    false_positives_near_assigned_gt = 0
+
+    for miss in missed_items:
+        index = gt_index_by_id[int(miss["ground_truth_id"])]
+        mark = gt[index]
+        eligible = [
+            (abs(event.source_time_seconds - mark.source_time_seconds), event.id, ai_index)
+            for ai_index, event in enumerate(ai)
+            if abs(event.source_time_seconds - mark.source_time_seconds) <= tolerance
+        ]
+        eligible.sort()
+        records = []
+        for _, _, ai_index in eligible[:4]:
+            event = ai[ai_index]
+            assigned_gt_index = by_ai.get(ai_index)
+            records.append({
+                "ai_event_id": int(event.id),
+                "delta_seconds": round(event.source_time_seconds - mark.source_time_seconds, 4),
+                "direction_agrees": event.direction == mark.direction,
+                "ai_direction": event.direction,
+                "ai_vehicle_type": event.vehicle_type,
+                "assigned_ground_truth_id": (
+                    int(gt[assigned_gt_index].id) if assigned_gt_index is not None else None
+                ),
+                "assignment": "assigned_other_gt" if assigned_gt_index is not None else "unassigned",
+            })
+        claimed = any(record["assignment"] == "assigned_other_gt" for record in records)
+        available = any(record["assignment"] == "unassigned" for record in records)
+        if claimed:
+            misses_with_competition += 1
+            status = "persisted_event_claimed_by_other_gt"
+        elif available:
+            misses_with_unassigned_ai += 1
+            status = "unassigned_event_in_window"
+        else:
+            misses_without_nearby_ai += 1
+            status = "no_persisted_event_in_window"
+        if eligible:
+            miss["temporal_evidence"] = {
+                "status": status,
+                "nearby_persisted_events": records,
+                "candidate_count": len(eligible),
+                "truncated": len(eligible) > 4,
+                "identity_proven": False,
+            }
+
+    for fp in false_positive_items:
+        index = ai_index_by_id[int(fp["ai_event_id"])]
+        event = ai[index]
+        eligible = [
+            (abs(mark.source_time_seconds - event.source_time_seconds), mark.id, gt_index)
+            for gt_index, mark in enumerate(gt)
+            if abs(mark.source_time_seconds - event.source_time_seconds) <= tolerance
+        ]
+        eligible.sort()
+        candidates = []
+        for _, _, gt_index in eligible[:4]:
+            mark = gt[gt_index]
+            assigned_ai_index = by_gt.get(gt_index)
+            candidates.append({
+                "ground_truth_id": int(mark.id),
+                "delta_seconds": round(event.source_time_seconds - mark.source_time_seconds, 4),
+                "direction_agrees": mark.direction == event.direction,
+                "assigned_ai_event_id": (
+                    int(ai[assigned_ai_index].id) if assigned_ai_index is not None else None
+                ),
+            })
+        if any(record["assigned_ai_event_id"] is not None for record in candidates):
+            false_positives_near_assigned_gt += 1
+        if eligible:
+            fp["temporal_evidence"] = {
+                "nearby_ground_truth": candidates,
+                "candidate_count": len(eligible),
+                "truncated": len(eligible) > 4,
+                "identity_proven": False,
+            }
+
+    return {
+        "scope": "timestamp_only_one_to_one",
+        "identity_proven": False,
+        "scoring_unchanged": True,
+        "count_totals_equal": len(gt) == len(ai),
+        "paired_within_tolerance": len(pairs),
+        "missed_with_claimed_persisted_event": misses_with_competition,
+        "missed_with_available_persisted_event": misses_with_unassigned_ai,
+        "missed_without_persisted_event_in_window": misses_without_nearby_ai,
+        "false_positives_near_assigned_ground_truth": false_positives_near_assigned_gt,
+    }
+
+
 def _empty_ground_truth_report(ai: list[TimedCrossing], tolerance: float) -> dict:
     """Retain AI observations without scoring an unannotated benchmark.
 
@@ -563,6 +679,7 @@ def _empty_ground_truth_report(ai: list[TimedCrossing], tolerance: float) -> dic
         "false_positive_reason_counts": {},
         "dominant_false_positive_reason": None,
         "unmatched_review_links": None,
+        "temporal_assignment_audit": None,
         "per_class": {
             name: {"ground_truth": 0, "ai": count, "difference": None, "correct_matches": None}
             for name, count in sorted(class_counts.items())
@@ -636,6 +753,9 @@ def match_crossings(ground_truth: Iterable[Any], ai_events: Iterable[Any], toler
     )
     unmatched_review_links = _attach_unmatched_review_candidates(
         missed, false_positive_events, false_positive_items, tolerance
+    )
+    temporal_audit = _attach_temporal_assignment_evidence(
+        gt, ai, pairs, missed, false_positive_items, tolerance
     )
 
     gt_total = len(gt)
@@ -711,6 +831,7 @@ def match_crossings(ground_truth: Iterable[Any], ai_events: Iterable[Any], toler
         "false_positive_reason_counts": false_positive_reason_counts,
         "dominant_false_positive_reason": dominant_false_positive_reason,
         "unmatched_review_links": unmatched_review_links,
+        "temporal_assignment_audit": temporal_audit,
         "per_class": per_class,
         "per_direction": per_direction,
     }
