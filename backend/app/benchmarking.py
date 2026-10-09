@@ -528,6 +528,52 @@ def _missed_matching_audit(
     }
 
 
+def _empty_ground_truth_report(ai: list[TimedCrossing], tolerance: float) -> dict:
+    """Retain AI observations without scoring an unannotated benchmark.
+
+    An empty mark list cannot distinguish a verified empty clip from a newly
+    created benchmark. Until marks exist, neither a perfect empty score nor an
+    over-count diagnosis is justified by the evidence available to this API.
+    """
+    class_counts = Counter(event.vehicle_type for event in ai)
+    direction_counts = Counter(event.direction for event in ai)
+    return {
+        "report_readiness": {
+            "status": "needs_ground_truth", "scoring_available": False,
+            "reason": "no_ground_truth",
+        },
+        "tolerance_seconds": tolerance,
+        "ground_truth_total": 0,
+        "ai_total": len(ai),
+        "matched": None,
+        "missed": None,
+        "false_positives": None,
+        "count_error": None,
+        "absolute_count_error": None,
+        "counting_precision": None,
+        "counting_recall": None,
+        "counting_f1": None,
+        "direction_accuracy": None,
+        "class_accuracy": None,
+        "class_mismatches": None,
+        "class_mismatch_items": [],
+        "matched_items": [],
+        "missed_items": [],
+        "false_positive_items": [],
+        "false_positive_reason_counts": {},
+        "dominant_false_positive_reason": None,
+        "unmatched_review_links": None,
+        "per_class": {
+            name: {"ground_truth": 0, "ai": count, "difference": None, "correct_matches": None}
+            for name, count in sorted(class_counts.items())
+        },
+        "per_direction": {
+            name: {"ground_truth": 0, "ai": direction_counts[name], "difference": None}
+            for name in ("in", "out", "unknown") if direction_counts[name]
+        },
+    }
+
+
 def match_crossings(ground_truth: Iterable[Any], ai_events: Iterable[Any], tolerance_seconds: float = 0.75) -> dict:
     """Global one-to-one temporal matching for counting benchmarks.
 
@@ -542,6 +588,8 @@ def match_crossings(ground_truth: Iterable[Any], ai_events: Iterable[Any], toler
     # an equivalent query/input order must produce the same report.
     gt = sorted((_timed(item) for item in ground_truth), key=lambda x: (x.source_time_seconds, x.id))
     ai = sorted((_timed(item) for item in ai_events), key=lambda x: (x.source_time_seconds, x.id))
+    if not gt:
+        return _empty_ground_truth_report(ai, tolerance)
     pairs = _global_temporal_pairs(gt, ai, tolerance)
     matched_ai = {ai_index for _, ai_index in pairs}
     matched_gt = {gt_index for gt_index, _ in pairs}
@@ -641,6 +689,7 @@ def match_crossings(ground_truth: Iterable[Any], ai_events: Iterable[Any], toler
             }
 
     return {
+        "report_readiness": {"status": "ready", "scoring_available": True, "reason": None},
         "tolerance_seconds": tolerance,
         "ground_truth_total": gt_total,
         "ai_total": ai_total,

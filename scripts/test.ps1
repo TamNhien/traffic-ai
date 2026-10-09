@@ -323,12 +323,12 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.65") { throw "VERSION phải là 0.5.65, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0079_van_semantics_v0565.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0079_van_semantics_v0565.py." }
+  if ($version -ne "0.5.66") { throw "VERSION phải là 0.5.66, hiện tại: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0080_benchmark_ready_v0566.py"
+  if (-not (Test-Path $migration)) { throw "Thiếu migration 0080_benchmark_ready_v0566.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0079_van_semantics_v0565"' -or $migrationText -notmatch 'down_revision = "0078_replay_audit_v0564"' -or $migrationText -notmatch "value='0.5.65'") {
-    throw "Migration 0079_van_semantics_v0565 không đúng contract V0.5.65."
+  if ($migrationText -notmatch 'revision = "0080_benchmark_ready_v0566"' -or $migrationText -notmatch 'down_revision = "0079_van_semantics_v0565"' -or $migrationText -notmatch "value='0.5.66'") {
+    throw "Migration 0080_benchmark_ready_v0566 không đúng contract V0.5.66."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
@@ -1931,6 +1931,25 @@ function Assert-VanSemanticsV0565Contract {
   Write-Host "[OK] Domain-supported Van/Truck Semantics V0.5.65" -ForegroundColor Green
 }
 
+function Assert-BenchmarkReadinessV0566Contract {
+  Write-Host "`n[Traffic AI] Ground Truth Readiness V0.5.66" -ForegroundColor Cyan
+  $benchmarking = Get-Content (Join-Path $root "backend\app\benchmarking.py") -Raw -Encoding UTF8
+  $routes = Get-Content (Join-Path $root "backend\app\api\routes.py") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend\src\main.jsx") -Raw -Encoding UTF8
+  if ($benchmarking -notmatch 'report_readiness' -or $benchmarking -notmatch 'needs_ground_truth' -or $benchmarking -notmatch 'scoring_available' -or $benchmarking -notmatch 'no_ground_truth') {
+    throw "V0.5.66 thiếu trạng thái chấm điểm khi GT trống."
+  }
+  if ($routes -notmatch '"ready": report\["report_readiness"\]\["scoring_available"\]') {
+    throw "V0.5.66 ready không đồng bộ hoặc coi AI bằng 0 là chưa sẵn sàng."
+  }
+  if ($frontend -notmatch 'needs_ground_truth' -or $frontend -notmatch 'scoring_available' -or $frontend -notmatch 'Chưa có Ground Truth') {
+    throw "V0.5.66 thiếu thông báo chuẩn bị GT trước khi chấm điểm."
+  }
+  $tests = Get-Content (Join-Path $root "backend\tests\test_benchmarking.py") -Raw -Encoding UTF8
+  if ($tests -notmatch 'def test_v0566_') { throw "V0.5.66 thiếu regression cho GT trống và AI bằng 0." }
+  Write-Host "[OK] Ground Truth Readiness V0.5.66" -ForegroundColor Green
+}
+
 function Invoke-Step([string]$Title, [scriptblock]$Action) {
   Write-Host "`n[Traffic AI] $Title" -ForegroundColor Cyan
   & $Action
@@ -2012,6 +2031,7 @@ Assert-IdentityProvenanceV0562Contract
 Assert-DeliveryPrescanV0563Contract
 Assert-ReplayAuditV0564Contract
 Assert-VanSemanticsV0565Contract
+Assert-BenchmarkReadinessV0566Contract
 Assert-LegacySemanticCompatibilityV0523R1
 
 Write-Host "`n[Traffic AI] Road Zone + Frame Browser V0.5.11" -ForegroundColor Cyan

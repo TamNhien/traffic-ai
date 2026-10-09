@@ -1,88 +1,57 @@
-# Traffic AI V0.5.65 — Giữ semantic Xe tải cho van
+# Traffic AI V0.5.66 — Chuẩn bị Ground Truth trước khi chấm benchmark
 
-Nâng cấp từ full source **V0.5.64 đã giao**, giữ đủ193 đường dẫn cũ và thêm migration0079. Theo quy ước người dùng xác nhận, **van chở hàng thuộc Xe tải**. Đơn vị đếm là lượt cắt vạch; một xe quay lại cắt vạch lần nữa được tính thêm một lượt.
+Nâng cấp từ đúng full source **V0.5.65 đã giao**. Bản này bổ sung trạng thái sẵn sàng benchmark và giữ bản sửa van chở hàng thành **Xe tải**. Đơn vị đếm là lượt cắt vạch; một xe quay lại cắt vạch lần nữa được tính thêm một lượt.
 
-## Kết quả đầu vào V0.5.64
+## Vấn đề trong kết quả mới
 
-Ảnh session170 / benchmark47, sao chép149 GT từ benchmark46:
+Ảnh và trace V0.5.65, session 171 cho thấy 149 lượt được lưu: 146 xe máy, 1 xe đạp, 2 xe tải; IN 68 / OUT 81. Worker đề xuất 195 lượt, backend gộp 46, Human Guard loại 30. Có 195 terminal receipts, 149 created + 46 deduplicated; drain hoàn tất và pending/dropped đều 0.
 
-| Chỉ số | V0.5.64 đã chạy trên máy người dùng |
-|---|---:|
-| Ground truth / AI đếm | 149 /149 |
-| Khớp | 135 |
-| Lọt / dư | 14 /14 |
-| Recall / Precision / F1 | 90.6% /90.6% /90.6% |
-| Class đúng / sai loại theo GT hiện tại | 99.3% /1 |
-| IN / OUT | 68 /81 |
-| AI xe máy /xe đạp /ô tô /xe tải | 146 /1 /2 /0 |
+Hai lượt van trước đây bị ghi thành Ô tô nay được lưu **TRUCK**:
 
-Worker195 proposal, backend gộp46, DB149 timed events, Human Guard loại30; Integrity OK. Class refine1888; truck semantic locks2 và truck lock→car2, truck crossings0. Lỗi benchmark còn hiển thị là bicycle04:49.450 IN→motorcycle.
-
-**99.3% không chứng minh hai van đã đúng loại.** Bảng Sai loại chỉ đang hiển thị lỗi xe đạp; chưa có GT/event assignment export để xác minh nhãn và cặp ghép của hai van. Người dùng đã xác nhận van cần tính Xe tải. Chưa replay .65 và chưa có F1/class accuracy mới.
-
-RAR có194 ảnh và JSONL session170. Trace195 proposal khớp195 receipts,149 created +46 deduplicated; all attempt1, footer drain_complete=true/pending0/dropped0. Hai event bị lưu CAR:
-
-| Lượt van | Canonical | Source frame /frame quan sát | Backend event |
+| Lượt | Canonical | Source / observed frame | Backend event |
 |---|---:|---:|---:|
-| OUT641.9311s (10:41.931) | 254023 | 16049 /16050 | 10063 |
-| IN882.2898s (14:42.290) | −22, raw286434 | 22058 /22059 | 10105 |
+| OUT10:41.931 (641.9311s) | 254023 | 16049 /16050 | 10212 |
+| IN14:42.290 (882.2898s) | −22 | 22058 /22059 | 10254 |
 
-Ảnh tại hai crossing đều cho thấy thân van kín màu trắng/xanh; overlay primary TRUCK. Không dùng màu xe để chứng minh hai tracking ID là cùng danh tính vật lý. Cả hai receipt là created, nên đây là lỗi class trước delivery, không phải backend gộp hoặc mất event.
+Đây là kết quả người dùng đã chạy trên .65, không phải model replay của .66 trong môi trường kiểm tra. So với session 170, 195 receipts giữ tracking/time/frame/direction/method/geometry/outcome; hai class CAR đổi thành TRUCK, confidence IN lấy từ truck lock. Không dùng hai canonical để khẳng định danh tính cùng một xe vật lý.
 
-## Sửa lỗi V0.5.65
+**Benchmark #48 chưa có GT:** ảnh hiển thị GT 0 / AI 149 và có nút sao chép 149 GT từ benchmark #47. F1 = 0% / 149 đếm dư ở màn hình cũ chưa phải đánh giá hợp lệ về chất lượng AI. Không có GT/event assignment export của phiên mới để kết luận Recall/F1/class accuracy.
 
-### CAR chung không tự vượt khóa Xe tải còn hiệu lực
+## Chức năng mới
 
-Ở OUT, primary/stable TRUCK có certainty.926907/hits25, semantic lock.995817; general CAR ởf16049/f16050 có confidence.838867/.858887. Ở IN, primary/stable TRUCK có certainty.972858/hits28, lock.986346; general CAR ởf22058/f22059 có confidence.903809/.948242. **Domain không có opinion, consensus=false trong cả hai ca.**
+### GT trống có trạng thái chuẩn bị riêng
 
-Sampling .64 đã hoạt động đúng. Lỗi là đường crossing-only CAR demotion cho phép hai generic CAR wins thắng một TRUCK lock còn hiệu lực, mặc dù generic CAR chưa xác nhận van là ô tô theo taxonomy dự án.
+Khi chưa có mốc Ground Truth, báo cáo hiển thị **Chưa có Ground Truth**. Vẫn xem được tổng AI, số AI theo loại xe, Integrity và tải hồ sơ benchmark. Khớp/lọt/dư/sai số/Recall/Precision/F1/class đúng hiển thị dấu **—**; không liệt kê 149 AI là 149 xe đếm dư hoặc gán nguyên nhân nội suy/rescue cho GT trống.
 
-`.65` giữ một TRUCK semantic lock hợp lệ khi chỉ có CAR từ refiner chung. Để demote khóa đang sống, phải đồng thời có:
+Thông báo hướng dẫn sao chép GT từ benchmark tương thích nếu có, với source/target ID và số GT rõ ràng, hoặc xem clip để đánh dấu. Việc sao chép dùng nút hiện có và yêu cầu bạn bấm; hệ thống không tự tạo hoặc sửa GT từ AI events. Nút Đối chiếu lại chỉ dùng khi benchmark có GT; Tải hồ sơ benchmark vẫn dùng được khi GT = 0.
 
-- Đủ CAR wins theo policy hiện có: confidence ≥.80, ít nhất hai frame nguồn liên tiếp, frame mới nhất đúng frame quan sát đang xử lý crossing.
-- Đủ **domain CAR wins** trên chính cửa sổ frame đó, cùng ngưỡng và số frame; domain phải có opinion thật ở từng source frame.
-- Domain CAR phải thắng các nhãn four-wheel cạnh tranh trên từng frame; confidence/clock từ general không được mượn làm domain proof.
+Có GT nhưng AI = 0 vẫn là một báo cáo được chấm: xe GT chưa ghép là xe lọt, Recall/Precision/F1 bằng 0. Đây là trường hợp khác với thiếu GT. Có mốc GT chỉ xác nhận dữ liệu chấm đã tồn tại, không chứng minh người dùng đã đánh dấu đầy đủ toàn clip.
 
-Không có domain, domain yếu/một frame/cũ/future hoặc bị TRUCK/BUS mạnh hơn veto thì giữ khóa Xe tải. Không kéo dài TTL hay xóa semantic lock toàn cục. Đường CAR thông thường khi không có khóa TRUCK hợp lệ giữ nguyên; domain CAR đủ bằng chứng vẫn được sửa nhãn TRUCK sai tại crossing.
+Hiện chưa có trường xác nhận riêng cho một clip đã được kiểm chứng không có xe. Vì vậy GT = 0 / AI = 0 cũng là chưa có dữ liệu chấm, không tự nhận điểm 100%.
 
-Đây là bảo vệ **van đã có bằng chứng TRUCK**, không phải detector mới nhận diện mọi van. Nếu model chưa từng cung cấp TRUCK proof hoặc khóa đã hết hạn, class vẫn dựa vào bằng chứng hiện có. Việc yêu cầu domain corroboration có thể giữ nhãn TRUCK sai lâu hơn khi domain model không cho ý kiến; cần xem trace/model training khi gặp ca đó.
+### API và export thống nhất
 
-Trace thêm `crossing_truck_class_resolution_audit`: lý do giữ/đổi, nguồn lock, số CAR/domain CAR frames và source clock event gốc. Không tạo opinion giả, crossing mới hoặc backend response giả. Cảnh báo dashboard bỏ lời khẳng định cũ V0.5.30, hướng người dùng kiểm tra clip và GT.
+GET /api/benchmarks/{id}/report và POST /api/benchmarks/{id}/reconcile có thêm:
 
-### Giữ các cải tiến V0.5.64
+```json
+{"report_readiness":{"status":"needs_ground_truth","scoring_available":false,"reason":"no_ground_truth"}}
+```
 
-Giữ deterministic all-frame crossing admission, ngân sách/refiner/caches/source clocks; periodic/prescan vẫn theo điều kiện tải cũ. Giữ matching audit tối đa4 event đã ghép với GT khác, disclosure stack tránh chồng chữ và dashboard/GT–Report50/50. Gate/Road Zone/cooldown, tracking, Human Guard, backend dedup, terminal receipts, global temporal matching và tolerance0.75s không đổi.
+Với GT>0: status="ready", scoring_available=true, reason=null; trường ready bên ngoài thống nhất với scoring_available, kể cả AI0. Các field cũ của báo cáo có GT giữ nguyên, gồm global temporal matching, tolerance, missed matching audit và diagnostics.
 
-## Kiểm tra nhãn GT của van
+Với GT0, các score/count-error fields là JSON null, các danh sách assignment/missed/false-positive/class-mismatch rỗng. ground_truth_total, ai_total, số GT/AI trong per_class và per_direction vẫn là counts thực; difference/correct_matches chưa chấm lànull. report.json xuất trong hồ sơ giữ đúng trạng thái này, còn events.json vẫn giữ AI events để review.
 
-Replay cùng clip/vạch/Road Zone, tạo benchmark mới và sao chép149 GT từ **benchmark47** tương thích. Xem lại các mốc quanh **10:41.93 OUT** và **14:42.29 IN**; nếu đúng van chở hàng, dùng ô sửa class GT để chọn **Xe tải**, giữ timecode và hướng đã kiểm tra. Bấm Đối chiếu lại rồi Tải hồ sơ benchmark.
+Client ngoài giao diện cần đọc report_readiness.scoring_available trước khi tính hoặc định dạng điểm; không chuyểnnull thành0%. Giao diện vẫn xử lý báo cáo API cũ qua ground_truth_total, không dùng ready cũ để loại bỏ trường hợp AI0.
 
-Source không tự đổi ground truth đang lưu. Nếu GT của van là Ô tô, sửa van về Xe tải có thể làm số Sai loại tăng; đó là bất đồng taxonomy cần review, không được dùng để tuyên bố model .65 kém hơn hoặc tốt hơn.
+## Giữ các chức năng đã nâng cấp
 
-## Hồ sơ benchmark cho lần phân tích tiếp theo
+Giữ domain corroboration khi muốn đổi TRUCK semantic lock đang sống thành CAR: hai CAR wins theo source clock và ngưỡng hiện có, đồng thời đủ domain CAR proof; generic CAR đơn độc không tự vượt truck lock. Giữ deterministic all-frame crossing admission, source frame/time của event, refiner budgets/caches, terminal receipts và delivery drain.
 
-Sau khi phiên hoàn tất, bấm **Tải hồ sơ benchmark**. ZIP gồm ground-truth.json, events.json, report.json, config.json, manifest.json và benchmark-trace.jsonl.gz khi trace đóng thành công. Đây là cách lấy cả GT/event assignments thay vì chỉ ảnh và thư mục camera.
+Gate/Road Zone/cooldown, tracking, Human Guard, backend dedup, global temporal assignment và tolerance không đổi. Giữ matching audit tối đa4 event đã ghép, disclosure stack tránh chồng chữ và dashboard/GT–Report50/50. Không đổi model weights hoặc taxonomy để làm đẹp score.
 
-Backend ưu tiên gzip từ AI service, fallback raw cho service cũ; cap128MiB cho representation truyền qua HTTP và deadline20s. Kiểm tra hash gzip, identity content encoding, certificate/stat signature của trace đóng; không inflate trace vào RAM hoặc tạo observation giả. Trace không lấy được thì manifest ghi lý do, report vẫn tải được. Geometry dùng header lịch sử của worker, không lấy camera hiện tại thay thế.
+## Chạy trên Windows
 
-Giữ proposal/receipt audit cap8 và phân biệt matched canonical với track lân cận. URL metadata bỏ credentials/query/fragment; không export môi trường, model paths hoặc weights. Giữ JSONL trong thư mục camera khi nén ảnh; chỉ JPG không đủ provenance.
-
-## Version và môi trường
-
-| Thành phần | Giá trị |
-|---|---|
-| VERSION /Frontend /Backend /AI Service | 0.5.65 |
-| Alembic head | `0079_van_semantics_v0565` |
-| Parent | `0078_replay_audit_v0564` |
-| schema_version | 0.5.65 |
-| npm Docker /CI /packageManager | 12.2.0 |
-| Node.js Docker /CI | 26.10.0 |
-
-npm12.2.0 đối chiếu [npm CLI latest](https://github.com/npm/cli/releases/latest) ngày08/10/2026. Giữ pin Docker/CI/packageManager và Node26.10.0. Migration0079 chỉ cập nhật schema_version, giữ dữ liệu và GT. Kết quả kiểm tra chính xác và giới hạn môi trường nằm trong `VERIFICATION.md`; chưa có replay/F1 .65.
-
-## Đầy đủ lệnh test, start và tự động publish
-
-Giải nén full source vào thư mục dự án; giữ .env, video, model weights và dữ liệu đang dùng. Docker Desktop cần chạy; publish cần Git/GitHub CLI và checkout main.
+Giải nén toàn bộ ZIP và chép source vào thư mục dự án hiện tại. Chạy PowerShell:
 
 ```powershell
 cd D:\LienThongDH\DoAn\traffic-ai
@@ -95,27 +64,18 @@ Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
 # Khởi động
 .\scripts\start.ps1
 
-# Tự test, commit, push GitHub, tạo tag v0.5.65 và Release
+# Tự test, commit, push GitHub, tạo tag v0.5.66 và Release
 .\scripts\publish.ps1
 ```
 
-Mở **https://traffic-ai.test:8443**, Ctrl+F5. Làm benchmark theo phần Kiểm tra nhãn GT ở trên, tải ZIP hồ sơ và gửi screenshot để kiểm tra kết quả mới.
+Mở https://traffic-ai.test:8443 và **Ctrl+F5**. Với benchmark48, bấm sao chép149GT từ **benchmark47** nếu clip/vạch tương thích. Review GT van quanh10:41.93OUT và14:42.29IN theo quy ước van chở hàng là Xe tải; giữ timecode/hướng theo clip đã kiểm tra. Đối chiếu lại rồi Tải hồ sơ benchmark để có cả GT và AI assignments cho lần phân tích tiếp theo.
 
-Nếu chưa đăng nhập GitHub CLI, chạy một lần:
+Publisher lấy version từ VERSION, kiểm tra source trước khi commit/push/tag và tạo Release. Không force hoặc viết lại tag cũ. Muốn publish cần Git/GitHub CLI, tài khoản đã đăng nhập và quyền vào repository. Lệnh trên thực hiện xuất bản khi bạn chạy; quá trình kiểm tra bản này chỉ dùng Git cục bộ, chưa push hoặc tạo Release thật.
 
-```powershell
-gh auth login
-gh auth setup-git
-```
+## Phiên bản công nghệ và kiểm tra
 
-Publish đọc VERSION tạo tag **v0.5.65**, mặc định TamNhien/traffic-ai: test→commit→push→tag→chờ Actions đúng tag/SHA/push→Release. Asset gồm ZIP, TAR.GZ, README, SHA256SUMS; CLI fallback hoàn tất release tạo dở. Khi gián đoạn, xử lý lỗi mạng/quyền và chạy lại khi source không đổi. Source đổi sau tag đã có cần tăng version; script không di chuyển/ghi đè tag. -NoWait trả về khi Release còn chờ.
+VERSION/frontend/API health/start message đồng bộ0.5.66. Alembic head 0080_benchmark_ready_v0566, parent 0079_van_semantics_v0565; migration chỉ cập nhật schema_version0.5.66, downgrade về0.5.65, không thay GT/events/schema.
 
-```powershell
-.\scripts\publish.ps1 -Owner TEN_GITHUB -Repository TEN_REPO
+Docker/CI/packageManager giữ npm12.2.0 và Node26.10.0. npm12.2.0 được đối chiếu [official npm CLI latest](https://github.com/npm/cli/releases/latest) ngày09/10/2026. PowerShell scripts UTF-8 no-BOM/CRLF; source/config text khác LF.
 
-gh workflow run release.yml --repo TamNhien/traffic-ai -f tag=v0.5.65
-
-# npm ngoài Docker, sau khi dùng Node tương thích
-npm install -g npm@latest
-npm --version
-```
+Kết quả cụ thể và phạm vi thực thi nằm trong **VERIFICATION.md**. Offline assertions dùng algorithm modules thực và worker/backend helper trích AST; frontend kiểm bằng Babel/Node VM và JSX có kiểm soát. Môi trường hiện tại không chạy full dependency-pinned pytest, HTTP/ORM/database, native PowerShell, Docker, Vite/browser/GPU/model replay. Không có F1/class accuracy .66 được đo từ clip.

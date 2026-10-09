@@ -1714,7 +1714,7 @@ def _build_benchmark_report(
         "trace_available": trace_available,
         "miss_reason_counts": miss_reason_counts,
         "dominant_miss_reason": dominant_miss_reason,
-        "ready": bool(marks) and len(timed_events) > 0,
+        "ready": report["report_readiness"]["scoring_available"],
     })
     return report
 

@@ -15,6 +15,157 @@ def test_benchmark_exact_match() -> None:
     assert result["counting_recall"] == 1.0
 
 
+def test_v0566_empty_ground_truth_is_unscored_even_without_ai() -> None:
+    result = match_crossings([], [])
+    assert result["report_readiness"] == {
+        "status": "needs_ground_truth", "scoring_available": False,
+        "reason": "no_ground_truth",
+    }
+    assert result["ground_truth_total"] == 0 and result["ai_total"] == 0
+    for field in (
+        "matched", "missed", "false_positives", "count_error", "absolute_count_error",
+        "counting_precision", "counting_recall", "counting_f1", "direction_accuracy",
+        "class_accuracy", "class_mismatches", "unmatched_review_links",
+    ):
+        assert result[field] is None
+    for field in ("matched_items", "missed_items", "false_positive_items", "class_mismatch_items"):
+        assert result[field] == []
+    assert result["false_positive_reason_counts"] == {}
+    assert result["dominant_false_positive_reason"] is None
+    assert result["per_class"] == {} and result["per_direction"] == {}
+
+
+def test_v0566_empty_ground_truth_retains_149_ai_observations_without_false_positives() -> None:
+    events = [item(index, index / 10.0, "in" if index <= 68 else "out") for index in range(1, 150)]
+    events[0].vehicle_type = "bicycle"
+    events[-2].vehicle_type = events[-1].vehicle_type = "truck"
+    result = match_crossings([], events)
+    assert result["ground_truth_total"] == 0 and result["ai_total"] == 149
+    assert result["report_readiness"]["scoring_available"] is False
+    assert result["false_positives"] is None and result["counting_f1"] is None
+    assert result["false_positive_items"] == [] and result["false_positive_reason_counts"] == {}
+    assert result["per_class"] == {
+        "bicycle": {"ground_truth": 0, "ai": 1, "difference": None, "correct_matches": None},
+        "motorcycle": {"ground_truth": 0, "ai": 146, "difference": None, "correct_matches": None},
+        "truck": {"ground_truth": 0, "ai": 2, "difference": None, "correct_matches": None},
+    }
+    assert result["per_direction"] == {
+        "in": {"ground_truth": 0, "ai": 68, "difference": None},
+        "out": {"ground_truth": 0, "ai": 81, "difference": None},
+    }
+
+
+def test_v0566_empty_ground_truth_skips_assignment_and_diagnostic_algorithms(monkeypatch) -> None:
+    import app.benchmarking as benchmarking
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("An unannotated benchmark must not run scoring or diagnose false positives")
+
+    monkeypatch.setattr(benchmarking, "_global_temporal_pairs", unexpected)
+    monkeypatch.setattr(benchmarking, "_false_positive_diagnostics", unexpected)
+    monkeypatch.setattr(benchmarking, "_attach_unmatched_review_candidates", unexpected)
+    result = benchmarking.match_crossings([], [rich_item(21, 0.08, tracking_id=7, crossing_method="direct")])
+    assert result["ai_total"] == 1 and result["dominant_false_positive_reason"] is None
+
+
+def test_v0566_empty_ground_truth_preserves_inputs_and_consumes_generators_once() -> None:
+    from copy import deepcopy
+
+    events = [
+        {"id": 4, "source_time_seconds": 20.0, "vehicle_type": "truck", "direction": "unknown", "private": "keep"},
+        {"id": 3, "source_time_seconds": 10.0, "vehicle_type": "bicycle", "direction": "out"},
+    ]
+    original = deepcopy(events)
+    gt_reads, ai_reads = [], []
+
+    def empty_gt():
+        gt_reads.append("read")
+        yield from ()
+
+    def ai_generator():
+        for event in events:
+            ai_reads.append(event["id"])
+            yield event
+
+    result = match_crossings(empty_gt(), ai_generator(), 0.01)
+    assert gt_reads == ["read"] and ai_reads == [4, 3]
+    assert events == original and "private" not in str(result)
+    assert result["tolerance_seconds"] == 0.05
+    assert result["per_direction"]["unknown"] == {"ground_truth": 0, "ai": 1, "difference": None}
+
+
+def test_v0566_ground_truth_without_ai_is_ready_and_scores_actual_zero_recall() -> None:
+    result = match_crossings([item(1, 10.0, "out", "truck")], [])
+    assert result["report_readiness"] == {"status": "ready", "scoring_available": True, "reason": None}
+    assert result["ground_truth_total"] == 1 and result["ai_total"] == 0
+    assert result["matched"] == 0 and result["missed"] == 1 and result["false_positives"] == 0
+    assert result["count_error"] == -1 and result["absolute_count_error"] == 1
+    assert result["counting_precision"] == result["counting_recall"] == result["counting_f1"] == 0.0
+    assert result["class_accuracy"] is None and result["direction_accuracy"] is None
+    assert result["missed_items"] == [{"ground_truth_id": 1, "time": 10.0, "direction": "out", "vehicle_type": "truck"}]
+    assert result["per_class"]["truck"] == {"ground_truth": 1, "ai": 0, "difference": -1, "correct_matches": 0}
+
+
+def test_v0566_ready_report_preserves_assignment_class_direction_and_fp_metrics() -> None:
+    # Direction/class disagreement must not alter the temporal assignment.
+    result = match_crossings(
+        [item(1, 10.0, "in", "truck"), item(2, 20.0, "out", "bicycle")],
+        [item(11, 10.1, "out", "car"), item(12, 30.0, "in", "motorcycle")],
+    )
+    assert result["report_readiness"] == {"status": "ready", "scoring_available": True, "reason": None}
+    for field, value in {
+        "ground_truth_total": 2, "ai_total": 2, "matched": 1, "missed": 1, "false_positives": 1,
+        "count_error": 0, "absolute_count_error": 0, "counting_precision": 0.5,
+        "counting_recall": 0.5, "counting_f1": 0.5, "class_accuracy": 0.0,
+        "direction_accuracy": 0.0, "class_mismatches": 1, "unmatched_review_links": 0,
+    }.items():
+        assert result[field] == value
+    assert result["matched_items"][0]["ground_truth_id"] == 1
+    assert result["matched_items"][0]["ai_event_id"] == 11
+    assert result["false_positive_items"][0]["ai_event_id"] == 12
+    assert result["per_direction"]["in"] == {"ground_truth": 1, "ai": 1, "difference": 0}
+
+
+def test_v0566_readiness_recomputes_after_explicit_marks_are_added() -> None:
+    events = [item(11, 10.02, "in", "truck")]
+    before = match_crossings([], events)
+    after = match_crossings([item(1, 10.0, "in", "truck")], events)
+    assert before["report_readiness"]["status"] == "needs_ground_truth"
+    assert before["counting_f1"] is None
+    assert after["report_readiness"]["status"] == "ready"
+    assert after["counting_f1"] == 1.0 and after["class_accuracy"] == 1.0
+    assert before["ai_total"] == after["ai_total"] == 1
+
+
+def test_v0566_unscored_report_export_round_trips_json_null_without_mutation() -> None:
+    from copy import deepcopy
+    from datetime import datetime, timezone
+    from io import BytesIO
+    import json
+    from zipfile import ZipFile
+    from app.benchmarking import build_benchmark_export
+
+    for count in (0, 149):
+        events = [{"id": index + 1, "source_time_seconds": index / 10.0, "direction": "in", "vehicle_type": "truck"} for index in range(count)]
+        report = match_crossings([], events)
+        report.update({"session_id": 171, "benchmark": {"id": 48}})
+        original = deepcopy((report, events))
+        archive = build_benchmark_export(
+            report=report, marks=[], events=events, session={"id": 171}, config={},
+            exported_at=datetime(2026, 10, 8, tzinfo=timezone.utc),
+        )
+        with ZipFile(BytesIO(archive)) as zipped:
+            exported = json.loads(zipped.read("report.json"))
+            assert exported == report and exported["ai_total"] == count
+            assert exported["report_readiness"] == {
+                "status": "needs_ground_truth", "scoring_available": False, "reason": "no_ground_truth",
+            }
+            assert exported["false_positives"] is None and exported["counting_f1"] is None
+            assert json.loads(zipped.read("ground-truth.json")) == []
+            assert json.loads(zipped.read("events.json")) == events
+        assert (report, events) == original
+
+
 def test_v0564_missed_audit_exposes_event_already_assigned_to_other_gt() -> None:
     # Synthetic reproduction of the observed distinction, not a reconstruction
     # of session 169's GT list: the delivered 69.4566 s event can be assigned
@@ -298,7 +449,8 @@ def rich_item(idx, time, direction="in", vehicle_type="motorcycle", tracking_id=
 
 
 def test_false_positive_analyzer_flags_startup_artifact() -> None:
-    result = match_crossings([], [rich_item(21, 0.08, tracking_id=7, crossing_method="direct")], 0.75)
+    # Diagnose unmatched AI only after the benchmark has reference marks.
+    result = match_crossings([item(1, 10.0)], [rich_item(21, 0.08, tracking_id=7, crossing_method="direct")], 0.75)
     assert result["false_positive_items"][0]["reason"] == "startup_artifact"
     assert result["dominant_false_positive_reason"] == "startup_artifact"
 

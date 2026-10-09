@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './styles.css'
 
-const APP_VERSION = '0.5.65'
+const APP_VERSION = '0.5.66'
 const vehicleLabels = {
   motorcycle: 'Xe máy', bicycle: 'Xe đạp', car: 'Ô tô', bus: 'Xe buýt', truck: 'Xe tải', other: 'Khác'
 }
@@ -738,20 +738,33 @@ function GroundTruthBenchmark({ selectedCameraId, sessions }) {
     return benchmarks.find(item => Number(item.id) !== Number(detail.id) && Number(item.mark_count || 0) > 0 && sameLine(item)) || null
   })()
 
+  const reportIsScorable = nextReport => Number(nextReport?.ground_truth_total || 0) > 0 &&
+    nextReport?.report_readiness?.status !== 'needs_ground_truth' &&
+    nextReport?.report_readiness?.scoring_available !== false
+  const reportScoringAvailable = reportIsScorable(report)
+  const hasGroundTruth = (detail?.marks?.length || 0) > 0
+
   const cloneGroundTruthIntoCurrent = async () => {
     if (!detail || !compatibleCloneSource) return
+    const selection = benchmarkSelectionRef.current
+    const benchmarkId = detail.id
+    const sourceBenchmarkId = Number(compatibleCloneSource.id)
+    if (Number(benchmarkId) !== Number(selection?.benchmarkId)) return
+    const isCurrent = () => selection === benchmarkSelectionRef.current
     setBusy(true); setError(''); setMessage('')
     try {
-      const response = await fetch(`/api/benchmarks/${detail.id}/clone-marks`, {
+      const response = await fetch(`/api/benchmarks/${benchmarkId}/clone-marks`, {
         method:'POST', headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({source_benchmark_id:Number(compatibleCloneSource.id)})
+        body:JSON.stringify({source_benchmark_id:sourceBenchmarkId})
       })
       const body = await readBody(response)
       if (!response.ok) throw new Error(body.detail || 'Không sao chép được Ground Truth')
-      setMessage(`Đã sao chép ${body.cloned_marks} GT từ Benchmark #${body.source_benchmark_id} sang Benchmark #${detail.id}. Không cần đánh lại clip.`)
-      await loadDetail(detail.id)
+      if (!isCurrent()) return
+      setMessage(`Đã sao chép ${body.cloned_marks} GT từ Benchmark #${body.source_benchmark_id} sang Benchmark #${benchmarkId}. Không cần đánh lại clip.`)
+      await loadDetail(benchmarkId)
+      if (!isCurrent()) return
       await loadBenchmarks()
-    } catch (err) { setError(err.message) } finally { setBusy(false) }
+    } catch (err) { if (isCurrent()) setError(err.message) } finally { setBusy(false) }
   }
 
   const createBenchmark = async (cloneSourceBenchmarkId=null) => {
@@ -864,6 +877,10 @@ function GroundTruthBenchmark({ selectedCameraId, sessions }) {
     const selection = benchmarkSelectionRef.current
     const benchmarkId = detail.id
     if (Number(benchmarkId) !== Number(selection?.benchmarkId)) return
+    if (!hasGroundTruth) {
+      setReconcileStatus('Benchmark chưa có Ground Truth. Hãy sao chép GT từ benchmark cùng clip và vạch, hoặc đánh dấu xe trên video trước khi đối chiếu.')
+      return
+    }
     const requestId = ++detailRequestRef.current
     const isCurrent = () => selection === benchmarkSelectionRef.current && requestId === detailRequestRef.current
     const before = report ? `${report.matched}/${report.missed}/${report.false_positives}` : ''
@@ -874,6 +891,10 @@ function GroundTruthBenchmark({ selectedCameraId, sessions }) {
       if (!response.ok) throw new Error(body.detail || 'Không đối chiếu lại được benchmark')
       if (!isCurrent()) return
       setReport(body)
+      if (!reportIsScorable(body)) {
+        setReconcileStatus('Benchmark chưa có Ground Truth. Hãy thêm hoặc sao chép GT rồi đối chiếu lại; điểm số và chẩn đoán lọt/dư chưa được tính.')
+        return
+      }
       const after = `${body.matched}/${body.missed}/${body.false_positives}`
       const stamp = new Date(body.reconciled_at || Date.now()).toLocaleTimeString('vi-VN')
       setReconcileStatus(before === after
@@ -944,22 +965,24 @@ function GroundTruthBenchmark({ selectedCameraId, sessions }) {
 
     <article className="panel benchmark-report-panel">
       <div className="panel-head"><div><span className="panel-kicker">BENCHMARK REPORT</span><h2>Xe lọt / đếm dư theo timecode</h2></div></div>
-      {detail && <><div className="tolerance-row"><label>Cửa sổ ghép ± giây<input type="number" min="0.05" max="3" step="0.05" value={tolerance} onChange={e=>setTolerance(e.target.value)} /></label><button className="secondary" disabled={busy || reconciling || exporting} onClick={saveTolerance}>Áp dụng</button><button disabled={busy || reconciling || exporting} onClick={reconcileBenchmark}>{reconciling ? 'Đang đối chiếu…' : 'Đối chiếu lại'}</button><button className="secondary" disabled={busy || reconciling || exporting} onClick={exportBenchmark}>{exporting ? 'Đang đóng gói…' : 'Tải hồ sơ benchmark'}</button></div>{reconcileStatus && <div className="benchmark-reconcile-status">{reconcileStatus}</div>}</>}
+      {detail && <><div className="tolerance-row"><label>Cửa sổ ghép ± giây<input type="number" min="0.05" max="3" step="0.05" value={tolerance} onChange={e=>setTolerance(e.target.value)} /></label><button className="secondary" disabled={busy || reconciling || exporting} onClick={saveTolerance}>Áp dụng</button><button disabled={busy || reconciling || exporting || !hasGroundTruth} onClick={reconcileBenchmark}>{reconciling ? 'Đang đối chiếu…' : 'Đối chiếu lại'}</button><button className="secondary" disabled={busy || reconciling || exporting} onClick={exportBenchmark}>{exporting ? 'Đang đóng gói…' : 'Tải hồ sơ benchmark'}</button></div>{reconcileStatus && <div className="benchmark-reconcile-status">{reconcileStatus}</div>}</>}
       {report ? <>
-        <div className="benchmark-metrics"><div><span>Ground truth</span><strong>{report.ground_truth_total}</strong></div><div><span>AI đếm</span><strong>{report.ai_total}</strong></div><div><span>Khớp</span><strong>{report.matched}</strong></div><div className={report.missed ? 'metric-bad' : ''}><span>Lọt không đếm</span><strong>{report.missed}</strong></div><div className={report.false_positives ? 'metric-warn' : ''}><span>Đếm dư</span><strong>{report.false_positives}</strong></div><div><span>Sai số tổng</span><strong>{report.count_error > 0 ? '+' : ''}{report.count_error}</strong></div></div>
-        <div className="benchmark-scores"><span>Counting Recall <strong>{(Number(report.counting_recall || 0)*100).toFixed(1)}%</strong></span><span>Precision <strong>{(Number(report.counting_precision || 0)*100).toFixed(1)}%</strong></span><span>F1 <strong>{(Number(report.counting_f1 || 0)*100).toFixed(1)}%</strong></span><span>Class đúng <strong>{report.class_accuracy == null ? '—' : `${(report.class_accuracy*100).toFixed(1)}%`}</strong></span><span title="GT lọt và AI dư gần nhau ngoài cửa sổ chấm điểm; chỉ phục vụ review, không đổi Recall/Precision">Review gần <strong>{report.unmatched_review_links ?? 0}</strong></span></div>
+        {!reportScoringAvailable && <><div className="source-status warn"><strong>Chưa có Ground Truth để chấm điểm</strong><span>AI đã ghi nhận {report.ai_total} lượt. Hãy sao chép GT từ benchmark cùng clip và vạch, hoặc đánh dấu xe trên video. Khi GT còn trống, điểm số và chẩn đoán lọt/dư chưa được tính.</span></div>{compatibleCloneSource && <button className="secondary benchmark-clone-gt" disabled={busy} onClick={cloneGroundTruthIntoCurrent}>Sao chép {compatibleCloneSource.mark_count} GT từ Benchmark #{compatibleCloneSource.id} sang Benchmark #{detail.id}</button>}</>}
+        <div className="benchmark-metrics"><div><span>Ground truth</span><strong>{report.ground_truth_total}</strong></div><div><span>AI đếm</span><strong>{report.ai_total}</strong></div><div><span>Khớp</span><strong>{reportScoringAvailable ? report.matched : '—'}</strong></div><div className={reportScoringAvailable && report.missed ? 'metric-bad' : ''}><span>Lọt không đếm</span><strong>{reportScoringAvailable ? report.missed : '—'}</strong></div><div className={reportScoringAvailable && report.false_positives ? 'metric-warn' : ''}><span>Đếm dư</span><strong>{reportScoringAvailable ? report.false_positives : '—'}</strong></div><div><span>Sai số tổng</span><strong>{reportScoringAvailable ? `${report.count_error > 0 ? '+' : ''}${report.count_error}` : '—'}</strong></div></div>
+        <div className="benchmark-scores"><span>Counting Recall <strong>{reportScoringAvailable ? `${(Number(report.counting_recall || 0)*100).toFixed(1)}%` : '—'}</strong></span><span>Precision <strong>{reportScoringAvailable ? `${(Number(report.counting_precision || 0)*100).toFixed(1)}%` : '—'}</strong></span><span>F1 <strong>{reportScoringAvailable ? `${(Number(report.counting_f1 || 0)*100).toFixed(1)}%` : '—'}</strong></span><span>Class đúng <strong>{!reportScoringAvailable || report.class_accuracy == null ? '—' : `${(report.class_accuracy*100).toFixed(1)}%`}</strong></span><span title="GT lọt và AI dư gần nhau ngoài cửa sổ chấm điểm; chỉ phục vụ review, không đổi Recall/Precision">Review gần <strong>{reportScoringAvailable ? (report.unmatched_review_links ?? 0) : '—'}</strong></span></div>
         {report.integrity && <div className={`source-status ${report.integrity.ok ? 'ok' : 'warn'}`}><strong>{report.integrity.ok ? '✓ Benchmark Integrity OK' : '⚠ Benchmark Integrity cần chú ý'}</strong><span>Worker đề xuất {report.integrity.worker_total} · DB lưu {report.integrity.persisted_events} · event có timecode {report.integrity.timed_events} · backend gộp {report.integrity.dedup_suppressed_events} · Human Guard loại {report.integrity.human_guard_rejections}{report.integrity.missing_timecode ? ` · thiếu timecode ${report.integrity.missing_timecode}` : ''}.</span></div>}
-        {report.dominant_miss_reason && <div className="source-status bad"><strong>Dấu hiệu quanh thời điểm lọt nổi bật: {missReasonLabels[report.dominant_miss_reason] || report.dominant_miss_reason}</strong><span>{Object.entries(report.miss_reason_counts || {}).map(([reason,count])=>`${missReasonLabels[reason] || reason}: ${count}`).join(' · ')}</span></div>}
-        {report.dominant_false_positive_reason && <div className="source-status warn"><strong>Nguyên nhân đếm dư nghi ngờ: {falsePositiveReasonLabels[report.dominant_false_positive_reason] || report.dominant_false_positive_reason}</strong><span>{Object.entries(report.false_positive_reason_counts || {}).map(([reason,count])=>`${falsePositiveReasonLabels[reason] || reason}: ${count}`).join(' · ')}</span></div>}
+        {reportScoringAvailable && report.dominant_miss_reason && <div className="source-status bad"><strong>Dấu hiệu quanh thời điểm lọt nổi bật: {missReasonLabels[report.dominant_miss_reason] || report.dominant_miss_reason}</strong><span>{Object.entries(report.miss_reason_counts || {}).map(([reason,count])=>`${missReasonLabels[reason] || reason}: ${count}`).join(' · ')}</span></div>}
+        {reportScoringAvailable && report.dominant_false_positive_reason && <div className="source-status warn"><strong>Nguyên nhân đếm dư nghi ngờ: {falsePositiveReasonLabels[report.dominant_false_positive_reason] || report.dominant_false_positive_reason}</strong><span>{Object.entries(report.false_positive_reason_counts || {}).map(([reason,count])=>`${falsePositiveReasonLabels[reason] || reason}: ${count}`).join(' · ')}</span></div>}
         {report.legacy_ai_events_without_source_time > 0 && <div className="source-status bad"><strong>⚠ Phiên cũ thiếu timecode</strong><span>{report.legacy_ai_events_without_source_time} event được tạo trước V0.5.19 nên không thể ghép chính xác. Hãy chạy lại clip một lần trên V0.5.19 rồi benchmark session mới.</span></div>}
-        <h3 className="benchmark-subhead">Sai loại phương tiện ({report.class_mismatch_items?.length || 0})</h3>
+        {reportScoringAvailable && <><h3 className="benchmark-subhead">Sai loại phương tiện ({report.class_mismatch_items?.length || 0})</h3>
         <div className="benchmark-diff-list">{report.class_mismatch_items?.length ? report.class_mismatch_items.map(item=><div key={`c-${item.ground_truth_id}-${item.ai_event_id}`} className="diff-row false-positive class-audit-row"><button className="time-link" onClick={()=>seekTo(item.time)}><strong>{formatVideoTime(item.time)}</strong></button><span>{String(item.direction).toUpperCase()} · GT {vehicleLabels[item.ground_truth_vehicle_type] || item.ground_truth_vehicle_type}</span><em>AI → {vehicleLabels[item.ai_vehicle_type] || item.ai_vehicle_type}</em><select className="gt-class-edit" value={item.ground_truth_vehicle_type} disabled={busy} title="Sửa class GT tại timecode này" onChange={e=>updateMarkVehicle(item.ground_truth_id,e.target.value)}>{Object.entries(vehicleLabels).map(([key,label])=><option key={key} value={key}>{label}</option>)}</select><div className="benchmark-evidence-stack"><BicycleContextAudit item={item} /><CrossingDeliveryAudit item={item} /></div></div>) : <div className="empty">Không có event đã khớp thời gian nhưng sai loại xe.</div>}</div>
         <h3 className="benchmark-subhead">Lọt không đếm ({report.missed_items?.length || 0})</h3>
         <div className="benchmark-diff-list benchmark-audit-list">{report.missed_items?.length ? report.missed_items.map(item=>{const detail=missedAuditDetail(item);return <div className="benchmark-audit-card" key={`m-${item.ground_truth_id}`}><button className="diff-row audit-diff-row missed" onClick={()=>seekTo(item.time)}><strong className="diff-time">{formatVideoTime(item.time)}</strong><span className="diff-meta">{String(item.direction).toUpperCase()} · {vehicleLabels[item.vehicle_type] || item.vehicle_type}</span><em className="diff-reason">{missedAuditReason(item)}</em>{detail && <small className="diff-detail">{detail}</small>}</button><div className="benchmark-evidence-stack"><CrossingDeliveryAudit item={item} /><MatchingAudit item={item} /></div></div>}) : <div className="empty">Chưa có xe lọt trong cửa sổ ghép hiện tại.</div>}</div>
         <h3 className="benchmark-subhead">AI đếm dư ({report.false_positive_items?.length || 0})</h3>
         <div className="benchmark-diff-list benchmark-audit-list">{report.false_positive_items?.length ? report.false_positive_items.map(item=>{const detail=falsePositiveAuditDetail(item);return <button key={`f-${item.ai_event_id}`} className="diff-row audit-diff-row false-positive" onClick={()=>seekTo(item.time)}><strong className="diff-time">{formatVideoTime(item.time)}</strong><span className="diff-meta">{String(item.direction).toUpperCase()} · {vehicleLabels[item.vehicle_type] || item.vehicle_type}</span><em className="diff-reason">{item.reason ? (falsePositiveReasonLabels[item.reason] || item.reason) : 'AI có · GT không có'}</em>{detail && <small className="diff-detail">{detail}</small>}{(item.near_matched_time_delta != null || item.near_matched_spatial_distance != null || item.near_matched_crossing_method) && <small className="diff-tech">{item.near_matched_time_delta != null ? `Δt ${Number(item.near_matched_time_delta).toFixed(3)}s` : ''}{item.near_matched_spatial_distance != null ? ` · Δxy ${Number(item.near_matched_spatial_distance).toFixed(4)}` : ''}{item.near_matched_crossing_method ? ` · ${item.near_matched_crossing_method}→${item.crossing_method || '?'}` : ''}</small>}</button>}) : <div className="empty">Chưa có lượt đếm dư trong cửa sổ ghép hiện tại.</div>}</div>
+        </>}
         <h3 className="benchmark-subhead">Theo loại phương tiện</h3>
-        <div className="benchmark-class-grid">{Object.entries(report.per_class || {}).map(([name,item])=><div key={name}><span>{vehicleLabels[name] || name}</span><strong>GT {item.ground_truth} · AI {item.ai}</strong><small>Δ {item.difference > 0 ? '+' : ''}{item.difference}</small></div>)}</div>
+        <div className="benchmark-class-grid">{Object.entries(report.per_class || {}).map(([name,item])=><div key={name}><span>{vehicleLabels[name] || name}</span><strong>GT {item.ground_truth} · AI {item.ai}</strong><small>Δ {reportScoringAvailable ? `${item.difference > 0 ? '+' : ''}${item.difference}` : '—'}</small></div>)}</div>
       </> : <div className="empty">Tạo/chọn benchmark để xem Recall, Precision, xe lọt và xe đếm dư theo từng timecode.</div>}
     </article>
   </section>
