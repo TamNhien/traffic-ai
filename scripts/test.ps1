@@ -323,12 +323,12 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.70") { throw "VERSION must be 0.5.70, current: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0084_postgres_auth_guard_v0570.py"
-  if (-not (Test-Path $migration)) { throw "Missing migration 0084_postgres_auth_guard_v0570.py." }
+  if ($version -ne "0.5.71") { throw "VERSION must be 0.5.71, current: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0085_password_policy_v0571.py"
+  if (-not (Test-Path $migration)) { throw "Missing migration 0085_password_policy_v0571.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0084_postgres_auth_guard_v0570"' -or $migrationText -notmatch 'down_revision = "0083_bounded_startup_v0569"' -or $migrationText -notmatch "value='0.5.70'") {
-    throw "Migration 0084_postgres_auth_guard_v0570 is invalid."
+  if ($migrationText -notmatch 'revision = "0085_password_policy_v0571"' -or $migrationText -notmatch 'down_revision = "0084_postgres_auth_guard_v0570"' -or $migrationText -notmatch "value='0.5.71'") {
+    throw "Migration 0085_password_policy_v0571 is invalid."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
@@ -2167,6 +2167,25 @@ if ($routesText -notmatch 'Reconcile stale DB state' -or $routesText -notmatch '
   throw "Backend thiếu stale-session reconciliation hoặc hourly vehicle_counts persistence."
 }
 Write-Host "[OK] AI counting/persistence contract" -ForegroundColor Green
+
+Write-Host "`n[Traffic AI] Password UI + API security V0.5.71" -ForegroundColor Cyan
+$passwordWidget = Get-Content (Join-Path $root 'frontend\src\password-security.jsx') -Raw -Encoding UTF8
+$securityPanel = Get-Content (Join-Path $root 'frontend\src\security.jsx') -Raw -Encoding UTF8
+$securityStyle = Get-Content (Join-Path $root 'frontend\src\styles.css') -Raw -Encoding UTF8
+$passwordBackend = Get-Content (Join-Path $root 'backend\app\security.py') -Raw -Encoding UTF8
+foreach ($token in @('passwordChecks', 'PasswordPolicy', 'password-visibility', 'showPolicy', 'autoComplete')) {
+  if (-not $passwordWidget.Contains($token)) { throw "V0.5.71 missing password widget: $token" }
+}
+foreach ($token in @('PasswordField', 'confirmResetPassword', 'confirmCreatedPassword', 'confirmPassword', 'reset-password-panel')) {
+  if (-not $securityPanel.Contains($token)) { throw "V0.5.71 missing security flow: $token" }
+}
+foreach ($token in @('grid-template-columns:minmax(0,1fr)', '.password-input-wrap', '.password-requirements')) {
+  if (-not $securityStyle.Contains($token)) { throw "V0.5.71 missing vertical form style: $token" }
+}
+if ($passwordBackend -notmatch 'unicodedata\.category' -or $passwordBackend -notmatch '"Lu" in categories' -or $passwordBackend -notmatch '"Ll" in categories' -or $passwordBackend -notmatch '"Nd" in categories') {
+  throw 'V0.5.71 backend password policy is incomplete.'
+}
+Write-Host '[OK] Password UI + API security V0.5.71' -ForegroundColor Green
 
 Invoke-Step "Backend syntax check" {
   docker run --rm -v "${root}:/src" -w /src/backend python:3.14.7-slim python -m compileall -q app tests alembic

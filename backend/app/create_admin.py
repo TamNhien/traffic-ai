@@ -16,7 +16,7 @@ def main():
             raise SystemExit("Username không hợp lệ")
         if db.scalar(select(User).where(func.lower(User.username)==username.lower())):
             raise SystemExit("Username đã tồn tại")
-        password = getpass("Mật khẩu (>=12 ký tự, chữ + số): ")
+        password = getpass("Mật khẩu (12–128 ký tự, hoa + thường + số + ký tự đặc biệt): ")
         repeated = getpass("Nhập lại mật khẩu: ")
         if password != repeated:
             raise SystemExit("Hai mật khẩu không khớp")

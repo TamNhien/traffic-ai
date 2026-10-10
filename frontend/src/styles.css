@@ -163,3 +163,33 @@
 .user-search{width:100%;max-width:420px;background:#08182e;color:#f1f6ff;border:1px solid #305071;padding:10px;border-radius:8px}
 .user-row{grid-template-columns:minmax(150px,1fr) 110px repeat(4,auto)}
 @media(max-width:980px){.user-row{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+/* V0.5.71: vertical security forms, in-field visibility controls and strength feedback. */
+.account-panel .user-form,.admin-panel .user-form{display:grid;grid-template-columns:minmax(0,1fr);align-items:stretch;max-width:560px;gap:16px;margin:18px 0}
+.auth-box .password-field,.user-form .password-field,.reset-password-panel .password-field{min-width:0;display:grid;gap:6px}
+.password-field>label{display:block;color:#b1c7df;font-weight:600;font-size:.85rem}
+.password-input-wrap{position:relative;width:100%;min-width:0}
+.password-input-wrap input{display:block;width:100%;min-width:0;min-height:42px;padding:9px 48px 9px 11px;background:#061527;color:#f1f6ff;border:1px solid #2a486a;border-radius:8px}
+.password-input-wrap input:focus-visible,.user-form input:focus-visible,.auth-box input:focus-visible{outline:2px solid #60a5fa;outline-offset:1px}
+.auth-box .password-input-wrap button.password-visibility,.panel .password-input-wrap button.password-visibility{position:absolute;right:4px;top:50%;transform:translateY(-50%);display:grid;place-items:center;width:36px;height:34px;min-height:34px;padding:0;color:#a7bed8;background:transparent;border:0;border-radius:7px;cursor:pointer}
+.auth-box .password-input-wrap button.password-visibility:hover,.panel .password-input-wrap button.password-visibility:hover{background:#223953;color:#f1f6ff}
+.password-visibility:focus-visible{outline:2px solid #60a5fa;outline-offset:1px}
+.password-policy{display:grid;gap:9px;padding:12px 14px;border:1px solid #2b415f;border-radius:10px;background:rgba(8,24,46,.65);font-size:.79rem}
+.password-meter-head{display:flex;align-items:center;justify-content:space-between;gap:10px;color:#a9c0d9}
+.password-meter-head strong{font-size:.8rem}
+.password-meter{height:7px;width:100%;background:#263650;border-radius:999px;overflow:hidden}
+.password-meter>span{display:block;height:100%;border-radius:999px;transition:width .2s ease,background-color .2s ease}
+.password-meter.strength-1>span{background:#fb7185}.password-meter.strength-2>span{background:#fbbf24}.password-meter.strength-3>span{background:#34d399}
+.password-meter-head .strength-0{color:#8fa0b5}.password-meter-head .strength-1{color:#fda4af}.password-meter-head .strength-2{color:#fcd34d}.password-meter-head .strength-3{color:#6ee7b7}
+.password-requirements{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px 12px}
+.password-requirements>div{display:flex;align-items:flex-start;gap:7px;line-height:1.4}
+.requirement-ok,.password-policy-ok{color:#6ee7b7}.requirement-pending{color:#9baec5}
+.password-policy-ok{font-size:.77rem}
+.account-panel .user-form>button.primary,.admin-panel .user-form>button.primary{width:100%;min-height:43px}
+.account-panel>.secondary{background:#243951;border:1px solid #315075;color:#edf6ff}
+.reset-password-panel{display:grid;gap:12px;max-width:560px;padding:16px;margin:16px 0;border:1px solid #35577d;border-radius:12px;background:#0b2038}
+.reset-password-panel h3{margin:0}.reset-password-panel p{margin:0;color:#9bb2cb;font-size:.84rem;line-height:1.5}
+.reset-actions{display:flex;gap:10px;flex-wrap:wrap}.reset-actions button{min-height:42px}
+@media(max-width:560px){.password-requirements{grid-template-columns:1fr}.reset-actions button{flex:1 1 100%}}
+
+.password-confirm-error{display:block;color:#fda4af;font-size:.78rem}

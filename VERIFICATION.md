@@ -1,3 +1,16 @@
+# VERIFICATION — Traffic AI V0.5.71
+
+V0.5.71 tập trung vào giao diện bảo mật và chính sách mật khẩu, không tác động thuật toán nhận diện/đếm. Kết quả kiểm thử trong môi trường sandbox (2026-10-10):
+
+- **Backend 160/160 pass** với Python 3.13 / pytest 9 / SQLAlchemy + SQLite memory / FastAPI. Bao gồm các luồng Auth, role, CSRF, phiên, 4 nhóm ký tự, Unicode, độ dài, write-path API và tương thích mật khẩu đang sử dụng ở V0.5.70.
+- **AI Service 631/631 pass** trong cùng môi trường mô phỏng; không thay logic AI.
+- Tổng **791/791** tests thành công. Sử dụng `httpx2 -> httpx` shim ngoài thư mục source ZIP để chạy local do sandbox không có package `httpx2`; Docker test thật sử dụng dependency được khai báo trong requirements.
+- `security.jsx`, `password-security.jsx`, `main.jsx` đều vượt qua bước kiểm tra cú pháp JSX bằng TypeScript parser.
+- Không thể chạy `npm install`/`npm run build` trong sandbox do không truy cập được registry NPM (`EAI_AGAIN`); **chưa xác nhận bản build Vite/browser thực tế**. Chưa chạy PowerShell Windows, Docker Compose, HTTPS runtime hoặc PostgreSQL thật. Cần thực hiện `scripts/test.ps1` và `scripts/start.ps1` trên máy Windows trước khi publish.
+- Alembic `0085_password_policy_v0571` chỉ tăng schema version; không sửa dữ liệu người dùng hoặc khóa tài khoản có password cũ.
+
+---
+
 # VERIFICATION — Traffic AI V0.5.70
 
 Log khách hàng xác nhận PostgreSQL healthy nhưng Backend không đăng nhập được: `FATAL: password authentication failed for user traffic_admin`. V0.5.70 thêm preflight TCP/SCRAM fail-fast, script password repair tương tác, và chặn tự đổi mật khẩu khi volume cũ tồn tại. Kết quả kiểm thử trong môi trường sandbox: **157/157 Backend** và **631/631 AI Service** pass (tổng **788**). Dùng SQLite memory và test-only `httpx2 -> httpx` shim bên ngoài source ZIP; chưa chạy Docker/PowerShell Windows thật, PostgreSQL SCRAM thật hoặc thay mật khẩu database của người dùng. Chưa thao tác trực tiếp trên PostgreSQL thật của người dùng; họ phải tự xác nhận bằng `scripts/repair-postgres-auth.ps1` rồi chạy `scripts/test.ps1` / `scripts/start.ps1`. Không có lệnh reset/drop dữ liệu.

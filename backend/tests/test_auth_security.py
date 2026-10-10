@@ -27,9 +27,9 @@ def auth_env(monkeypatch):
     app.dependency_overrides[get_db] = override_db
     with factory() as db:
         db.add_all([
-            User(username="admin",full_name="Admin", role="admin", password_hash=hash_password("AdminPassword2026"),is_active=True),
-            User(username="viewer",full_name="Viewer", role="viewer", password_hash=hash_password("ViewerPassword2026"),is_active=True),
-            User(username="operator",full_name="Operator", role="operator", password_hash=hash_password("OperatorPassword2026"),is_active=True),
+            User(username="admin",full_name="Admin", role="admin", password_hash=hash_password("AdminPassword2026!"),is_active=True),
+            User(username="viewer",full_name="Viewer", role="viewer", password_hash=hash_password("ViewerPassword2026!"),is_active=True),
+            User(username="operator",full_name="Operator", role="operator", password_hash=hash_password("OperatorPassword2026!"),is_active=True),
         ])
         db.commit()
     client = TestClient(app, base_url="https://testserver")
@@ -50,12 +50,12 @@ def mutation(client,path,method='POST',csrf='',body=None):
 
 
 def test_v0568_password_argon2id_and_weak_password_rejection():
-    first=hash_password('StrongPassword2026')
-    second=hash_password('StrongPassword2026')
+    first=hash_password('StrongPassword2026!')
+    second=hash_password('StrongPassword2026!')
     assert first.startswith('$argon2id$') and first!=second
-    assert verify_password(first,'StrongPassword2026')
+    assert verify_password(first,'StrongPassword2026!')
     assert not verify_password(first,'WrongPassword2026')
-    assert not verify_password('malformed','StrongPassword2026')
+    assert not verify_password('malformed','StrongPassword2026!')
     with pytest.raises(ValueError):
         require_password('short')
     with pytest.raises(ValueError):
@@ -74,9 +74,9 @@ def test_v0568_unauthenticated_api_denied_but_health_open(auth_env):
 
 def test_v0568_login_requires_same_origin_and_sets_host_cookie(auth_env):
     client,factory=auth_env
-    assert client.post('/api/auth/login',json={'username':'admin','password':'AdminPassword2026'}).status_code == 403
-    assert client.post('/api/auth/login',headers={'Origin':'https://evil.example'},json={'username':'admin','password':'AdminPassword2026'}).status_code == 403
-    res=signin(client,'admin','AdminPassword2026')
+    assert client.post('/api/auth/login',json={'username':'admin','password':'AdminPassword2026!'}).status_code == 403
+    assert client.post('/api/auth/login',headers={'Origin':'https://evil.example'},json={'username':'admin','password':'AdminPassword2026!'}).status_code == 403
+    res=signin(client,'admin','AdminPassword2026!')
     assert res.status_code==200
     assert '__Host-traffic_ai_session=' in res.headers['set-cookie']
     assert 'httponly' in res.headers['set-cookie'].lower()
@@ -93,7 +93,7 @@ def test_v0568_login_requires_same_origin_and_sets_host_cookie(auth_env):
 
 def test_v0568_csrf_and_role_enforced_server_side(auth_env):
     client,_=auth_env
-    csrf=signin(client,'viewer','ViewerPassword2026').json()['csrf_token']
+    csrf=signin(client,'viewer','ViewerPassword2026!').json()['csrf_token']
     assert client.get('/api/admin/users').status_code==403
     assert mutation(client,'/api/admin/users',csrf=csrf,body={}).status_code==403
     assert client.get('/api/cameras').status_code==200
@@ -104,18 +104,18 @@ def test_v0568_csrf_and_role_enforced_server_side(auth_env):
 
 def test_v0568_admin_create_role_lock_and_password_reset(auth_env):
     client,factory=auth_env
-    csrf=signin(client,'admin','AdminPassword2026').json()['csrf_token']
+    csrf=signin(client,'admin','AdminPassword2026!').json()['csrf_token']
     created=mutation(client,'/api/admin/users',csrf=csrf,body={
-        'username':'newtech','full_name':'Technician','role':'operator','password':'TempPassword2026'})
+        'username':'newtech','full_name':'Technician','role':'operator','password':'TempPassword2026!'})
     assert created.status_code==201 and created.json()['must_change_password'] is True
     uid=created.json()['id']
     assert mutation(client,f'/api/admin/users/{uid}',method='PATCH',csrf=csrf,body={'role':'viewer'}).status_code==200
     assert mutation(client,'/api/admin/users/1',method='PATCH',csrf=csrf,body={'is_active':False}).status_code==409
     assert mutation(client,f'/api/admin/users/{uid}',method='PATCH',csrf=csrf,body={'is_active':False}).status_code==200
-    assert signin(client,'newtech','TempPassword2026').status_code==401
+    assert signin(client,'newtech','TempPassword2026!').status_code==401
     assert mutation(client,f'/api/admin/users/{uid}',method='PATCH',csrf=csrf,body={'is_active':True}).status_code==200
-    assert mutation(client,f'/api/admin/users/{uid}/reset-password',csrf=csrf,body={'new_password':'UpdatedPassword2026'}).status_code==200
-    assert signin(client,'newtech','UpdatedPassword2026').status_code==200
+    assert mutation(client,f'/api/admin/users/{uid}/reset-password',csrf=csrf,body={'new_password':'UpdatedPassword2026!'}).status_code==200
+    assert signin(client,'newtech','UpdatedPassword2026!').status_code==200
     assert client.get('/api/cameras').status_code==403  # must change temporary password first
 
 
@@ -123,33 +123,33 @@ def test_v0568_login_rate_limit(auth_env):
     client,_=auth_env
     for _ in range(5):
         assert signin(client,'viewer','invalidpassword').status_code==401
-    assert signin(client,'viewer','ViewerPassword2026').status_code==429
+    assert signin(client,'viewer','ViewerPassword2026!').status_code==429
 
 
 def test_v0568_change_password_revokes_session(auth_env):
     client,factory=auth_env
-    csrf=signin(client,'operator','OperatorPassword2026').json()['csrf_token']
+    csrf=signin(client,'operator','OperatorPassword2026!').json()['csrf_token']
     assert mutation(client,'/api/auth/change-password',csrf=csrf,body={
-        'current_password':'OperatorPassword2026','new_password':'NewOperatorPass2026'}).status_code==200
+        'current_password':'OperatorPassword2026!','new_password':'NewOperatorPass2026!'}).status_code==200
     assert client.get('/api/auth/me').status_code==401
-    assert signin(client,'operator','OperatorPassword2026').status_code==401
-    assert signin(client,'operator','NewOperatorPass2026').status_code==200
+    assert signin(client,'operator','OperatorPassword2026!').status_code==401
+    assert signin(client,'operator','NewOperatorPass2026!').status_code==200
 
 
 def test_v0568_viewer_can_revoke_every_session(auth_env):
     client,_=auth_env
-    csrf=signin(client,'viewer','ViewerPassword2026').json()['csrf_token']
+    csrf=signin(client,'viewer','ViewerPassword2026!').json()['csrf_token']
     assert mutation(client,'/api/auth/logout-all',csrf=csrf).status_code==200
     assert client.get('/api/auth/me').status_code==401
 
 
 def test_v0568_admin_can_revoke_operator_sessions(auth_env):
     client,_=auth_env
-    operator_csrf=signin(client,'operator','OperatorPassword2026').json()['csrf_token']
+    operator_csrf=signin(client,'operator','OperatorPassword2026!').json()['csrf_token']
     assert client.get('/api/auth/me').status_code==200
-    admin_csrf=signin(client,'admin','AdminPassword2026').json()['csrf_token']
+    admin_csrf=signin(client,'admin','AdminPassword2026!').json()['csrf_token']
     assert mutation(client,'/api/admin/users/3/revoke-sessions',csrf=admin_csrf).status_code==200
-    assert signin(client,'operator','OperatorPassword2026').status_code==200  # new login still works
+    assert signin(client,'operator','OperatorPassword2026!').status_code==200  # new login still works
 
 
 
@@ -158,3 +158,61 @@ def test_v0568_internal_ai_rpc_does_not_require_browser_cookie(auth_env):
     # Validation 422 (not middleware 401/403) proves AI worker delivery path remains reachable.
     result=client.post('/api/internal/events',json={},headers={'X-AI-Token':'invalid'})
     assert result.status_code == 422
+
+
+def test_v0571_password_policy_all_categories_unicode_and_limits():
+    """Enforce new credentials on the server, not solely in JavaScript."""
+    for bad in (
+        'lowercaseonly123!',   # missing uppercase
+        'UPPERCASEONLY123!',   # missing lowercase
+        'NoDigitHerePlease!',  # missing digit
+        'NoSpecialHere123',    # missing punctuation/symbol
+        'Abcdef1!',           # too short
+        'Abcdef123456 ',      # whitespace does not count as a special character
+        'Ab1!' + 'a' * 125,   # longer than 128 code points
+        'Áa1!' + '🧪' * 127,  # too many characters and UTF-8 bytes
+    ):
+        with pytest.raises(ValueError, match='Mật khẩu'):
+            require_password(bad)
+    valid = ['ValidPassword2026!', 'ÁnhSángViệtNam9#', 'Aaa9!' + 'đ' * 14]
+    for password in valid:
+        assert require_password(password) == password
+        assert verify_password(hash_password(password), password)
+
+
+def test_v0571_admin_create_reset_and_change_reject_weak_passwords(auth_env):
+    client, factory = auth_env
+    csrf = signin(client, 'admin', 'AdminPassword2026!').json()['csrf_token']
+    bad = ['alllowercase123!', 'ALLUPPERCASE123!', 'NoDigitsHere!', 'NoSpecialChars123']
+    for idx, password in enumerate(bad):
+        created = mutation(client, '/api/admin/users', csrf=csrf, body={
+            'username':f'weak{idx}', 'full_name':'Weak', 'role':'viewer', 'password':password,
+        })
+        assert created.status_code == 422
+        change = mutation(client, '/api/auth/change-password', csrf=csrf, body={
+            'current_password':'AdminPassword2026!', 'new_password':password,
+        })
+        assert change.status_code == 422
+        reset = mutation(client, '/api/admin/users/2/reset-password', csrf=csrf, body={
+            'new_password':password,
+        })
+        assert reset.status_code == 422
+    assert client.get('/api/auth/me').status_code == 200
+    assert signin(client, 'viewer', 'ViewerPassword2026!').status_code == 200
+    with factory() as db:
+        assert db.scalars(select(User).where(User.username.like('weak%'))).all() == []
+
+
+def test_v0571_legacy_password_can_log_in_but_must_update_to_new_policy(auth_env):
+    client, factory = auth_env
+    # Existing V0.5.70 password hashes are not invalidated by changing the
+    # policy for NEW passwords. Migration must never lock these users out.
+    with factory() as db:
+        user = db.scalar(select(User).where(User.username == 'viewer'))
+        user.password_hash = HASHER.hash('LegacyPassword2026')
+        db.commit()
+    csrf = signin(client, 'viewer', 'LegacyPassword2026').json()['csrf_token']
+    assert mutation(client, '/api/auth/change-password', csrf=csrf, body={
+        'current_password':'LegacyPassword2026', 'new_password':'AnotherNewPassword2026!',
+    }).status_code == 200
+    assert signin(client, 'viewer', 'AnotherNewPassword2026!').status_code == 200

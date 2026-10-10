@@ -6,6 +6,7 @@ from hashlib import sha256
 import hmac
 import re
 import secrets
+import unicodedata
 
 from argon2 import PasswordHasher, Type
 from argon2.exceptions import VerificationError, InvalidHashError
@@ -33,8 +34,10 @@ def digest(value: str) -> str:
 def require_password(password: str) -> str:
     if not (PASSWORD_MIN_LENGTH <= len(password) <= 128) or len(password.encode("utf-8")) > 512:
         raise ValueError("Mật khẩu phải có 12–128 ký tự và không quá 512 byte UTF-8")
-    if not any(c.isalpha() for c in password) or not any(c.isdigit() for c in password):
-        raise ValueError("Mật khẩu cần có chữ và số")
+    categories = {unicodedata.category(char) for char in password}
+    if not ("Lu" in categories and "Ll" in categories and "Nd" in categories
+            and any(category.startswith(("P", "S")) for category in categories)):
+        raise ValueError("Mật khẩu cần có chữ hoa, chữ thường, số và ký tự đặc biệt")
     return password
 
 

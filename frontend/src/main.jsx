@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client'
 import './styles.css'
 import { AuthShell, AccountPanel, AdminPanel, secureFetch } from './security.jsx'
 
-const APP_VERSION = '0.5.70'
+const APP_VERSION = '0.5.71'
 const vehicleLabels = {
   motorcycle: 'Xe máy', bicycle: 'Xe đạp', car: 'Ô tô', bus: 'Xe buýt', truck: 'Xe tải', other: 'Khác'
 }

@@ -1,3 +1,38 @@
+# Traffic AI V0.5.71 — Giao diện bảo mật dọc + Kiểm tra độ mạnh mật khẩu
+
+## Các cải tiến
+
+- **Tài khoản của tôi**: ô mật khẩu hiện tại, mật khẩu mới, xác nhận mật khẩu và nút đổi mật khẩu xếp theo **chiều dọc**, có chiều rộng hợp lý thay vì kéo ngang toàn màn hình.
+- **Quản lý người dùng & phân quyền**: các trường tên đăng nhập, họ tên, vai trò, mật khẩu tạm, xác nhận mật khẩu tạm và nút tạo tài khoản theo bố cục một cột, đáp ứng cả desktop/mobile.
+- **Hiện / ẩn mật khẩu ngay trong ô nhập** bằng nút biểu tượng mắt, hỗ trợ bàn phím và trợ năng. Áp dụng cho đăng nhập, đổi mật khẩu, tạo tài khoản và đặt lại mật khẩu.
+- **Độ mạnh mật khẩu (ước tính)**: thanh chỉ báo Yếu / Trung bình / Mạnh, danh sách điều kiện có dấu kiểm ngay khi nhập. Trạng thái này là thông tin hỗ trợ, không phải phép đo an toàn tuyệt đối.
+- **Quy tắc bắt buộc cho MẬT KHẨU MỚI**: 12–128 ký tự, tối đa 512 byte UTF-8, có đủ chữ hoa, chữ thường, số và ký tự đặc biệt (Unicode thuộc nhóm Letter Uppercase, Letter Lowercase, Decimal Digit, Punctuation/Symbol). Dấu cách không được coi là ký tự đặc biệt. Giao diện **và backend** cùng kiểm tra, kể cả khi gọi API trực tiếp. Mật khẩu hiện có không bị vô hiệu hóa khi nâng cấp; sẽ được kiểm tra quy tắc mới lúc người dùng đổi mật khẩu.
+- Khi đổi, tạo hoặc reset mật khẩu, người dùng cần **nhập lại mật khẩu xác nhận** trước khi nút thực hiện được kích hoạt. Đặt lại mật khẩu không còn dùng `window.prompt` để nhập mật khẩu, thay bằng form bảo mật ngay trong trang quản lý.
+- Tiếp tục băm **Argon2id** (không lưu plaintext), cookie HttpOnly/Secure, CSRF, RBAC và thu hồi phiên cũ sau khi đổi / đặt lại mật khẩu. Không thay thuật toán đếm xe, AI, GT hoặc benchmark.
+- Alembic migration `0085_password_policy_v0571` chỉ cập nhật `system_settings.schema_version`; **không đổi cấu trúc bảng hay xóa dữ liệu**. Thêm ba bài kiểm thử hồi quy backend V0.5.71 và contract kiểm tra UI/API trong `scripts/test.ps1`.
+
+## Nâng cấp và chạy trên Windows
+
+Giải nén full source V0.5.71 vào thư mục dự án (giữ `.env` hiện có, dữ liệu PostgreSQL và các video/model cũ nếu đã có), sau đó chạy PowerShell:
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+.\scripts\test.ps1
+.\scripts\start.ps1
+# Khi chạy ổn và đã kiểm tra trực tiếp trên trình duyệt:
+.\scripts\publish.ps1
+```
+
+Nếu `start.ps1` báo lỗi xác thực PostgreSQL, tham khảo hướng dẫn V0.5.70 **ở bên dưới**; không xóa volume và không tự ý đặt lại mật khẩu database. Khi triển khai, frontend cần được **build lại** từ source để nhận giao diện mới; có thể dùng Ctrl+F5 để bỏ cache trình duyệt.
+
+## Kiểm chứng được trong môi trường phát triển
+
+- Backend: **160/160 tests passed** (bao gồm 3 bài kiểm thử quy tắc mới, API create/change/reset và khả năng đăng nhập với hash cũ).
+- AI Service: **631/631 tests passed**; thuật toán AI không sửa đổi.
+- Frontend: parse cú pháp JSX qua TypeScript thành công. **Chưa chạy được `npm run build`** trong sandbox vì không kết nối được `registry.npmjs.org`; `scripts/test.ps1` trên máy Windows có Docker sẽ cài dependency, audit và build frontend thật. Chưa thử nghiệm Docker/PowerShell, PostgreSQL thật hoặc UI tương tác bằng trình duyệt trên máy người dùng.
+
+---
+
 # Traffic AI V0.5.70 — PostgreSQL Credential Recovery + Fail-fast Startup
 
 ## Vì sao PostgreSQL healthy nhưng Backend không thể start?

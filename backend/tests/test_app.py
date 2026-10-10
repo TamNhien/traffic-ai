@@ -20,7 +20,7 @@ def test_root_metadata() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["name"] == "Traffic AI"
-    assert payload["version"] == "0.5.70"
+    assert payload["version"] == "0.5.71"
     assert payload["docs"] == "/docs"
     assert payload["health"] == "/api/health"
 
@@ -158,7 +158,7 @@ def test_benchmark_clone_compatibility_rejects_different_line() -> None:
 
 
 def test_backend_version_metadata() -> None:
-    assert app.version == "0.5.70"
+    assert app.version == "0.5.71"
 
 
 def test_v0531_startup_crossing_signature_guard_is_narrow() -> None:
@@ -179,7 +179,7 @@ def test_v0533_ground_truth_mark_update_schema() -> None:
 
 
 def test_v0533_version() -> None:
-    assert app.version == "0.5.70"
+    assert app.version == "0.5.71"
 
 
 def test_v0533_ground_truth_mark_update_keeps_timecode() -> None:
