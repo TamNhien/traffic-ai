@@ -152,7 +152,7 @@ class PipelineWorker(threading.Thread):
             heavy_max_distance_ratio=float(os.getenv("AI_STITCH_HEAVY_DISTANCE_RATIO", "0.18")),
         )
         self.backend_url = os.getenv("BACKEND_INTERNAL_URL", "http://backend:8000/api/internal")
-        self.shared_token = os.getenv("AI_SHARED_TOKEN", "TrafficAI-Local-2026")
+        self.shared_token = os.getenv("AI_SHARED_TOKEN", "")
         self.model_name = payload.model_path or os.getenv("AI_MODEL_NAME", "yolo26s.pt")
         self.hybrid_recall = os.getenv("AI_HYBRID_RECALL", "1").strip().lower() not in {"0", "false", "no"}
         self.recall_model_name = os.getenv("AI_RECALL_MODEL_NAME", "yolo26s.pt")

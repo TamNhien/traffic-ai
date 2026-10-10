@@ -1,4 +1,36 @@
-# Kiểm tra Traffic AI V0.5.67
+# VERIFICATION — Traffic AI V0.5.70
+
+Log khách hàng xác nhận PostgreSQL healthy nhưng Backend không đăng nhập được: `FATAL: password authentication failed for user traffic_admin`. V0.5.70 thêm preflight TCP/SCRAM fail-fast, script password repair tương tác, và chặn tự đổi mật khẩu khi volume cũ tồn tại. Kết quả kiểm thử trong môi trường sandbox: **157/157 Backend** và **631/631 AI Service** pass (tổng **788**). Dùng SQLite memory và test-only `httpx2 -> httpx` shim bên ngoài source ZIP; chưa chạy Docker/PowerShell Windows thật, PostgreSQL SCRAM thật hoặc thay mật khẩu database của người dùng. Chưa thao tác trực tiếp trên PostgreSQL thật của người dùng; họ phải tự xác nhận bằng `scripts/repair-postgres-auth.ps1` rồi chạy `scripts/test.ps1` / `scripts/start.ps1`. Không có lệnh reset/drop dữ liệu.
+
+# Traffic AI V0.5.69 verification
+
+- Root symptom: Compose can wait indefinitely at Backend Waiting when the
+  PostgreSQL/Backend migration or healthcheck fails. The screenshot alone
+  does not identify the underlying error.
+- Source change: staged startup with finite health waits (DB 120s, Backend
+  180s, AI service 240s); prints DB/backend logs and healthcheck on failure.
+  GPU fallback preserved, no database data reset or volume removal.
+- Added 2 backend Python regression source tests and a PowerShell contract
+  assertion. Final test results are listed below after execution.
+- Python/Docker tests in this build environment may not reproduce the
+  user's Windows + PostgreSQL runtime. `start.ps1` and `test.ps1` should be
+  tested on Windows before publishing to GitHub.
+
+---
+
+# VERIFICATION — Traffic AI V0.5.68
+
+### Đã chạy trực tiếp trong môi trường hiện tại
+
+- Backend `pytest`: **150 passed**, gồm **10 security integration regressions** chạy với TestClient, SQLite StaticPool, dependency override test-only; bao phủ Argon2id salt ngẫu nhiên, CSRF/Origin, cookie flags, không đăng nhập, RBAC Viewer, tạo/khóa/reset user, Admin tự khóa bị từ chối, brute-force limit và thu hồi phiên khi đổi mật khẩu.
+- AI Service `pytest`: **631 passed**, không chỉnh sửa logic AI. Tổng **781 pytest passed** với dependency test-only `httpx2->httpx` ngoài ZIP và các thư mục tạm dành cho AI.
+- Python source parse AST, migration head/parent chain, frontend JSX parse bằng TypeScript parser, ZIP CRC và path/filename integrity được kiểm tra ở bước đóng gói. Bộ test PowerShell có token AI giả lập riêng và cô lập `node_modules` bằng Docker anonymous volume, tránh lẫn wrapper Windows/Linux.
+- **Chưa chạy** pinned `httpx2`/psycopg PostgreSQL integration, Alembic upgrade trên PostgreSQL thật, PowerShell native, Docker Compose, Nginx trong container phiên bản 1.31.6 (chỉ kiểm tra parser trên Nginx 1.26.3 đã thay upstream DNS/cert ở file QA ngoài source: syntax ok), GPU inference, frontend Vite bundling và `npm audit` trong sandbox (npm registry không phản hồi); **không được coi những hạng mục đó đã pass**. `scripts/test.ps1` vẫn bắt buộc kiểm tra toàn bộ trên Windows trước publish.
+- Migrate từ schema V0.5.67: không tự thêm admin mặc định; mã hóa mật khẩu bằng Argon2id; AI_shared_token ví dụ cũ sẽ được start.ps1 tạo mới ngẫu nhiên nếu chưa customize.
+
+---
+
+# Kiểm tra lưu trữ V0.5.67 (historical baseline)
 
 ## Kết quả thực hiện cho lần nâng cấp này
 

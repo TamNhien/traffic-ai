@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './styles.css'
+import { AuthShell, AccountPanel, AdminPanel, secureFetch } from './security.jsx'
 
-const APP_VERSION = '0.5.67'
+const APP_VERSION = '0.5.70'
 const vehicleLabels = {
   motorcycle: 'Xe máy', bicycle: 'Xe đạp', car: 'Ô tô', bus: 'Xe buýt', truck: 'Xe tải', other: 'Khác'
 }
@@ -401,7 +402,7 @@ function AnnotationEditor({ dataset, onChanged }) {
     const isCurrent = () => scope === scopeRef.current && request === indexRequestRef.current && (!expectedSelection || expectedSelection === selectionRef.current)
     if (!scope.id) { loadedIndexRef.current = null; setIndexData(null); selectImage(''); return '' }
     try {
-      const response = await fetch(`/api/datasets/${scope.id}/annotations?limit=1000&review_mode=${encodeURIComponent(scope.reviewMode)}`, {cache:'no-store'})
+      const response = await secureFetch(`/api/datasets/${scope.id}/annotations?limit=1000&review_mode=${encodeURIComponent(scope.reviewMode)}`, {cache:'no-store'})
       const body = await readBody(response)
       if (!isCurrent()) return null
       if (!response.ok) throw new Error(body.detail || 'Không tải được danh sách annotation')
@@ -424,7 +425,7 @@ function AnnotationEditor({ dataset, onChanged }) {
     setAnnotation(null); setBoxes([]); setSelectedBox(-1)
     if (!scope.id || !name) return
     try {
-      const response = await fetch(`/api/datasets/${scope.id}/annotations/${encodeURIComponent(name)}`, {cache:'no-store'})
+      const response = await secureFetch(`/api/datasets/${scope.id}/annotations/${encodeURIComponent(name)}`, {cache:'no-store'})
       const body = await readBody(response)
       if (!isCurrent()) return
       if (!response.ok) throw new Error(body.detail || 'Không tải được annotation')
@@ -505,7 +506,7 @@ function AnnotationEditor({ dataset, onChanged }) {
     ++annotationRequestRef.current
     setSaving(true); setMessage('')
     try {
-      const response = await fetch(`/api/datasets/${scope.id}/annotations/${encodeURIComponent(selection.name)}`, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({boxes:boxes.map(({class_id,x,y,w,h})=>({class_id,x,y,w,h})),reviewed:currentAnnotation.reviewed,difficult:currentAnnotation.difficult})})
+      const response = await secureFetch(`/api/datasets/${scope.id}/annotations/${encodeURIComponent(selection.name)}`, {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({boxes:boxes.map(({class_id,x,y,w,h})=>({class_id,x,y,w,h})),reviewed:currentAnnotation.reviewed,difficult:currentAnnotation.difficult})})
       const body = await readBody(response)
       if (!isCurrent()) return
       if (!response.ok) throw new Error(body.detail || 'Không lưu được annotation')
@@ -528,7 +529,7 @@ function AnnotationEditor({ dataset, onChanged }) {
     bulkRef.current = operation
     const isCurrent = () => scope === scopeRef.current && bulkRef.current === operation
     try {
-      const response = await fetch(`/api/datasets/${scope.id}/annotations/accept-safe`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({min_confidence:0.70})})
+      const response = await secureFetch(`/api/datasets/${scope.id}/annotations/accept-safe`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({min_confidence:0.70})})
       const body = await readBody(response)
       if (!isCurrent()) return
       if (!response.ok) throw new Error(body.detail || 'Không duyệt nhanh được annotation')
@@ -679,7 +680,7 @@ function GroundTruthBenchmark({ selectedCameraId, sessions }) {
       cameraId === benchmarkSelectionRef.current?.cameraId
     if (!selectedCameraId) { setBenchmarks([]); setSelectedBenchmarkId(null); return }
     try {
-      const response = await fetch(`/api/benchmarks?camera_id=${selectedCameraId}&limit=50`, {cache:'no-store'})
+      const response = await secureFetch(`/api/benchmarks?camera_id=${selectedCameraId}&limit=50`, {cache:'no-store'})
       if (!response.ok) throw new Error('Không tải được benchmark')
       const rows = await response.json()
       if (!isCurrent()) return
@@ -696,8 +697,8 @@ function GroundTruthBenchmark({ selectedCameraId, sessions }) {
     if (!benchmarkId) { setDetail(null); setReport(null); return }
     try {
       const [detailRes, reportRes] = await Promise.all([
-        fetch(`/api/benchmarks/${benchmarkId}`, {cache:'no-store'}),
-        fetch(`/api/benchmarks/${benchmarkId}/report`, {cache:'no-store'}),
+        secureFetch(`/api/benchmarks/${benchmarkId}`, {cache:'no-store'}),
+        secureFetch(`/api/benchmarks/${benchmarkId}/report`, {cache:'no-store'}),
       ])
       if (!detailRes.ok) throw new Error('Không tải được ground truth')
       const data = await detailRes.json()
@@ -753,7 +754,7 @@ function GroundTruthBenchmark({ selectedCameraId, sessions }) {
     const isCurrent = () => selection === benchmarkSelectionRef.current
     setBusy(true); setError(''); setMessage('')
     try {
-      const response = await fetch(`/api/benchmarks/${benchmarkId}/clone-marks`, {
+      const response = await secureFetch(`/api/benchmarks/${benchmarkId}/clone-marks`, {
         method:'POST', headers:{'Content-Type':'application/json'},
         body:JSON.stringify({source_benchmark_id:sourceBenchmarkId})
       })
@@ -771,7 +772,7 @@ function GroundTruthBenchmark({ selectedCameraId, sessions }) {
     if (!selectedSessionId) return
     setBusy(true); setError(''); setMessage('')
     try {
-      const response = await fetch('/api/benchmarks', {
+      const response = await secureFetch('/api/benchmarks', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body:JSON.stringify({
           session_id:Number(selectedSessionId),
@@ -794,7 +795,7 @@ function GroundTruthBenchmark({ selectedCameraId, sessions }) {
     setBusy(true); setError(''); setMessage('')
     try {
       const at = Number(videoRef.current.currentTime || 0)
-      const response = await fetch(`/api/benchmarks/${detail.id}/marks`, {
+      const response = await secureFetch(`/api/benchmarks/${detail.id}/marks`, {
         method:'POST', headers:{'Content-Type':'application/json'},
         body:JSON.stringify({source_time_seconds:at, direction:directionOverride || markDirection, vehicle_type:markVehicle})
       })
@@ -811,7 +812,7 @@ function GroundTruthBenchmark({ selectedCameraId, sessions }) {
     if (!detail) return
     setBusy(true); setError(''); setMessage('')
     try {
-      const response = await fetch(`/api/benchmarks/${detail.id}/marks/${markId}`, {
+      const response = await secureFetch(`/api/benchmarks/${detail.id}/marks/${markId}`, {
         method:'PATCH', headers:{'Content-Type':'application/json'},
         body:JSON.stringify({vehicle_type:vehicleType})
       })
@@ -826,7 +827,7 @@ function GroundTruthBenchmark({ selectedCameraId, sessions }) {
     if (!detail) return
     setBusy(true); setError(''); setMessage('')
     try {
-      const response = await fetch(`/api/benchmarks/${detail.id}/marks/${markId}`, {method:'DELETE'})
+      const response = await secureFetch(`/api/benchmarks/${detail.id}/marks/${markId}`, {method:'DELETE'})
       const body = await readBody(response)
       if (!response.ok) throw new Error(body.detail || 'Không xóa được mốc')
       await loadDetail(detail.id); await loadBenchmarks()
@@ -837,7 +838,7 @@ function GroundTruthBenchmark({ selectedCameraId, sessions }) {
     if (!detail) return
     setBusy(true); setError(''); setMessage('')
     try {
-      const response = await fetch(`/api/benchmarks/${detail.id}`, {
+      const response = await secureFetch(`/api/benchmarks/${detail.id}`, {
         method:'PATCH', headers:{'Content-Type':'application/json'},
         body:JSON.stringify({tolerance_seconds:Number(tolerance)})
       })
@@ -854,7 +855,7 @@ function GroundTruthBenchmark({ selectedCameraId, sessions }) {
     const sessionId = detail.session_id
     setExporting(true); setError(''); setMessage('')
     try {
-      const response = await fetch(`/api/benchmarks/${benchmarkId}/export`, {cache:'no-store'})
+      const response = await secureFetch(`/api/benchmarks/${benchmarkId}/export`, {cache:'no-store'})
       if (!response.ok) {
         const body = await readBody(response)
         throw new Error(body.detail || 'Không tải được hồ sơ benchmark')
@@ -886,7 +887,7 @@ function GroundTruthBenchmark({ selectedCameraId, sessions }) {
     const before = report ? `${report.matched}/${report.missed}/${report.false_positives}` : ''
     setReconciling(true); setError(''); setReconcileStatus('Đang đối chiếu lại GT ↔ AI từ dữ liệu gốc...')
     try {
-      const response = await fetch(`/api/benchmarks/${benchmarkId}/reconcile`, {method:'POST', cache:'no-store'})
+      const response = await secureFetch(`/api/benchmarks/${benchmarkId}/reconcile`, {method:'POST', cache:'no-store'})
       const body = await readBody(response)
       if (!response.ok) throw new Error(body.detail || 'Không đối chiếu lại được benchmark')
       if (!isCurrent()) return
@@ -989,7 +990,7 @@ function GroundTruthBenchmark({ selectedCameraId, sessions }) {
   </section>
 }
 
-function App() {
+function App({authUser,logout}) {
   const [previewMode, setPreviewMode] = useState('smooth')
   const [overlayReady, setOverlayReady] = useState(false)
   const [summary, setSummary] = useState(null)
@@ -1031,9 +1032,9 @@ function App() {
   const load = async () => {
     try {
       const [summaryRes, healthRes, systemStatusRes, camerasRes, eventsRes, pipelinesRes, sessionsRes, videosRes, datasetsRes, trainingRes] = await Promise.all([
-        fetch('/api/dashboard/summary'), fetch('/api/health'), fetch('/api/system/status'), fetch('/api/cameras'),
-        fetch('/api/events?limit=20'), fetch('/api/pipelines'), fetch('/api/sessions?limit=50'), fetch('/api/sources/videos'),
-        fetch('/api/datasets'), fetch('/api/training/runs')
+        secureFetch('/api/dashboard/summary'), secureFetch('/api/health'), secureFetch('/api/system/status'), secureFetch('/api/cameras'),
+        secureFetch('/api/events?limit=20'), secureFetch('/api/pipelines'), secureFetch('/api/sessions?limit=50'), secureFetch('/api/sources/videos'),
+        secureFetch('/api/datasets'), secureFetch('/api/training/runs')
       ])
       if (![summaryRes, healthRes, camerasRes, eventsRes, sessionsRes].every(r => r.ok)) throw new Error('API chưa sẵn sàng')
       setSummary(await summaryRes.json())
@@ -1068,7 +1069,7 @@ function App() {
     let cancelled = false
     const refreshPipelines = async () => {
       try {
-        const response = await fetch('/api/pipelines', { cache: 'no-store' })
+        const response = await secureFetch('/api/pipelines', { cache: 'no-store' })
         if (response.ok && !cancelled) setPipelines(await response.json())
       } catch {}
     }
@@ -1121,7 +1122,7 @@ function App() {
   useEffect(() => {
     let cancelled = false
     if (!selected) { setSourceStatus(null); return () => {} }
-    fetch(`/api/cameras/${selected.id}/source-status`)
+    secureFetch(`/api/cameras/${selected.id}/source-status`)
       .then(async r => { const data = await r.json(); if (!r.ok) throw new Error(data.detail || 'Không kiểm tra được nguồn'); if (!cancelled) setSourceStatus(data) })
       .catch(err => { if (!cancelled) setSourceStatus({ valid:false, message:err.message }) })
     return () => { cancelled = true }
@@ -1132,7 +1133,7 @@ function App() {
     try {
       const endpoint = editingId ? `/api/cameras/${editingId}` : '/api/cameras'
       const method = editingId ? 'PATCH' : 'POST'
-      const response = await fetch(endpoint, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) })
+      const response = await secureFetch(endpoint, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) })
       const body = await readApiBody(response)
       if (!response.ok) throw new Error(body.detail || (editingId ? 'Không cập nhật được camera' : 'Không tạo được camera'))
       setSelectedId(body.id); setEditingId(body.id)
@@ -1153,7 +1154,7 @@ function App() {
     setBusy(true); setError(''); setNotice('')
     try {
       const action = activePipeline ? 'stop' : 'start'
-      const response = await fetch(`/api/cameras/${selected.id}/${action}`, { method: 'POST' })
+      const response = await secureFetch(`/api/cameras/${selected.id}/${action}`, { method: 'POST' })
       const body = await readApiBody(response)
       if (!response.ok) throw new Error(body.detail || 'Không thể thay đổi pipeline')
       if (action === 'start') {
@@ -1203,7 +1204,7 @@ function App() {
     setBusy(true); setError(''); setNotice('')
     try {
       const body = Object.fromEntries(Object.entries(lineForm).map(([k,v]) => [k, Number(v)]))
-      const response = await fetch(`/api/cameras/${selected.id}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) })
+      const response = await secureFetch(`/api/cameras/${selected.id}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) })
       const result = await readApiBody(response)
       if (!response.ok) throw new Error(result.detail || 'Không cập nhật được counting line')
       setNotice('Đã lưu vạch + vùng lòng đường. Chỉ xe cắt vạch vàng bên trong vùng xanh mới được tính IN/OUT.')
@@ -1215,7 +1216,7 @@ function App() {
     if (!selected || !sessionPipeline?.calibration_ready) return
     setBusy(true); setError(''); setNotice('')
     try {
-      const response = await fetch(`/api/cameras/${selected.id}/road-proposal`, {cache:'no-store'})
+      const response = await secureFetch(`/api/cameras/${selected.id}/road-proposal`, {cache:'no-store'})
       const body = await readApiBody(response)
       if (!response.ok) throw new Error(body.detail || 'Chưa tạo được đề xuất vùng lòng đường')
       const geometry = body.geometry || {}
@@ -1230,7 +1231,7 @@ function App() {
     setBusy(true); setError(''); setNotice('')
     try {
       if (activePipeline) {
-        const stopResponse = await fetch(`/api/cameras/${selected.id}/stop`, {method:'POST'})
+        const stopResponse = await secureFetch(`/api/cameras/${selected.id}/stop`, {method:'POST'})
         const stopBody = await readApiBody(stopResponse)
         if (!stopResponse.ok) throw new Error(stopBody.detail || 'Không dừng được AI để áp dụng đề xuất')
         if (stopBody.status === 'draining') {
@@ -1240,7 +1241,7 @@ function App() {
         }
       }
       const body = {...roadProposal.geometry, confidence_threshold:Number(lineForm.confidence_threshold)}
-      const response = await fetch(`/api/cameras/${selected.id}`, {method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)})
+      const response = await secureFetch(`/api/cameras/${selected.id}`, {method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)})
       const result = await readApiBody(response)
       if (!response.ok) throw new Error(result.detail || 'Không lưu được đề xuất Road Zone')
       setRoadProposal(null)
@@ -1261,7 +1262,7 @@ const createDataset = async () => {
   if (!selected) return
   setBusy(true); setError(''); setNotice('')
   try {
-    const response = await fetch('/api/datasets', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name:datasetForm.name, camera_id:selected.id, every_n_frames:Number(datasetForm.every_n_frames), max_images:Number(datasetForm.max_images), smart_dedupe:!!datasetForm.smart_dedupe, min_change_ratio:Number(datasetForm.min_change_ratio)})})
+    const response = await secureFetch('/api/datasets', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name:datasetForm.name, camera_id:selected.id, every_n_frames:Number(datasetForm.every_n_frames), max_images:Number(datasetForm.max_images), smart_dedupe:!!datasetForm.smart_dedupe, min_change_ratio:Number(datasetForm.min_change_ratio)})})
     const body = await readApiBody(response); if (!response.ok) throw new Error(body.detail || `Không tạo được dataset (HTTP ${response.status})`)
     setSelectedDatasetId(body.id); setNotice(`Đã giữ ${body.image_count} frame đa dạng${body.skipped_similar!=null ? `, bỏ ${body.skipped_similar} frame gần trùng` : ''} trong dataset ${body.name}.`); await load()
   } catch (err) { setError(err.message) } finally { setBusy(false) }
@@ -1272,7 +1273,7 @@ const datasetAction = async action => {
   setBusy(true); setError(''); setNotice('')
   try {
     const payload = action === 'autolabel' ? {confidence:0.25} : {train_ratio:0.70,val_ratio:0.20,seed:2026}
-    const response = await fetch(`/api/datasets/${selectedDataset.id}/${action}`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)})
+    const response = await secureFetch(`/api/datasets/${selectedDataset.id}/${action}`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)})
     const body = await readApiBody(response); if (!response.ok) throw new Error(body.detail || `Không thực hiện được ${action} (HTTP ${response.status})`)
     if (action === 'autolabel') setNotice(`Auto-label xong: ${body.labeled_images}/${body.image_count} ảnh có phương tiện, ${body.box_count} bounding box. Đây là nhãn gợi ý, cần rà soát trước khi train.`)
     else setNotice(`Dataset ready: train ${body.train_count}, val ${body.val_count}, test ${body.test_count}.`)
@@ -1285,7 +1286,7 @@ const resetDatasetLabels = async () => {
   if (!window.confirm(`Làm lại nhãn cho dataset “${selectedDataset.name}”? Ảnh gốc vẫn giữ, nhưng pseudo-label, trạng thái đã duyệt và train/val/test hiện tại sẽ bị xóa.`)) return
   setBusy(true); setError(''); setNotice('')
   try {
-    const response = await fetch(`/api/datasets/${selectedDataset.id}/reset-labels`, {method:'POST'})
+    const response = await secureFetch(`/api/datasets/${selectedDataset.id}/reset-labels`, {method:'POST'})
     const body = await readApiBody(response); if (!response.ok) throw new Error(body.detail || 'Không reset được nhãn dataset')
     setNotice(`Đã xóa nhãn cũ và giữ lại ${body.image_count || 0} ảnh gốc. Bây giờ chạy Auto-label lại.`); await load()
   } catch (err) { setError(err.message) } finally { setBusy(false) }
@@ -1297,7 +1298,7 @@ const deleteDataset = async () => {
   setBusy(true); setError(''); setNotice('')
   try {
     const deletedName = selectedDataset.name
-    const response = await fetch(`/api/datasets/${selectedDataset.id}`, {method:'DELETE'})
+    const response = await secureFetch(`/api/datasets/${selectedDataset.id}`, {method:'DELETE'})
     const body = await readApiBody(response); if (!response.ok) throw new Error(body.detail || 'Không xóa được dataset')
     setSelectedDatasetId(null); setNotice(`Đã xóa dataset ${deletedName} và ảnh cũ. Model đã export trong models vẫn được giữ.`); await load()
   } catch (err) { setError(err.message) } finally { setBusy(false) }
@@ -1307,7 +1308,7 @@ const startTraining = async () => {
   if (!selectedDataset) return
   setBusy(true); setError(''); setNotice('')
   try {
-    const response = await fetch('/api/training/runs', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({dataset_id:selectedDataset.id, base_model:trainingForm.base_model, epochs:Number(trainingForm.epochs), imgsz:Number(trainingForm.imgsz), batch:Number(trainingForm.batch), device:'auto'})})
+    const response = await secureFetch('/api/training/runs', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({dataset_id:selectedDataset.id, base_model:trainingForm.base_model, epochs:Number(trainingForm.epochs), imgsz:Number(trainingForm.imgsz), batch:Number(trainingForm.batch), device:'auto'})})
     const body = await readApiBody(response); if (!response.ok) throw new Error(body.detail || `Không khởi động được training (HTTP ${response.status})`)
     setNotice(`Đã bắt đầu Training Run #${body.id} trên ${trainingForm.base_model}.`); await load()
   } catch (err) { setError(err.message) } finally { setBusy(false) }
@@ -1316,7 +1317,7 @@ const startTraining = async () => {
 const activateTraining = async run => {
   setBusy(true); setError(''); setNotice('')
   try {
-    const response = await fetch(`/api/training/runs/${run.id}/activate`, {method:'POST'})
+    const response = await secureFetch(`/api/training/runs/${run.id}/activate`, {method:'POST'})
     const body = await readApiBody(response); if (!response.ok) throw new Error(body.detail || `Không kích hoạt được model (HTTP ${response.status})`)
     setNotice(body.already_active ? `${body.name} đã là model đang dùng.` : `Đã kích hoạt ${body.name}: ${body.model_path}. Phiên AI mới sẽ dùng model này.`); await load()
   } catch (err) { setError(err.message) } finally { setBusy(false) }
@@ -1325,11 +1326,12 @@ const activateTraining = async run => {
   return <div className="app-shell">
     <aside className="sidebar">
       <div className="brand"><img className="brand-logo" src={`/logo.svg?v=${APP_VERSION}`} alt="Traffic AI" /><div><strong>Traffic AI</strong><span>YOLO26s + ByteTrack</span></div></div>
-      <nav><a className="active" href="#overview">Tổng quan</a><a href="#live">Giám sát</a><a href="#benchmark">Benchmark</a><a href="#cameras">Camera</a><a href="#training">Dữ liệu & huấn luyện</a><a href="#annotation">Gán nhãn</a><a href="#events">Sự kiện</a></nav>
+      <nav><a className="active" href="#overview">Tổng quan</a><a href="#live">Giám sát</a><a href="#benchmark">Benchmark</a><a href="#cameras">Camera</a><a href="#training">Dữ liệu & huấn luyện</a><a href="#annotation">Gán nhãn</a><a href="#events">Sự kiện</a><a href="#account">Tài khoản</a>{authUser.role==='admin'&&<a href="#users">Người dùng</a>}</nav>
       <div className="sidebar-footer">V{APP_VERSION} · Strict Gate</div>
     </aside>
     <main>
       <header className="topbar"><div><p className="eyebrow">ĐỒ ÁN TRÍ TUỆ NHÂN TẠO</p><h1>Phát hiện, theo dõi và đếm phương tiện</h1></div><div className={`health ${health?.status === 'ok' ? 'online' : ''}`}><span className="dot" />{health?.status === 'ok' ? 'Hệ thống hoạt động' : 'Đang kết nối'}</div></header>
+      <div className="session-bar">{authUser.full_name||authUser.username} · <strong>{authUser.role.toUpperCase()}</strong>{authUser.role==='viewer'&&' · Chỉ xem'} <button onClick={logout}>Đăng xuất</button></div>
       {error && <div className="error-banner">{error}</div>}{notice && <div className="notice-banner">{notice}</div>}
       <section className="stats-grid" id="overview">
         <StatCard title="Camera" value={summary?.total_cameras ?? '—'} note={`${summary?.active_cameras ?? 0} đang chạy`} />
@@ -1420,6 +1422,8 @@ const activateTraining = async run => {
 
       <AnnotationEditor dataset={selectedDataset} onChanged={load} />
 
+      <AccountPanel user={authUser} onLogout={logout}/>
+      {authUser.role==='admin'&&<AdminPanel user={authUser}/>}
       <section className="content-grid lower-grid" id="events">
         <article className="panel"><div className="panel-head"><div><span className="panel-kicker">RECENT EVENTS</span><h2>Lịch sử PostgreSQL · mọi phiên</h2></div></div><div className="event-list">{events.length ? events.map(e => <div className="event-row" key={e.id}><span>#{e.tracking_id ?? '-'} · {vehicleLabels[e.vehicle_type] || e.vehicle_type}</span><strong>{String(e.direction).toUpperCase()}</strong><small>{new Date(e.detected_at).toLocaleString()}</small></div>) : <div className="empty">Chưa có phương tiện cắt vạch đếm.</div>}</div></article>
         <article className="panel"><div className="panel-head"><div><span className="panel-kicker">COUNTING SESSIONS</span><h2>Lịch sử phiên chạy</h2></div></div><div className="event-list">{sessions.length ? sessions.map(s => <div className="event-row" key={s.id}><span>Session #{s.id} · Camera #{s.camera_id}</span><strong>{String(s.status).toUpperCase()}</strong><small>{s.total_vehicles} event DB · worker {s.worker_total_vehicles ?? s.total_vehicles} · dedup {s.dedup_suppressed_events ?? 0} · human {s.human_guard_rejections ?? 0} · FPS {s.average_fps ?? '-'} · {new Date(s.started_at).toLocaleString()}</small></div>) : <div className="empty">Chưa có phiên chạy.</div>}</div></article>
@@ -1428,4 +1432,4 @@ const activateTraining = async run => {
   </div>
 }
 
-createRoot(document.getElementById('root')).render(<React.StrictMode><App /></React.StrictMode>)
+createRoot(document.getElementById('root')).render(<React.StrictMode><AuthShell>{(user,logout)=><App key={user.id} authUser={user} logout={logout}/>}</AuthShell></React.StrictMode>)

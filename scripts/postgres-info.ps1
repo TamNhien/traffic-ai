@@ -12,7 +12,7 @@ function Read-EnvValue([string]$Key,[string]$Default) {
 }
 $db=Read-EnvValue 'POSTGRES_DB' 'traffic_ai_db'
 $user=Read-EnvValue 'POSTGRES_USER' 'traffic_admin'
-$pass=Read-EnvValue 'POSTGRES_PASSWORD' 'TrafficAI@2026'
+$pass=Read-EnvValue 'POSTGRES_PASSWORD' ''
 $port=Read-EnvValue 'POSTGRES_HOST_PORT' '5445'
 $container='traffic-ai-postgres'
 $health=(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' $container 2>$null | Select-Object -First 1)

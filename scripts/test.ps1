@@ -323,12 +323,12 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.67") { throw "VERSION phải là 0.5.67, hiện tại: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0081_temporal_audit_v0567.py"
-  if (-not (Test-Path $migration)) { throw "Thiếu migration 0081_temporal_audit_v0567.py." }
+  if ($version -ne "0.5.70") { throw "VERSION must be 0.5.70, current: $version" }
+  $migration = Join-Path $root "backend\alembic\versions\0084_postgres_auth_guard_v0570.py"
+  if (-not (Test-Path $migration)) { throw "Missing migration 0084_postgres_auth_guard_v0570.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0081_temporal_audit_v0567"' -or $migrationText -notmatch 'down_revision = "0080_benchmark_ready_v0566"' -or $migrationText -notmatch "value='0.5.67'") {
-    throw "Migration 0081_temporal_audit_v0567 không đúng contract V0.5.67."
+  if ($migrationText -notmatch 'revision = "0084_postgres_auth_guard_v0570"' -or $migrationText -notmatch 'down_revision = "0083_bounded_startup_v0569"' -or $migrationText -notmatch "value='0.5.70'") {
+    throw "Migration 0084_postgres_auth_guard_v0570 is invalid."
   }
   Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
 }
@@ -1964,6 +1964,52 @@ function Assert-TemporalAssignmentV0567Contract {
   Write-Host "[OK] Temporal Assignment Evidence V0.5.67" -ForegroundColor Green
 }
 
+
+function Assert-SecurityAuthV0568Contract {
+  Write-Host "`n[Traffic AI] Argon2id + Session + RBAC + CSRF V0.5.68" -ForegroundColor Cyan
+  $security = Get-Content (Join-Path $root "backend\app\security.py") -Raw -Encoding UTF8
+  $middleware = Get-Content (Join-Path $root "backend\app\auth_middleware.py") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend\src\security.jsx") -Raw -Encoding UTF8
+  $gateway = Get-Content (Join-Path $root "gateway\nginx.conf") -Raw -Encoding UTF8
+  $routes = Get-Content (Join-Path $root "backend\app\auth_routes.py") -Raw -Encoding UTF8
+  if ($security -notmatch 'Type.ID' -or $security -notmatch 'memory_cost=65536' -or $security -notmatch 'httponly' -and $routes -notmatch 'httponly=True') { throw "Thiếu Argon2id/cookie HttpOnly." }
+  if ($middleware -notmatch 'valid_csrf' -or $middleware -notmatch 'lookup_session' -or $middleware -notmatch 'same_origin' -or $middleware -notmatch 'allowed\(') { throw "Thiếu bảo vệ API toàn cục." }
+  if ($gateway -notmatch 'auth_request /_traffic_auth_check' -or $gateway -notmatch 'location \^~ /api/internal/' -or $gateway -notmatch 'location /ai/ \{ return 404; \}') { throw "Gateway còn bypass AI/internal." }
+  if ($frontend -notmatch 'AuthShell' -or $frontend -notmatch 'AdminPanel' -or $frontend -notmatch 'X-CSRF-Token') { throw "Thiếu frontend auth/user management." }
+  if (-not (Test-Path (Join-Path $root "scripts\create-admin.ps1"))) { throw "Thiếu tạo Admin an toàn." }
+  Write-Host "[OK] Argon2id + Session + RBAC + CSRF V0.5.68" -ForegroundColor Green
+}
+
+function Assert-BoundedStartupV0569Contract {
+  Write-Host "`n[Traffic AI] Bounded, staged startup V0.5.69" -ForegroundColor Cyan
+  $startText = Get-Content (Join-Path $root "scripts\start.ps1") -Raw -Encoding UTF8
+  foreach ($token in @('function Wait-ContainerHealthy', 'Stage 1/4: PostgreSQL', 'Stage 2/4: Backend', 'Stage 3/4: AI Service', 'Stage 4/4: Frontend', '--no-deps postgres', '--no-deps backend', '--no-deps ai-service', '--no-deps frontend', 'Show-StartupDiagnostics', 'Wait-ContainerHealthy "traffic-ai-backend" 180')) {
+    if (-not $startText.Contains($token)) { throw "Missing V0.5.69 startup step: $token" }
+  }
+  if (-not ($startText.IndexOf('Stage 1/4') -lt $startText.IndexOf('Stage 2/4') -and $startText.IndexOf('Stage 2/4') -lt $startText.IndexOf('Stage 3/4') -and $startText.IndexOf('Stage 3/4') -lt $startText.IndexOf('Stage 4/4'))) {
+    throw 'Startup stage order invalid'
+  }
+  $diagnose = Join-Path $root "scripts\diagnose-startup.ps1"
+  if (-not (Test-Path $diagnose)) { throw 'Missing startup diagnostics script' }
+  Write-Host "[OK] Bounded, staged startup V0.5.69" -ForegroundColor Green
+}
+
+function Assert-PostgresAuthGuardV0570Contract {
+  Write-Host "`n[Traffic AI] PostgreSQL credential guard V0.5.70" -ForegroundColor Cyan
+  $startText = Get-Content (Join-Path $root 'scripts\start.ps1') -Raw -Encoding UTF8
+  $recoveryPath = Join-Path $root 'scripts\repair-postgres-auth.ps1'
+  if (-not (Test-Path $recoveryPath)) { throw 'Missing interactive PostgreSQL recovery script.' }
+  $recovery = Get-Content $recoveryPath -Raw -Encoding UTF8
+  $entry = Get-Content (Join-Path $root 'backend\entrypoint.sh') -Raw -Encoding UTF8
+  foreach ($needle in @('function Test-ConfiguredPostgresPassword', 'PGPASSWORD="$POSTGRES_PASSWORD"', '$existingDbVolume', 'repair-postgres-auth.ps1')) {
+    if ($startText -notmatch [regex]::Escape($needle)) { throw "Missing PostgreSQL preflight: $needle" }
+  }
+  if ($recovery -notmatch '\\password' -or $recovery -notmatch 'ON_ERROR_STOP=1' -or $recovery -notmatch '127.0.0.1') { throw 'Missing safe interactive PostgreSQL password recovery.' }
+  if ($entry -notmatch 'password authentication failed') { throw 'Backend must fail fast on PostgreSQL auth rejection.' }
+  if ($startText -match 'down -v|volume prune' -or $recovery -match 'down -v|volume rm|pg_hba.conf.*trust') { throw 'Unsafe PostgreSQL database recovery command.' }
+  Write-Host '[OK] PostgreSQL credential guard V0.5.70' -ForegroundColor Green
+}
+
 function Invoke-Step([string]$Title, [scriptblock]$Action) {
   Write-Host "`n[Traffic AI] $Title" -ForegroundColor Cyan
   & $Action
@@ -2047,6 +2093,9 @@ Assert-ReplayAuditV0564Contract
 Assert-VanSemanticsV0565Contract
 Assert-BenchmarkReadinessV0566Contract
 Assert-TemporalAssignmentV0567Contract
+Assert-SecurityAuthV0568Contract
+Assert-BoundedStartupV0569Contract
+Assert-PostgresAuthGuardV0570Contract
 Assert-LegacySemanticCompatibilityV0523R1
 
 Write-Host "`n[Traffic AI] Road Zone + Frame Browser V0.5.11" -ForegroundColor Cyan
@@ -2131,6 +2180,7 @@ Invoke-Step "Backend unit tests" {
   docker run --rm `
     -e DATABASE_URL_OVERRIDE=sqlite+pysqlite:///:memory: `
     -e AI_SERVICE_URL=http://127.0.0.1:8001 `
+    -e AI_SHARED_TOKEN=TrafficAI-V068-Test-Only `
     -e PYTHONPATH=/src/backend `
     -e PIP_ROOT_USER_ACTION=ignore `
     -e PIP_DISABLE_PIP_VERSION_CHECK=1 `
@@ -2156,7 +2206,8 @@ Invoke-Step "Frontend build" {
   $frontendLock = Join-Path $root "frontend\package-lock.json"
   if (Test-Path $frontendDist) { Remove-Item $frontendDist -Recurse -Force }
   if (Test-Path $frontendLock) { Remove-Item $frontendLock -Force }
-  docker run --rm -v "${root}:/src" -w /src/frontend node:26.10.0-alpine `
+  # Isolate Linux node_modules from any Windows node.exe wrappers in the host bind mount.
+  docker run --rm -v "${root}:/src" -v /src/frontend/node_modules -w /src/frontend node:26.10.0-alpine `
     sh -lc "npm install -g npm@12.2.0 && npm install && npm audit --audit-level=high && npm run build"
 }
 

@@ -4,7 +4,7 @@ import httpx2 as httpx
 import json
 import re
 import time
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
@@ -176,7 +176,8 @@ class GroundTruthMarkUpdate(BaseModel):
 
 
 def _assert_ai_token(token: str | None) -> None:
-    if token != settings.ai_shared_token:
+    import hmac
+    if not token or not settings.ai_shared_token or not hmac.compare_digest(token, settings.ai_shared_token):
         raise HTTPException(status_code=401, detail="Invalid AI service token")
 
 
@@ -237,9 +238,25 @@ def dashboard_summary(db: Session = Depends(get_db)) -> dict:
     }
 
 
+def _viewer_redact(payload, request: Request):
+    """Remove credentials in source URLs/paths from read-only API responses."""
+    if getattr(getattr(request.state, "auth_user", None), "role", None) != "viewer":
+        return payload
+    if isinstance(payload, list):
+        return [_viewer_redact(item, request) for item in payload]
+    if isinstance(payload, dict):
+        return {key: ("restricted" if key in {"source_url", "model_path"} else _viewer_redact(value, request))
+                for key, value in payload.items()}
+    return payload
+
+
 @router.get("/cameras", response_model=list[CameraRead])
-def list_cameras(db: Session = Depends(get_db)) -> list[Camera]:
-    return list(db.scalars(select(Camera).order_by(Camera.id)).all())
+def list_cameras(request: Request, db: Session = Depends(get_db)) -> list[Camera]:
+    cameras = list(db.scalars(select(Camera).order_by(Camera.id)).all())
+    # Viewer sees camera codes and geometry but never credential-bearing RTSP URLs.
+    if getattr(getattr(request.state, "auth_user", None), "role", None) == "viewer":
+        return [CameraRead.model_validate(camera).model_copy(update={"source_url": "restricted"}) for camera in cameras]
+    return cameras
 
 
 @router.post("/cameras", response_model=CameraRead, status_code=status.HTTP_201_CREATED)
@@ -316,7 +333,9 @@ def list_video_sources() -> list[dict]:
 
 
 @router.get("/cameras/{camera_id}/source-status")
-def camera_source_status(camera_id: int, probe: bool = Query(default=False), db: Session = Depends(get_db)) -> dict:
+def camera_source_status(camera_id: int, request: Request, probe: bool = Query(default=False), db: Session = Depends(get_db)) -> dict:
+    if getattr(getattr(request.state, "auth_user", None), "role", None) == "viewer":
+        raise HTTPException(403, detail="Operator required")
     camera = db.get(Camera, camera_id)
     if camera is None:
         raise HTTPException(status_code=404, detail="Camera not found")
@@ -384,16 +403,16 @@ def list_models(db: Session = Depends(get_db)) -> list[dict]:
 
 
 @router.get("/sessions")
-def list_sessions(limit: int = Query(default=50, ge=1, le=200), db: Session = Depends(get_db)) -> list[dict]:
+def list_sessions(request: Request, limit: int = Query(default=50, ge=1, le=200), db: Session = Depends(get_db)) -> list[dict]:
     rows = db.scalars(select(CountingSession).order_by(CountingSession.id.desc()).limit(limit)).all()
-    return [{
+    return _viewer_redact([{
         "id": row.id, "camera_id": row.camera_id, "model_id": row.model_id,
         "started_at": row.started_at, "ended_at": row.ended_at, "status": row.status,
         "total_vehicles": row.total_vehicles, "worker_total_vehicles": row.worker_total_vehicles,
         "dedup_suppressed_events": row.dedup_suppressed_events, "human_guard_rejections": row.human_guard_rejections,
         "average_fps": row.average_fps,
         "source_url": row.source_url, "source_fps": row.source_fps, "source_duration_seconds": row.source_duration_seconds,
-    } for row in rows]
+    } for row in rows], request)
 
 
 @router.post("/cameras/{camera_id}/start")
@@ -1311,6 +1330,7 @@ def internal_session_finish(session_id: int, payload: SessionFinish, x_ai_token:
 
 @router.get("/benchmarks")
 def list_benchmarks(
+    request: Request,
     camera_id: int | None = Query(default=None, ge=1),
     limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -1323,7 +1343,7 @@ def list_benchmarks(
     for row in rows:
         count = db.scalar(select(func.count(GroundTruthCrossing.id)).where(GroundTruthCrossing.benchmark_id == row.id)) or 0
         result.append(_benchmark_payload(row, int(count)))
-    return result
+    return _viewer_redact(result, request)
 
 
 @router.post("/benchmarks", status_code=201)
@@ -1478,7 +1498,7 @@ def clone_benchmark_marks(benchmark_id: int, payload: BenchmarkCloneMarks, db: S
 
 
 @router.get("/benchmarks/{benchmark_id}")
-def get_benchmark(benchmark_id: int, db: Session = Depends(get_db)) -> dict:
+def get_benchmark(benchmark_id: int, request: Request, db: Session = Depends(get_db)) -> dict:
     row = db.get(CountingBenchmark, benchmark_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Benchmark not found")
@@ -1489,7 +1509,7 @@ def get_benchmark(benchmark_id: int, db: Session = Depends(get_db)) -> dict:
     ).all())
     payload = _benchmark_payload(row, len(marks))
     payload["marks"] = [_ground_truth_payload(mark) for mark in marks]
-    return payload
+    return _viewer_redact(payload, request)
 
 
 @router.patch("/benchmarks/{benchmark_id}")
@@ -1720,8 +1740,8 @@ def _build_benchmark_report(
 
 
 @router.get("/benchmarks/{benchmark_id}/report")
-def benchmark_report(benchmark_id: int, db: Session = Depends(get_db)) -> dict:
-    return _build_benchmark_report(benchmark_id, db)
+def benchmark_report(benchmark_id: int, request: Request, db: Session = Depends(get_db)) -> dict:
+    return _viewer_redact(_build_benchmark_report(benchmark_id, db), request)
 
 
 def _benchmark_export_metadata(session: CountingSession | None, camera: Camera | None, model: AIModel | None, benchmark: dict) -> tuple[dict, dict]:

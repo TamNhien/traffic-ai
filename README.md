@@ -1,4 +1,134 @@
-# Traffic AI V0.5.67 — Chẩn đoán cạnh tranh GT ↔ AI theo timecode
+# Traffic AI V0.5.70 — PostgreSQL Credential Recovery + Fail-fast Startup
+
+## Vì sao PostgreSQL healthy nhưng Backend không thể start?
+
+Log từ máy Windows xác nhận `FATAL: password authentication failed for user "traffic_admin"` (SQLSTATE 28P01). Cơ sở dữ liệu cũ tồn tại trong `traffic_ai_postgres_data` và có mật khẩu role đã lưu; thay đổi `POSTGRES_PASSWORD` trong `.env` / Docker Compose **không tự đổi mật khẩu role trong database đã khởi tạo**. `pg_isready` có thể báo ready khi authentication của Backend vẫn sai. Không liên quan Argon2id password cho người dùng Dashboard.
+
+### Nâng cấp V0.5.70
+
+1. Chặn startup ngay sau PostgreSQL stage nếu kết nối TCP/SCRAM bằng `POSTGRES_PASSWORD` hiện tại không thành công. Không đợi Backend restart 30 lần rồi timeout 180 giây.
+2. Nếu `.env` còn mật khẩu mẫu nhưng đã có named database volume, **không tự sinh secret mới** đè lên cấu hình đang cần khôi phục.
+3. Thêm `scripts/repair-postgres-auth.ps1`: dùng `psql \password <role>` nhập mật khẩu ẩn hai lần, không gửi plaintext qua CLI, history, hoặc SQL command. Sau đó xác thực lại bằng TCP/SCRAM. Cần sao chép mật khẩu từ `.env` tại máy cục bộ; không gửi mật khẩu qua chat.
+4. Backend thoát sớm, log lý do rõ ràng nếu PostgreSQL từ chối password. Không chỉnh sửa dữ liệu, volume hay bảo mật PostgreSQL; không tắt SCRAM.
+5. Thêm bốn regression `test_v0570_*`, contract PowerShell và migration `0084_postgres_auth_guard_v0570` (chỉ tăng `schema_version`). Không đổi AI counting, Gate, benchmark, database event, user Argon2id hoặc RBAC.
+
+### Khôi phục database hiện tại (không xóa dữ liệu)
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+notepad .env
+# Xác nhận POSTGRES_PASSWORD có mật khẩu mạnh; KHÔNG chia sẻ giá trị.
+# PostgreSQL cần đang chạy:
+docker compose up -d --no-deps postgres
+.\scripts\repair-postgres-auth.ps1
+# Khi được hỏi, dán POSTGRES_PASSWORD từ .env hai lần (ẩn ký tự).
+.\scripts\test.ps1
+.\scripts\start.ps1
+# Khi đã kiểm tra thật sự hoạt động:
+.\scripts\publish.ps1
+```
+
+Nếu kết nối psql qua Unix socket bị từ chối, **không** chuyển `pg_hba.conf` sang `trust`. Dừng lại và dùng tài khoản DB có quyền truy cập hợp lệ để khôi phục. Lưu ý việc thay đổi mật khẩu role có thể làm các ứng dụng khác dùng chung role mất kết nối; cấu hình của chúng cũng cần đồng bộ.
+
+---
+
+# Traffic AI V0.5.69 - Bounded PostgreSQL/Backend startup diagnostics
+
+V0.5.68 could appear stuck after Docker image build while Compose waited
+for backend `service_healthy` for multiple minutes. V0.5.69 stages startup:
+PostgreSQL -> Backend/Alembic -> AI Service (GPU with CPU fallback) ->
+Frontend/Gateway. Each stage has a finite health timeout and prints logs
+when it fails. The system will stop waiting and report the real migration,
+connection or healthcheck error instead of silently waiting.
+
+**Important:** A screenshot of `backend Waiting` does not establish why
+Backend is unhealthy. This release fixes endless waiting/observability;
+it does not claim to fix an unknown database migration error without logs.
+The Backend entrypoint avoids unconditional `ALTER TABLE alembic_version` on every boot and sets PostgreSQL lock/statement limits for migration diagnostics.
+No destructive DB commands are issued: existing `traffic_ai_postgres_data`
+volume, `.env`, model files, camera event data and GT are kept.
+
+Run in PowerShell:
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+.\scripts\test.ps1
+.\scripts\start.ps1
+# If backend still cannot become healthy:
+.\scripts\diagnose-startup.ps1
+# After startup and functional tests pass:
+.\scripts\publish.ps1
+```
+
+The old `create-admin.ps1` workflow remains unchanged. Version 0.5.69 is
+consistent across Frontend, Backend and AI Service. Alembic head is
+`0083_bounded_startup_v0569` (updates schema version only).
+
+---
+
+# Traffic AI V0.5.68 — Quản lý người dùng & bảo mật Argon2id
+
+## Mới: đăng nhập, phân quyền và audit thực sự hoạt động
+
+**Lưu ý khi nâng từ V0.5.67:** Sau khi cập nhật source và chạy `start.ps1`, mọi API/UI dữ liệu (ngoại trừ health) yêu cầu đăng nhập. Không có mật khẩu mặc định và không có API đăng ký công khai. Chạy `scripts/create-admin.ps1` **một lần** trên máy quản trị sau khi backend đã healthy. Database, GT, sự kiện, mô hình và AI counting được giữ nguyên; Alembic revision `0082_security_auth_v0568` bổ sung trường `users.role`, `must_change_password`, `last_login_at` và ba bảng `auth_sessions`, `login_limits`, `security_audit`.
+
+### Mật khẩu: băm chứ không mã hóa có thể giải ngược
+
+Sử dụng **Argon2id** thông qua argon2-cffi 25.1.0, cấu hình `m=65536 KiB (64 MiB), t=3, p=2`, salt 16 byte riêng từng tài khoản, output 32 byte. Không ghi mật khẩu plaintext vào PostgreSQL/log và không cung cấp chức năng giải mã. Yêu cầu 12–128 ký tự, có chữ và số, tối đa 512 byte UTF-8; check_needs_rehash cho các hash Argon2id cũ. Quy tắc này đáp ứng mức tối thiểu Argon2id khuyến nghị trong OWASP Password Storage Cheat Sheet; không khẳng định mật khẩu yếu sẽ được bảo vệ tuyệt đối.
+
+### Kiến trúc xác thực
+
+- Session token ngẫu nhiên 256-bit, chỉ lưu SHA-256(token) trong `auth_sessions`; cookie `__Host-traffic_ai_session` có **Secure, HttpOnly, SameSite=Strict, Path=/** và hạn 8 giờ; không sử dụng localStorage, không JWT lưu client. Có thu hồi phiên khi logout, đổi mật khẩu, khóa tài khoản, thay vai trò, hoặc reset mật khẩu.
+- CSRF token ràng buộc phiên, backend chỉ lưu SHA-256 của token đó. Mọi POST/PUT/PATCH/DELETE đã đăng nhập cần `X-CSRF-Token` và `Origin` phải trùng origin HTTPS hiện tại. Frontend `secureFetch` tự gắn header. Từ chối request thay đổi trạng thái thiếu token hoặc sai Origin.
+- Khóa thử đăng nhập sai sau 5 lần trong 15 phút theo IP và tên tài khoản; phản hồi sai mật khẩu không tiết lộ tên tồn tại; phiên cookie không lưu plaintext trong DB.
+- Auth middleware mặc định từ chối mọi `/api/*` chưa đăng nhập (trừ `/api/health` phục vụ Docker và `/api/auth/login`). `/api/internal/*` vẫn phải qua token AI riêng, nhưng **gateway không cho public gọi**. Video browser `/ai/streams/*` cần session hợp lệ; `/ai/media/video` còn cần Operator/Admin; các endpoint AI khác bị chặn tại Nginx.
+- Nginx bật TLS, HSTS, CSP hạn chế script-origin, X-Frame-Options DENY, Referrer-Policy, nosniff. PostgreSQL chỉ bind **127.0.0.1:5445** ở host, không công khai trên LAN. Môi trường mới tự sinh mật khẩu PostgreSQL ngẫu nhiên từ template; **mật khẩu PostgreSQL đã tồn tại không tự đổi** để tránh làm mất kết nối với volume dữ liệu cũ. Nếu `.env` cũ vẫn dùng mật khẩu ví dụ, người quản trị nên chủ động đổi trong PostgreSQL và `.env` sau khi sao lưu. `.env` cũ có AI_SHARED_TOKEN ví dụ công khai sẽ được `start.ps1` thay bằng chuỗi ngẫu nhiên; các secret do người dùng tự đặt được giữ nguyên.
+
+### Vai trò và hành vi
+
+| Vai trò | Xem Dashboard/benchmark | Thay đổi camera, AI, GT, dataset, training | Tạo/khóa/sửa user và xem audit |
+|---|---|---|---|
+| Admin | Có | Có | Có |
+| Operator | Có | Có | Không |
+| Viewer | Có, chỉ đọc | Không | Không |
+
+Viewer không nhận RTSP source URL từ `/api/cameras`, `/api/sessions` và benchmark JSON (trường `source_url` được che thành `restricted`); endpoint benchmark ZIP export, source inspection và raw ảnh dataset cần Operator trở lên. Các quyền được kiểm tra **tại backend**, không dựa vào ẩn nút UI. Admin không thể tự khóa hoặc tự hạ vai trò; hệ thống từ chối xóa quyền của Admin cuối cùng. Các thao tác đã xác thực (ngoại trừ reads) có audit action/path/HTTP outcome, không lưu body, mật khẩu hoặc query string; audit nhạy cảm (`users.*`, `auth.*`) ghi trong giao dịch. Với thao tác thông thường, audit sau response là best-effort nếu DB bị sự cố — xem giới hạn bên dưới.
+
+### Khởi tạo Admin đầu tiên — không có tài khoản/mật khẩu cố định
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+.\scripts\test.ps1
+.\scripts\start.ps1
+
+# Chạy trên máy chủ quản trị sau khi backend đã healthy.
+# Mật khẩu được nhập ẩn, xác nhận 2 lần.
+.\scripts\create-admin.ps1
+```
+
+Mở `https://traffic-ai.test:8443` và đăng nhập. Khi Admin tạo user mới, tài khoản phải **đổi mật khẩu tạm ngay lần đăng nhập đầu tiên**. Trên sidebar có **Tài khoản** (mọi vai trò) và **Người dùng** (chỉ Admin). Trong Người dùng: tạo user, tìm kiếm, sửa họ tên, phân vai, khóa/mở, reset mật khẩu, thu hồi phiên và xem nhật ký. Trong Tài khoản: tự đổi mật khẩu hoặc đăng xuất tất cả thiết bị. Mỗi lần đổi/reset mật khẩu hoặc đổi vai trò sẽ thu hồi toàn bộ session của user đó.
+
+Sau khi chạy thử ổn, phát hành với **một lệnh**:
+
+```powershell
+.\scripts\publish.ps1
+```
+
+Tự động dùng `VERSION=0.5.68` tạo tag `v0.5.68` và GitHub Release. Nếu nâng cấp vào cài đặt cũ có user nhưng chưa có Admin, **không cấp Admin tự động**; thực hiện `create-admin.ps1`. Không upload `.env`, `gateway/certs/*.key`, database hoặc model weights vào ZIP/GitHub.
+
+### Bảo mật và giới hạn đã biết
+
+Argon2id dùng băm một chiều, không phải mã hóa đảo ngược. Chưa triển khai WebAuthn/passkeys hoặc MFA/TOTP, chưa có SIEM/tamper-proof external audit, chưa có ký riêng mỗi record audit; không gọi đây là bảo mật tuyệt đối. Logout/revocation kiểm tra trong PostgreSQL cho mỗi request. CSRF dựa vào cùng origin, nhưng phòng chống XSS cũng quan trọng. Kiểm thử thực tế hệ thống dùng Docker/PowerShell, cookies Nginx và chức năng video trên máy Windows vẫn cần thực hiện sau cài đặt. Không thay chính sách benchmark/GT và không khẳng định Recall/F1 cải thiện trong V0.5.68.
+
+Tham khảo OWASP: <https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html> và <https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html>.
+
+---
+
+## Lịch sử phiên bản trước
+
+# Traffic AI — lịch sử V0.5.67: Chẩn đoán cạnh tranh GT ↔ AI theo timecode
 
 Nâng cấp trực tiếp từ **V0.5.66** do người dùng tải lên. Bản này bổ sung trạng thái sẵn sàng benchmark và giữ bản sửa van chở hàng thành **Xe tải**. Đơn vị đếm là lượt cắt vạch; một xe quay lại cắt vạch lần nữa được tính thêm một lượt.
 

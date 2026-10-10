@@ -10,11 +10,11 @@ class Settings(BaseSettings):
     app_env: str = "development"
     postgres_db: str = "traffic_ai_db"
     postgres_user: str = "traffic_admin"
-    postgres_password: str = "TrafficAI@2026"
+    postgres_password: str = ""
     postgres_host: str = "postgres"
     postgres_port: int = 5432
     ai_service_url: str = "http://ai-service:8001"
-    ai_shared_token: str = "TrafficAI-Local-2026"
+    ai_shared_token: str = ""
     database_url_override: str | None = None
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")

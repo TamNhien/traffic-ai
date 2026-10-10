@@ -15,9 +15,23 @@ function Get-ContainerHealth([string]$Name) {
   return "missing"
 }
 
+function Test-ConfiguredPostgresPassword {
+  # Probe over TCP+SCRAM. pg_isready and Unix socket checks alone cannot
+  # establish that the password in .env matches the persistent database role.
+  # The password remains inside the PostgreSQL container environment; never
+  # echo it, pass it on docker's command line or emit it in diagnostics.
+  $query = 'PGPASSWORD="$POSTGRES_PASSWORD" psql -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -X -q -t -A -c "SELECT 1" 2>/dev/null'
+  $output = & docker exec traffic-ai-postgres sh -c $query 2>$null
+  return ($LASTEXITCODE -eq 0 -and ($output -join "`n").Trim() -eq '1')
+}
+
 function Show-StartupDiagnostics {
   Write-Host "`n[Traffic AI] Startup diagnostics" -ForegroundColor Yellow
-  docker compose -f docker-compose.yml ps 2>$null
+  docker compose -f docker-compose.yml ps -a 2>$null
+  Write-Host "`n[Traffic AI] PostgreSQL logs (last 80 lines)" -ForegroundColor Yellow
+  docker compose -f docker-compose.yml logs --tail 80 postgres 2>$null
+  Write-Host "`n[Traffic AI] Backend healthcheck (last 5 checks)" -ForegroundColor Yellow
+  docker inspect --format '{{if .State.Health}}{{range .State.Health.Log}}{{.ExitCode}} {{.Output}}{{end}}{{else}}{{.State.Status}}{{end}}' traffic-ai-backend 2>$null
   Write-Host "`n[Traffic AI] Backend logs (last 200 lines)" -ForegroundColor Yellow
   docker compose -f docker-compose.yml logs --tail 200 backend 2>$null
   Write-Host "`n[Traffic AI] AI Service logs (last 120 lines)" -ForegroundColor Yellow
@@ -27,6 +41,29 @@ function Show-StartupDiagnostics {
 function Show-GatewayDiagnostics {
   Write-Host "`n[Traffic AI] Gateway logs (last 120 lines)" -ForegroundColor Yellow
   docker compose -f docker-compose.yml logs --tail 120 gateway 2>$null
+}
+
+function Wait-ContainerHealthy([string]$Name, [int]$TimeoutSeconds = 180) {
+  $timer = [System.Diagnostics.Stopwatch]::StartNew()
+  $previousStatus = ''
+  while ($timer.Elapsed.TotalSeconds -lt $TimeoutSeconds) {
+    $state = Get-ContainerHealth $Name
+    if ($state -eq 'healthy') {
+      Write-Host "[OK] $Name healthy after $([int]$timer.Elapsed.TotalSeconds)s." -ForegroundColor Green
+      return $true
+    }
+    if ($state -in @('unhealthy', 'exited', 'dead')) {
+      Write-Warning "$Name has failed health/state check: $state."
+      return $false
+    }
+    if ($state -ne $previousStatus -or [int]$timer.Elapsed.TotalSeconds % 15 -eq 0) {
+      Write-Host "[Traffic AI] Waiting for $Name ($state, $([int]$timer.Elapsed.TotalSeconds)s/${TimeoutSeconds}s)..." -ForegroundColor DarkYellow
+      $previousStatus = $state
+    }
+    Start-Sleep -Seconds 3
+  }
+  Write-Warning "Timed out after $TimeoutSeconds seconds waiting for $Name (last state: $(Get-ContainerHealth $Name))."
+  return $false
 }
 
 function Test-HttpsEndpoint([string]$Url, [int]$Attempts = 20) {
@@ -56,6 +93,38 @@ if (Test-Path $envPath) {
     [System.IO.File]::WriteAllText($envPath, $envText, [System.Text.UTF8Encoding]::new($false))
     Write-Host "[Traffic AI] Đã nâng baseline model trong .env: $oldModel -> yolo26s.pt" -ForegroundColor Yellow
   }
+}
+
+# V0.5.68: generate strong DB secret ONLY for fresh template installs.
+# Existing working PostgreSQL credentials are never modified automatically.
+$firstDbSecret = [regex]::Match((Get-Content $envPath -Raw), '(?m)^POSTGRES_PASSWORD=([^\r\n]*)')
+if ($firstDbSecret.Success -and $firstDbSecret.Groups[1].Value -eq 'CHANGE_ME_GENERATED_ON_START') {
+  # V0.5.70: an existing named volume may contain an old password.
+  # Never replace the template value with a new random value on an existing DB.
+  $existingDbVolume = docker volume ls --filter 'name=^traffic_ai_postgres_data$' --format '{{.Name}}'
+  if ($LASTEXITCODE -ne 0) { throw 'Không kiểm tra được PostgreSQL volume, đã dừng để bảo vệ dữ liệu.' }
+  if ($existingDbVolume -eq 'traffic_ai_postgres_data') {
+    throw 'Đã có PostgreSQL volume cũ nhưng .env vẫn là mật khẩu mẫu. Khôi phục POSTGRES_PASSWORD đúng trong .env (hoặc đặt mật khẩu mới an toàn trước khi chạy repair-postgres-auth.ps1). Không tự đổi DB secret.'
+  }
+  $newDbSecret = [Convert]::ToBase64String([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(32)).TrimEnd('=') -replace '\+', '-' -replace '/', '_'
+  $dbEnv = Get-Content $envPath -Raw
+  $dbEnv = [regex]::Replace($dbEnv, '(?m)^POSTGRES_PASSWORD=[^\r\n]*', "POSTGRES_PASSWORD=$newDbSecret")
+  [System.IO.File]::WriteAllText($envPath, $dbEnv, [System.Text.UTF8Encoding]::new($false))
+  Write-Host "[Traffic AI] Môi trường mới: đã tạo mật khẩu PostgreSQL ngẫu nhiên." -ForegroundColor Green
+}
+
+# V0.5.68: upgrade the published example AI token to a unique machine secret.
+$oldAiToken = [regex]::Match((Get-Content $envPath -Raw), '(?m)^AI_SHARED_TOKEN=([^\r\n]*)')
+if (-not $oldAiToken.Success -or $oldAiToken.Groups[1].Value -in @('TrafficAI-Local-2026', 'CHANGE_ME_GENERATED_ON_START')) {
+  $newToken = [Convert]::ToBase64String([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(32)).TrimEnd('=') -replace '\+', '-' -replace '/', '_'
+  $allEnv = Get-Content $envPath -Raw
+  if ($oldAiToken.Success) {
+    $allEnv = [regex]::Replace($allEnv, '(?m)^AI_SHARED_TOKEN=[^\r\n]*', "AI_SHARED_TOKEN=$newToken")
+  } else {
+    $allEnv = $allEnv.TrimEnd("`r", "`n") + "`r`nAI_SHARED_TOKEN=$newToken`r`n"
+  }
+  [System.IO.File]::WriteAllText($envPath, $allEnv, [System.Text.UTF8Encoding]::new($false))
+  Write-Host "[Traffic AI] Đã tạo bí mật nội bộ AI ngẫu nhiên; không ghi giá trị vào log." -ForegroundColor Green
 }
 
 # V0.5.8: giữ detector/classifier, nhưng nâng tuning cho Strict Gate + Fast Crossing.
@@ -314,36 +383,62 @@ if ($volume -ne "traffic_ai_postgres_data") {
   if ($LASTEXITCODE -ne 0) { throw "Không thể tạo traffic_ai_postgres_data." }
 }
 
-$composeArgs = @("compose", "-f", "docker-compose.yml")
-if (-not $Cpu) {
-  Write-Host "[Traffic AI] Thử khởi động chế độ NVIDIA GPU." -ForegroundColor Cyan
-  $composeArgs += @("-f", "docker-compose.gpu.yml")
-} else {
-  Write-Host "[Traffic AI] Khởi động chế độ CPU." -ForegroundColor Yellow
+# V0.5.69: staged startup avoids indefinite Compose service_healthy waits.
+# Start database and backend separately and time-box healthchecks before
+# launching their dependents. No volume or data is ever removed here.
+$baseComposeArgs = @("compose", "-f", "docker-compose.yml")
+$gpuComposeArgs = @("compose", "-f", "docker-compose.yml", "-f", "docker-compose.gpu.yml")
+
+Write-Host "[Traffic AI] Stage 1/4: PostgreSQL..." -ForegroundColor Cyan
+& docker @baseComposeArgs up -d --no-deps postgres
+if ($LASTEXITCODE -ne 0 -or -not (Wait-ContainerHealthy "traffic-ai-postgres" 120)) {
+  Show-StartupDiagnostics
+  throw "PostgreSQL startup failed or timed out. Database volume was NOT removed."
 }
-$composeArgs += @("up", "-d", "--build")
 
-& docker @composeArgs
+# V0.5.70: the POSTGRES_PASSWORD environment variable does not change the
+# password inside an already-initialized PostgreSQL volume.
+if (-not (Test-ConfiguredPostgresPassword)) {
+  Write-Warning 'PostgreSQL đã healthy nhưng từ chối POSTGRES_PASSWORD trong .env.'
+  Write-Host '[Traffic AI] Chạy .\scripts\repair-postgres-auth.ps1 để đồng bộ mật khẩu một cách tương tác.' -ForegroundColor Yellow
+  throw 'PostgreSQL authentication failed (SQLSTATE 28P01). No data/volumes were modified.'
+}
+Write-Host '[OK] PostgreSQL TCP/SCRAM credential check passed.' -ForegroundColor Green
+
+Write-Host "[Traffic AI] Stage 2/4: Backend and database migrations..." -ForegroundColor Cyan
+& docker @baseComposeArgs up -d --build --no-deps backend
 if ($LASTEXITCODE -ne 0) {
-  $backendHealth = Get-ContainerHealth "traffic-ai-backend"
+  Show-StartupDiagnostics
+  throw "Backend container could not start."
+}
+if (-not (Wait-ContainerHealthy "traffic-ai-backend" 180)) {
+  Show-StartupDiagnostics
+  throw "Backend did not become healthy within 180s. Check the PostgreSQL and Backend logs printed above (Alembic/DB import/healthcheck)."
+}
 
-  # Backend lỗi không liên quan GPU. Không retry CPU vô ích; in log đúng blocker ngay.
-  if ($backendHealth -in @("unhealthy", "exited", "restarting", "dead")) {
-    Show-StartupDiagnostics
-    throw "Backend không healthy ($backendHealth). Đã in log chẩn đoán phía trên; CPU fallback không thể sửa lỗi Backend."
+Write-Host "[Traffic AI] Stage 3/4: AI Service..." -ForegroundColor Cyan
+$aiReady = $false
+if (-not $Cpu) {
+  Write-Host "[Traffic AI] Trying NVIDIA GPU mode." -ForegroundColor Cyan
+  & docker @gpuComposeArgs up -d --build --no-deps ai-service
+  if ($LASTEXITCODE -eq 0) {
+    $aiReady = Wait-ContainerHealthy "traffic-ai-service" 240
   }
+}
+if (-not $aiReady) {
+  if (-not $Cpu) { Write-Warning "AI Service GPU unavailable; retrying CPU mode." }
+  & docker @baseComposeArgs up -d --build --no-deps ai-service
+  if ($LASTEXITCODE -ne 0 -or -not (Wait-ContainerHealthy "traffic-ai-service" 240)) {
+    Show-StartupDiagnostics
+    throw "AI Service did not become healthy in CPU mode."
+  }
+}
 
-  if (-not $Cpu) {
-    Write-Warning "Khởi động GPU thất bại trong khi Backend không báo lỗi. Đang thử lại AI Service bằng CPU..."
-    docker compose -f docker-compose.yml up -d --build
-    if ($LASTEXITCODE -ne 0) {
-      Show-StartupDiagnostics
-      throw "docker compose up thất bại ở chế độ CPU."
-    }
-  } else {
-    Show-StartupDiagnostics
-    throw "docker compose up thất bại."
-  }
+Write-Host "[Traffic AI] Stage 4/4: Frontend and HTTPS gateway..." -ForegroundColor Cyan
+& docker @baseComposeArgs up -d --build --no-deps frontend
+if ($LASTEXITCODE -ne 0) {
+  Show-StartupDiagnostics
+  throw "Frontend failed to start."
 }
 
 # Gateway có thể đã sống từ phiên bản trước trong khi frontend/backend vừa bị recreate.
@@ -364,7 +459,7 @@ if (-not $dashboardOk -or -not $apiOk) {
 }
 
 Write-Host ""
-Write-Host "[OK] Traffic AI V0.5.67 đã khởi động." -ForegroundColor Green
+Write-Host "[OK] Traffic AI V0.5.70 đã khởi động." -ForegroundColor Green
 Write-Host "Dashboard : https://traffic-ai.test:8443"
 Write-Host "API Docs  : https://traffic-ai.test:8444/docs"
 $envNow = Get-Content $envPath -Raw -Encoding UTF8
