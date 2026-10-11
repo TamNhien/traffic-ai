@@ -1,3 +1,28 @@
+# V0.5.77 Verification — startup and benchmark case forensics
+
+- Source analysis: confirmed undefined `$root` on final V0.5.76 start.ps1 line 474 after Gateway. Fixed to `$ProjectRoot` which is initialized before execution.
+- Verified unit tests: **172/172 backend**, **635/635 AI Service**, **4/4 backup worker**, **4/4 frontend Node tests**; additionally **26/26** offline benchmark/replay/forensics pytest tests (5 + 15 + 6). Backend and AI used an `httpx2`-to-`httpx` test-only compatibility shim in this container; this shim is NOT in the deliverable. `compileall` passed; Alembic single head `0091_gt_forensics_v0577`. Docker, PowerShell and production Vite build on Windows were NOT run.
+- Added six unit tests for verified benchmark ZIP, complete trace, SHA-256 rejection, missing delivery footer, no-trace explicit warning and CLI output. New PowerShell source contract checks the startup path, version and migration chain.
+- Camera Session #177/#178 images and trace (23,650 frames) do NOT include all 149 user-annotated GT entries; they cannot independently identify exact 10 missed and 14 extra physical events.
+- Counting core unchanged; 0 missed / 0 extra was **not verified** and must not be represented as fixed.
+- Docker/Windows/GPU runtime must be retested on user's machine before release.
+
+---
+
+# Verification V0.5.76 — GitHub Actions backend CI 401 failures
+
+**Root cause:** `.github/workflows/ci-release-reusable.yml` did not inject `AI_SHARED_TOKEN`; `scripts/test.ps1` already did, so 18 direct-event tests called `_assert_ai_token` with blank settings and got 401.
+
+**Fix:** CI test-only env var + test module's local temporary fixture + negative fail-closed security test. Production token check remains unchanged.
+
+**User replay evidence:** Sessions #177 and #178 yielded DB 153 each, no event differences. Session #178 GT 149 / matched 139 / missed 10 / extra 14. No AI accuracy claim.
+
+**Tests executed for V0.5.76 in the packaging environment:** backend **172 passed** (including new negative auth test), AI Service **635 passed**, backup-worker **4 passed**, replay-diff **15 passed**, benchmark gate **5 passed**, frontend Node unit tests **4 passed**, Python `compileall` passed. `test_app.py` alone also passed **87/87** without any `AI_SHARED_TOKEN` environment variable. Alembic reports a single head `0090_ci_token_v0576`.
+
+**Limitations:** Packaging environment could not fetch pinned `httpx2` due DNS error; backend and AI tests used a temporary test-only `httpx2` → installed `httpx` alias which is **NOT** included in the source ZIP. Local FastAPI/SQLAlchemy/pytest versions also differ from GitHub CI pins. Docker Engine, GitHub Actions CI runner, PowerShell parser, PostgreSQL migration/restore, GPU replay and full Vite build have **not** been executed in this container. Re-run `scripts/test.ps1` and GitHub Actions on the target environment before publishing. These tests do not prove a change in benchmark GT accuracy.
+
+---
+
 # Verification V0.5.75 — Replay Drift Audit
 
 - Base archive: `traffic-ai-v0.5.74-full-source.zip`; preserve Backup/Restore and all core counting thresholds.

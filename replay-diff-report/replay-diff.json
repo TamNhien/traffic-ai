@@ -1,0 +1,41 @@
+{
+  "format": "traffic-ai-replay-diff",
+  "schema_version": 1,
+  "analysis_type": "cross-run-consistency-not-ground-truth",
+  "warning": "Replay pairs are time/position/direction candidates, not proven physical vehicle IDs. Trace metadata has no clip SHA-256; verify that the videos are identical. Only a complete Ground Truth benchmark can determine missed/extra counts.",
+  "previous": {
+    "session": 177,
+    "proposals": 192,
+    "created": 153,
+    "deduplicated": 39
+  },
+  "current": {
+    "session": 178,
+    "proposals": 192,
+    "created": 153,
+    "deduplicated": 39
+  },
+  "settings": {
+    "time_window_seconds": 0.75,
+    "distance_window_normalized": 0.025,
+    "fps": 25.0,
+    "frames": 23650
+  },
+  "summary": {
+    "proposal_pairs": 192,
+    "proposal_removed": 0,
+    "proposal_introduced": 0,
+    "decision_changes": 0,
+    "source_time_shifts_over_2_frames": 0,
+    "created_pairs": 153,
+    "created_removed": 0,
+    "created_introduced": 0,
+    "created_total_delta": 0
+  },
+  "decision_changes": [],
+  "source_time_shifts": [],
+  "proposals_removed": [],
+  "proposals_introduced": [],
+  "created_removed": [],
+  "created_introduced": []
+}

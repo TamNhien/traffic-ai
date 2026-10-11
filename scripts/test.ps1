@@ -323,7 +323,7 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.75") { throw "VERSION must be 0.5.75, current: $version" }
+  if ($version -ne "0.5.77") { throw "VERSION must be 0.5.77, current: $version" }
   $migration = Join-Path $root "backend\alembic\versions\0085_password_policy_v0571.py"
   if (-not (Test-Path $migration)) { throw "Missing migration 0085_password_policy_v0571.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
@@ -2236,6 +2236,42 @@ if ($replayAudit -notmatch 'def check_compatible\(' -or $replayAudit -notmatch '
   throw 'V0.5.75 replay drift analysis contract missing.'
 }
 Write-Host '[OK] Replay Drift Audit V0.5.75' -ForegroundColor Green
+
+Write-Host "`n[Traffic AI] CI isolated AI-RPC token contract V0.5.76" -ForegroundColor Cyan
+$ciSource = Get-Content (Join-Path $Root '.github/workflows/ci-release-reusable.yml') -Raw -Encoding UTF8
+$testSource = Get-Content (Join-Path $Root 'backend/tests/test_app.py') -Raw -Encoding UTF8
+$authSource = Get-Content (Join-Path $Root 'backend/app/api/routes.py') -Raw -Encoding UTF8
+$migrationSource = Get-Content (Join-Path $Root 'backend/alembic/versions/0090_ci_token_v0576.py') -Raw -Encoding UTF8
+if ($ciSource -notmatch 'AI_SHARED_TOKEN:\s*"TrafficAI-V068-Test-Only"' -or
+    $testSource -notmatch 'def _v0576_internal_rpc_test_token\(' -or
+    $testSource -notmatch 'def test_v0576_internal_ai_token_auth_fail_closed\(' -or
+    $authSource -notmatch 'not settings\.ai_shared_token' -or
+    $migrationSource -notmatch 'down_revision = "0089_replay_drift_v0575"' -or
+    $migrationSource -notmatch "value='0.5.76'") {
+  throw 'CI token regression contract V0.5.76 missing.'
+}
+Write-Host '[OK] CI isolated AI-RPC token contract V0.5.76' -ForegroundColor Green
+
+Write-Host "`n[Traffic AI] V0.5.77 Startup path + GT case forensics contract" -ForegroundColor Cyan
+$latestStart = Get-Content (Join-Path $PSScriptRoot 'start.ps1') -Raw -Encoding UTF8
+$gtForensics = Get-Content (Join-Path $PSScriptRoot 'benchmark-forensics.py') -Raw -Encoding UTF8
+$gtPowerShell = Get-Content (Join-Path $PSScriptRoot 'analyze-benchmark.ps1') -Raw -Encoding UTF8
+$migrationV77 = Get-Content (Join-Path $Root 'backend/alembic/versions/0091_gt_forensics_v0577.py') -Raw -Encoding UTF8
+if ($latestStart -notmatch 'Join-Path \$ProjectRoot "VERSION"' -or
+    $latestStart -match '\$root\b' -or
+    $gtForensics -notmatch 'def analyze\(' -or
+    $gtForensics -notmatch 'source_sha256' -or
+    $gtPowerShell -notmatch 'benchmark-forensics\.py' -or
+    $migrationV77 -notmatch 'down_revision = "0090_ci_token_v0576"' -or
+    $migrationV77 -notmatch "value='0.5.77'") {
+  throw 'V0.5.77 startup path / GT audit contract failed.'
+}
+Write-Host '[OK] V0.5.77 Startup path + GT case forensics contract' -ForegroundColor Green
+
+Invoke-Step "GT case forensics unit tests (stdlib-only)" {
+  docker run --rm -v "${root}:/src" -w /src python:3.14.7-slim `
+    python -m unittest discover -s scripts/tests -p test_benchmark_forensics.py -v
+}
 
 Invoke-Step "Replay audit unit tests (stdlib-only)" {
   docker run --rm -v "${root}:/src" -w /src python:3.14.7-slim `

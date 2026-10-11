@@ -1,8 +1,40 @@
+import pytest
 from fastapi.testclient import TestClient
 
 from app.db.session import get_db
 from app.main import app
 from app.schemas.camera import CameraCreate, CameraUpdate
+
+
+@pytest.fixture(autouse=True)
+def _v0576_internal_rpc_test_token(monkeypatch):
+    """Direct internal-RPC tests need a secret, even without a developer .env.
+
+    Patch only the in-memory Settings object during this test module. Never
+    modify production token validation or rely on credentials from the host.
+    """
+    from app.api.routes import settings
+    monkeypatch.setattr(settings, "ai_shared_token", "TrafficAI-V076-Unit-Test-Only")
+
+
+def test_v0576_internal_ai_token_auth_fail_closed(monkeypatch) -> None:
+    """Blank/missing/mismatched tokens must always produce 401."""
+    from fastapi import HTTPException
+    from app.api.routes import _assert_ai_token, settings
+
+    # A configured secret allows precisely the matching token.
+    assert _assert_ai_token("TrafficAI-V076-Unit-Test-Only") is None
+    for invalid in (None, "", "wrong-token"):
+        with pytest.raises(HTTPException) as failure:
+            _assert_ai_token(invalid)
+        assert failure.value.status_code == 401
+
+    # A blank server-side secret cannot be used as an authentication bypass.
+    monkeypatch.setattr(settings, "ai_shared_token", "")
+    for supplied in (None, "", "TrafficAI-V076-Unit-Test-Only"):
+        with pytest.raises(HTTPException) as failure:
+            _assert_ai_token(supplied)
+        assert failure.value.status_code == 401
 
 
 class _FakeSession:
@@ -20,7 +52,7 @@ def test_root_metadata() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["name"] == "Traffic AI"
-    assert payload["version"] == "0.5.75"
+    assert payload["version"] == "0.5.77"
     assert payload["docs"] == "/docs"
     assert payload["health"] == "/api/health"
 
@@ -158,7 +190,7 @@ def test_benchmark_clone_compatibility_rejects_different_line() -> None:
 
 
 def test_backend_version_metadata() -> None:
-    assert app.version == "0.5.75"
+    assert app.version == "0.5.77"
 
 
 def test_v0531_startup_crossing_signature_guard_is_narrow() -> None:
@@ -179,7 +211,7 @@ def test_v0533_ground_truth_mark_update_schema() -> None:
 
 
 def test_v0533_version() -> None:
-    assert app.version == "0.5.75"
+    assert app.version == "0.5.77"
 
 
 def test_v0533_ground_truth_mark_update_keeps_timecode() -> None:

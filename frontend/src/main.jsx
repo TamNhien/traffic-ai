@@ -4,7 +4,7 @@ import './styles.css'
 import { AuthShell, AccountPanel, AdminPanel, secureFetch } from './security.jsx'
 import { BackupPanel } from './backup-panel.jsx'
 
-const APP_VERSION = '0.5.75'
+const APP_VERSION = '0.5.77'
 const vehicleLabels = {
   motorcycle: 'Xe máy', bicycle: 'Xe đạp', car: 'Ô tô', bus: 'Xe buýt', truck: 'Xe tải', other: 'Khác'
 }

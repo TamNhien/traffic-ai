@@ -12,6 +12,8 @@ jobs:
     env:
       DATABASE_URL_OVERRIDE: "sqlite+pysqlite:///:memory:"
       AI_SERVICE_URL: "http://127.0.0.1:8001"
+      # Test-only token: production still requires a configured non-empty secret.
+      AI_SHARED_TOKEN: "TrafficAI-V068-Test-Only"
     steps:
       - name: Checkout source
         uses: actions/checkout@v7
@@ -58,6 +60,11 @@ jobs:
           python -m pip install -r requirements-test.txt
           python -m compileall -q app tests
           python -m pytest -q
+
+      - name: Offline GT forensic and replay audit tests
+        run: |
+          python -m unittest discover -s scripts/tests -p 'test_*.py' -v
+          python -m compileall -q scripts/benchmark-forensics.py scripts/benchmark-gate.py scripts/replay-diff.py
 
       - name: Frontend build
         working-directory: frontend

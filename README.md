@@ -1,3 +1,55 @@
+# Traffic AI V0.5.77 — Startup Path Fix + Verified GT Case Forensics
+
+**Khắc phục blocker V0.5.76:** `scripts/start.ps1` dùng biến `$root` chưa khai báo khi đọc `VERSION`, khiến PowerShell dừng ở bước Gateway với `Cannot bind argument to parameter 'Path' because it is null`. Đã sửa thành `$ProjectRoot`, biến được khởi tạo ngay đầu script. Có contract kiểm tra để tránh tái phát.
+
+**Phân tích GT–AI từng sự kiện (chỉ đọc):** thêm `scripts/benchmark-forensics.py` và `scripts/analyze-benchmark.ps1`. Nhận **ZIP Tải hồ sơ benchmark** đã đối chiếu, xác minh `manifest.json`, SHA-256 của từng thành phần, kiểm tra đúng các số đếm bảo toàn `matched + missed = GT`, `matched + extra = AI`, và xuất `cases.json` / `cases.md` liệt kê chính xác từng GT bị lọt và từng AI event bị dư. Nếu ZIP có trace đóng đầy đủ, đối chiếu cửa sổ ±1 giây quanh từng timecode với quan sát track hai phía vạch, event được backend ghi, phương pháp crossing. Kiểm tra SHA-256 của cả trace nén và dữ liệu giải nén, giới hạn dung lượng, từ chối trace thiếu metadata/geometry/footer. Nếu không có trace, báo thiếu rõ ràng và chỉ cung cấp bằng chứng từ báo cáo backend.
+
+**Phạm vi thay đổi:** không chỉnh Ground Truth, không xóa/ép event AI, không thay thuật toán đếm, model, vạch đếm, Road Zone, ngưỡng rescue hoặc cơ chế backend dedup. Giữ nguyên Backup/Restore, tài khoản, dữ liệu DB. Migration `0091_gt_forensics_v0577.py` chỉ đổi `system_settings.schema_version`, nối từ V0.5.76.
+
+**Quan trọng về độ chính xác:** Session #177/#178 ổn định 153→153 nhưng vẫn GT=149 / matched=139 / missed=10 / extra=14. Bộ RAR của camera có 196 MB/frame trace nhưng **không chứa toàn bộ 149 GT đã đánh dấu**, vì vậy chưa thể sửa 10/14 có kiểm chứng. Kết quả của tool mới là chẩn đoán, **không phải** bản AI đã đạt 0 lọt/0 dư. Cần ZIP benchmark đầy đủ (có `ground-truth.json`, `events.json`, `report.json`) để triển khai/tối ưu thuật toán đúng các sự kiện sai và so sánh hồi quy sau đó.
+
+### Cách chạy chuẩn
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+.\scripts\test.ps1
+.\scripts\start.ps1
+```
+
+Sau khi hoàn thành benchmark của Session #178, nhấn **Tải hồ sơ benchmark**, lưu vào thư mục source với tên `benchmark-178.zip`, chạy:
+
+```powershell
+.\scripts\analyze-benchmark.ps1 -ExportZip .\benchmark-178.zip -OutputDirectory .\benchmark-forensics-report
+.\scripts\check-benchmark.ps1 -ExportZip .\benchmark-178.zip -MaxMissed 0 -MaxExtra 0
+```
+
+Lệnh `check-benchmark.ps1` phải báo FAIL khi còn 10 lượt lọt / 14 lượt dư. Đây là fail đúng theo chất lượng, không phải lỗi script. Gửi ZIP `benchmark-178.zip` để đối chiếu từng GT với event, sửa thuật toán mà không tạo false positive mới. Sau khi test/chạy tốt, xuất bản bằng ` .\scripts\publish.ps1 ` (không cần tạo lại Admin).
+
+---
+
+# Traffic AI V0.5.76 — GitHub Actions AI token regression fix
+
+- **Fix GitHub Actions backend test (18 failures):** workflows now provide a **test-only** `AI_SHARED_TOKEN` (previously only `scripts/test.ps1` supplied it).
+- `backend/tests/test_app.py` uses a temporary, per-test fixture to configure the internal RPC token even on standalone pytest machines without `.env`. After each test the original setting is restored.
+- New negative regression test asserts missing, empty, wrong tokens and blank server secret all **fail with HTTP 401**. Production `_assert_ai_token` is unchanged and fail-closed.
+- No change to detection/tracking/crossing or Gate, no count threshold change. Sessions #177 and #178 replay identically (153 events; removed 0, introduced 0, decision flips 0), **but** GT=149, matches=139, missed=10, extra=14; replay stability is not GT accuracy.
+- Alembic `0090_ci_token_v0576`: updates only `system_settings.schema_version`; the source retains backup/restore and all previous features.
+- For a true GT-accuracy fix, export a full **Tải hồ sơ benchmark** ZIP with ground-truth, event list and report. RAR frames/trace alone cannot establish which of the 10/14 cases are genuine algorithm errors versus matching issues.
+
+## PowerShell sau khi nâng cấp
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+.\scripts\test.ps1
+.\scripts\start.ps1
+```
+
+Nếu mọi kiểm tra đạt, phát hành qua `./scripts/publish.ps1` trong PowerShell (lệnh thực tế: `.\scripts\publish.ps1`). Không cần tạo lại Admin.
+
+---
+
 # Traffic AI V0.5.75 — Replay Drift Audit / Stability Gate
 
 ## V0.5.75 bổ sung chức năng gì?
