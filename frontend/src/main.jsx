@@ -2,8 +2,9 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './styles.css'
 import { AuthShell, AccountPanel, AdminPanel, secureFetch } from './security.jsx'
+import { BackupPanel } from './backup-panel.jsx'
 
-const APP_VERSION = '0.5.73'
+const APP_VERSION = '0.5.74'
 const vehicleLabels = {
   motorcycle: 'Xe máy', bicycle: 'Xe đạp', car: 'Ô tô', bus: 'Xe buýt', truck: 'Xe tải', other: 'Khác'
 }
@@ -1326,7 +1327,7 @@ const activateTraining = async run => {
   return <div className="app-shell">
     <aside className="sidebar">
       <div className="brand"><img className="brand-logo" src={`/logo.svg?v=${APP_VERSION}`} alt="Traffic AI" /><div><strong>Traffic AI</strong><span>YOLO26s + ByteTrack</span></div></div>
-      <nav><a className="active" href="#overview">Tổng quan</a><a href="#live">Giám sát</a><a href="#benchmark">Benchmark</a><a href="#cameras">Camera</a><a href="#training">Dữ liệu & huấn luyện</a><a href="#annotation">Gán nhãn</a><a href="#events">Sự kiện</a><a href="#account">Tài khoản</a>{authUser.role==='admin'&&<a href="#users">Người dùng</a>}</nav>
+      <nav><a className="active" href="#overview">Tổng quan</a><a href="#live">Giám sát</a><a href="#benchmark">Benchmark</a><a href="#cameras">Camera</a><a href="#training">Dữ liệu & huấn luyện</a><a href="#annotation">Gán nhãn</a><a href="#events">Sự kiện</a><a href="#account">Tài khoản</a>{authUser.role==='admin'&&<><a href="#users">Người dùng</a><a href="#backups">Backup / Restore</a></>}</nav>
       <div className="sidebar-footer">V{APP_VERSION} · Strict Gate</div>
     </aside>
     <main>
@@ -1424,6 +1425,7 @@ const activateTraining = async run => {
 
       <AccountPanel user={authUser} onLogout={logout}/>
       {authUser.role==='admin'&&<AdminPanel user={authUser}/>}
+      {authUser.role==='admin'&&<BackupPanel/>}
       <section className="content-grid lower-grid" id="events">
         <article className="panel"><div className="panel-head"><div><span className="panel-kicker">RECENT EVENTS</span><h2>Lịch sử PostgreSQL · mọi phiên</h2></div></div><div className="event-list">{events.length ? events.map(e => <div className="event-row" key={e.id}><span>#{e.tracking_id ?? '-'} · {vehicleLabels[e.vehicle_type] || e.vehicle_type}</span><strong>{String(e.direction).toUpperCase()}</strong><small>{new Date(e.detected_at).toLocaleString()}</small></div>) : <div className="empty">Chưa có phương tiện cắt vạch đếm.</div>}</div></article>
         <article className="panel"><div className="panel-head"><div><span className="panel-kicker">COUNTING SESSIONS</span><h2>Lịch sử phiên chạy</h2></div></div><div className="event-list">{sessions.length ? sessions.map(s => <div className="event-row" key={s.id}><span>Session #{s.id} · Camera #{s.camera_id}</span><strong>{String(s.status).toUpperCase()}</strong><small>{s.total_vehicles} event DB · worker {s.worker_total_vehicles ?? s.total_vehicles} · dedup {s.dedup_suppressed_events ?? 0} · human {s.human_guard_rejections ?? 0} · FPS {s.average_fps ?? '-'} · {new Date(s.started_at).toLocaleString()}</small></div>) : <div className="empty">Chưa có phiên chạy.</div>}</div></article>

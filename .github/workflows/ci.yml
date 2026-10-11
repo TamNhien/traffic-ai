@@ -56,6 +56,11 @@ jobs:
           python -m compileall -q app tests alembic
           python -m pytest -q
 
+      - name: PostgreSQL backup worker tests
+        run: |
+          python -m compileall -q backup-worker
+          python -m pytest -q backup-worker/test_worker.py
+
       - name: AI service tests
         working-directory: ai-service
         run: |

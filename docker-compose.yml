@@ -36,6 +36,30 @@ services:
       timeout: 4s
       retries: 18
       start_period: 45s
+    volumes:
+      - traffic_ai_backup_data:/data/backups
+    networks:
+      - traffic-ai-net
+
+  backup-worker:
+    build:
+      context: ./backup-worker
+    container_name: traffic-ai-backup
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - traffic_ai_backup_data:/backups
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     networks:
       - traffic-ai-net
 
@@ -114,3 +138,5 @@ volumes:
   traffic_ai_postgres_data:
     external: true
     name: traffic_ai_postgres_data
+  traffic_ai_backup_data:
+    name: traffic_ai_backup_data

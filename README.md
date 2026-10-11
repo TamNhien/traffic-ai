@@ -1,3 +1,67 @@
+# Traffic AI V0.5.74 — PostgreSQL Backup & Restore / Migration Kit
+
+## Mới trong V0.5.74
+
+**Nền V0.5.73 được giữ nguyên** (Unicode users / security / counting). Không thay đổi thuật toán đếm hay tham số AI; benchmark Session #175 vẫn chưa có bằng chứng để kết luận đã giải quyết 10 lọt / 14 dư.
+
+- Trang **Admin → Backup / Restore** (`#backups`): sao lưu thủ công, xem bản sao, tải `.dump` PostgreSQL 18, tải ZIP chuyển máy, tải ZIP/.dump lên máy mới, yêu cầu khôi phục, theo dõi tác vụ và lỗi.
+- Service `backup-worker` riêng, xây từ `postgres:18.6`: dùng `pg_dump -Fc`, `pg_restore --list`, SHA-256, ghi tệp tạm rồi thay tên atomically; không cấp Docker socket cho backend.
+- **Backup tự động** mặc định 24 giờ/lần, giữ 14 bản tự động; có thể chỉnh lịch trực tiếp trên web (1–720 giờ; giữ 1–365 bản). Chỉ bản tự động cũ bị dọn; không tự xóa backup thủ công/import.
+- **Khôi phục thận trọng**: kiểm tra SHA-256 → tạo database tạm → `pg_restore --exit-on-error --single-transaction` → kiểm tra `alembic_version` → tạm khóa API và đổi tên database; database cũ được giữ dưới tên `traffic_old_<12 ký tự>` để có thể hoàn tác. Một khoảng gián đoạn kết nối là cần thiết. Sau khi thành công, chạy lại `start.ps1` để backend migration và AI khởi động trở lại.
+- Gói ZIP chuyển máy chỉ chứa `database.dump`, `manifest.json`, `TRANSFER.txt`, **không chứa `.env`, khóa bí mật hoặc file model/video**. ZIP phải giữ kín vì dữ liệu PostgreSQL chứa thông tin người dùng và sự kiện camera.
+- Migration `0088_backup_scheduler_v0574.py` tiếp nối V0.5.73, chỉ cập nhật schema version, không sửa bảng dữ liệu. Danh mục backup lưu độc lập trong Docker volume **`traffic_ai_backup_data`**; PostgreSQL tiếp tục dùng `traffic_ai_postgres_data`.
+
+### Kiểm tra & chạy trên Windows
+
+Giải nén lên `D:\LienThongDH\DoAn\traffic-ai` sau khi đã lưu bản sao của `.env`, volume database và các thư mục dữ liệu hiện có. **Không chạy `docker compose down -v`**. Docker Desktop cần ở chế độ Linux containers và đang chạy.
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+.\scripts\test.ps1
+.\scripts\start.ps1
+```
+
+Kiểm tra backup worker và volume:
+
+```powershell
+docker compose ps
+docker compose logs --tail 80 backup-worker
+docker volume inspect traffic_ai_postgres_data
+docker volume inspect traffic_ai_backup_data
+```
+
+Khi mọi bài test và các thao tác sao lưu/thử khôi phục thực tế đã ổn định, phát hành:
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+.\scripts\publish.ps1
+```
+
+Không chạy `create-admin.ps1`: tài khoản Admin hiện tại đã có.
+
+### Di chuyển sang máy khác
+
+1. Máy cũ: dừng các phiên AI đang chạy để có ảnh chụp trạng thái nhất quán cho cả dữ liệu file ngoài PostgreSQL; vào **Backup / Restore → Sao lưu ngay**. Chờ tác vụ *Hoàn thành*, bấm **Tải ZIP chuyển máy**.
+2. Sao lưu riêng **`.env`** (chứa mật khẩu PostgreSQL và token nội bộ), `models/`, `videos/`, `snapshots/`, `datasets/`, `training-runs/`, `gateway/certs/` nếu cần. Tránh chia sẻ các file nhạy cảm qua kênh công khai. Không nên ghi đè `.env` của máy đích khi đã có DB khác mà không kiểm tra mật khẩu.
+3. Máy mới: cài Docker Desktop Linux containers, chép source V0.5.74 và các thư mục cần thiết, cấu hình `.env` hợp lệ, chạy `start.ps1` để khởi tạo PostgreSQL 18 và người dùng Admin ban đầu trên máy đích (nếu hoàn toàn mới có thể cần quy trình bootstrap Admin hiện hành). Tài khoản từ nguồn sẽ được đưa sang khi restore.
+4. Trên máy đích, đăng nhập Admin → **Backup / Restore → Nhập bản sao lưu** → chọn ZIP. Hệ thống kiểm tra cấu trúc và checksum; *chưa thay dữ liệu*. Sau đó chọn bản mới nhập, nhập đúng `KHOI PHUC traffic_ai_db` (hoặc tên DB đang cấu hình), xác nhận cảnh báo và chờ trạng thái *Hoàn thành*.
+5. Chạy lại `start.ps1` để áp dụng Alembic sau khi chuyển database. Đăng nhập bằng tài khoản Admin/mật khẩu từ máy nguồn, kiểm tra Camera / GT / Benchmark / người dùng / các thư mục video & model.
+
+**Cảnh báo:** khôi phục khi người dùng hoặc AI còn đang ghi dữ liệu có thể làm mất các thay đổi kể từ thời điểm backup. Cần tạm dừng AI, sao lưu máy đích trước khi restore, đảm bảo đủ dung lượng cho cả database tạm và database cũ. Không có bảo đảm zero-downtime. Nếu job restore thất bại **trước lúc swap**, dữ liệu DB đang hoạt động không bị thay thế. Nếu restore thành công, database cũ vẫn còn trong PostgreSQL và có thể được quản trị viên phục hồi thủ công sau khi dừng dịch vụ; không tự động xóa database cũ.
+
+**Giới hạn:** web upload tối đa 1 GiB; nếu dữ liệu lớn hơn, phải chuyển bằng `pg_dump/pg_restore` hoặc nâng đồng bộ giới hạn gateway/API sau khi đánh giá dung lượng. Các tệp model/video không nằm trong PostgreSQL và phải chuyển riêng. Hệ thống này chưa được kiểm thử phục hồi thực tế với Docker Desktop Windows trong môi trường đóng gói, vì vậy cần diễn tập backup/restore trên máy thử trước khi dùng với dữ liệu quan trọng.
+
+### Kết quả kiểm thử mã nguồn
+
+- Backend **171/171**; AI Service **635/635**; Node frontend unit **4/4**; backup-worker riêng **4/4**.
+- Python compileall chạy thành công. Backend/AI suite trong môi trường đóng gói dùng shim chỉ phục vụ kiểm thử cho dependency `httpx2` vì không có gói chính xác trong môi trường; shim **không có trong source ZIP**.
+- Chưa thực hiện được Docker PostgreSQL restore tích hợp và `npm run build` vì môi trường này không có Docker Engine và NPM registry không phản hồi. Trên máy Windows, `test.ps1` chạy build / test với Docker và npm theo đúng dependency pin của source.
+
+---
+
+## Lịch sử V0.5.73 và các bản trước
+
 # Traffic AI V0.5.73 — Unicode Accounts + Reliable Creation Feedback
 
 ## Nguyên nhân tài khoản không được tạo trong V0.5.72

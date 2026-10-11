@@ -2,6 +2,7 @@
 from __future__ import annotations
 from fastapi import Request
 from fastapi.responses import JSONResponse
+from app.backup_store import ROOT
 from app.db.session import SessionLocal
 from app.security import allowed, audit, lookup_session, valid_csrf, COOKIE_NAME
 
@@ -24,6 +25,11 @@ async def enforce_auth(request: Request, call_next):
     target = path.startswith("/api/") or path in DOCS
     if not target:
         return await call_next(request)
+    # V0.5.74 restore switch fence: suspend application/API writes, including
+    # worker RPCs, while database connections are forcibly closed for cutover.
+    if (ROOT / 'restore-maintenance.flag').exists() and path.startswith('/api/'):
+        return JSONResponse({"detail":"PostgreSQL đang chuyển đổi dữ liệu, vui lòng thử lại sau"}, status_code=503,
+                            headers={"Retry-After":"15","Cache-Control":"no-store"})
     if method == "OPTIONS":
         return await call_next(request)
     if path == "/api/health":

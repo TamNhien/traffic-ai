@@ -3,12 +3,13 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import router
 from app.auth_routes import router as auth_router
+from app.backup_routes import router as backup_router
 from app.auth_middleware import enforce_auth
 from app.core.config import settings
 
 app = FastAPI(
     title="Traffic AI API",
-    version="0.5.73",
+    version="0.5.74",
     description="Backend API for the traffic vehicle detection, tracking and counting project.",
 )
 
@@ -28,13 +29,14 @@ app.add_middleware(
 app.middleware("http")(enforce_auth)
 app.include_router(router)
 app.include_router(auth_router)
+app.include_router(backup_router)
 
 
 @app.get("/")
 def root() -> dict:
     return {
         "name": settings.app_name,
-        "version": "0.5.73",
+        "version": "0.5.74",
         "docs": "/docs",
         "health": "/api/health",
     }

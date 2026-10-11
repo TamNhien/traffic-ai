@@ -1,3 +1,36 @@
+# Kiểm thử Traffic AI V0.5.74
+
+## Kết quả đo được trong môi trường đóng gói
+
+- `backend`: **171 passed** — gồm 8 regression mới: RBAC/CSRF, tạo job, symlink guard, ZIP upload/roundtrip, file giả, xác nhận restore, maintenance fence, schedule cập nhật. `PYTHONPATH` dùng shim `httpx2` → `httpx` **chỉ trong quá trình test**, không đóng gói, nên không thay thế kiểm thử thực tế.
+- `ai-service`: **635 passed** — thuật toán AI giữ nguyên V0.5.73, shim giống backend.
+- `backup-worker`: **4 passed** — kiểm thử archive và checksum reject bằng subprocess fake.
+- `frontend`: **4 passed** với `node --test frontend/tests/*.test.js`.
+- `python3 -m compileall` backend, migration, backup-worker: đạt.
+- Không thể chạy `npm install`/Vite build vì NPM registry trả lỗi `EAI_AGAIN`; chưa có Docker Engine nên **chưa xác nhận Docker Compose thực tế, PostgreSQL backup/restore thực tế hoặc PowerShell parse/run**.
+
+## Cần xác minh thêm trên máy Windows
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+.\scripts\test.ps1
+.\scripts\start.ps1
+```
+
+1. Đăng nhập Admin: phải thấy mục Backup / Restore, còn Viewer/Operator không có quyền gọi API `/api/admin/backups`.
+2. Xác thực postgres + backup worker: `docker compose ps`, `docker compose logs backup-worker`.
+3. Nhấn Sao lưu ngay; job phải hoàn thành, danh sách có dump mới, tải ZIP hợp lệ `manifest.json`, `database.dump`.
+4. Kiểm tra lịch backup tùy chỉnh, sau 10 giây worker nhận lịch mới.
+5. **Trên máy thử**: nhập ZIP và restore vào database tạm rồi switch, kiểm tra dữ liệu, user, benchmark, events. Backup DB trước khi restore, không thực hiện diễn tập trên production.
+6. Kiểm tra restart backend & Alembic sau restore; cấu hình `.env` phù hợp PostgreSQL 18 và source file assets có đủ.
+
+## Tiêu chí chưa xác minh
+
+- End-to-end rollback/restore giao dịch thật bằng `pg_restore` PostgreSQL 18 trong Docker Desktop Windows.
+- Build Vite thực tế và toàn bộ docker-compose image build.
+- Performance/retention trên DB lớn; đường truyền upload ZIP > 1 GiB không được hỗ trợ ở bản này.
+
 # VERIFICATION — Traffic AI V0.5.73 (11/10/2026)
 
 ## Nguyên nhân và phạm vi sửa

@@ -323,7 +323,7 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.73") { throw "VERSION must be 0.5.73, current: $version" }
+  if ($version -ne "0.5.74") { throw "VERSION must be 0.5.74, current: $version" }
   $migration = Join-Path $root "backend\alembic\versions\0085_password_policy_v0571.py"
   if (-not (Test-Path $migration)) { throw "Missing migration 0085_password_policy_v0571.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
@@ -2212,8 +2212,23 @@ if ($userApi -notmatch 'validate_username' -or $userApi -notmatch 'username_key'
 if ($userMigration -notmatch 'down_revision = "0086_replay_guard_v0572"' -or $userMigration -notmatch "value='0.5.73'") { throw 'V0.5.73 Unicode username migration contract missing.' }
 Write-Host '[OK] Account creation + Unicode username + API error UX V0.5.73' -ForegroundColor Green
 
+Write-Host "`n[Traffic AI] PostgreSQL backup/restore + portability V0.5.74" -ForegroundColor Cyan
+$backupUI = Get-Content (Join-Path $Root 'frontend/src/backup-panel.jsx') -Raw -Encoding UTF8
+$backupApi = Get-Content (Join-Path $Root 'backend/app/backup_routes.py') -Raw -Encoding UTF8
+$backupWorker = Get-Content (Join-Path $Root 'backup-worker/worker.py') -Raw -Encoding UTF8
+$backupCompose = Get-Content (Join-Path $Root 'docker-compose.yml') -Raw -Encoding UTF8
+$backupStart = Get-Content (Join-Path $Root 'scripts/start.ps1') -Raw -Encoding UTF8
+$backupMigration = Get-Content (Join-Path $Root 'backend/alembic/versions/0088_backup_scheduler_v0574.py') -Raw -Encoding UTF8
+if ($backupUI -notmatch 'Khôi phục an toàn' -or $backupApi -notmatch 'Depends\(admin\)' -or $backupWorker -notmatch 'pg_restore' -or $backupCompose -notmatch 'traffic_ai_backup_data' -or $backupStart -notmatch 'backup-worker' -or $backupMigration -notmatch '0087_unicode_usernames_v0573') { throw 'V0.5.74 PostgreSQL backup/restore contract missing.' }
+Write-Host '[OK] PostgreSQL backup/restore + portability V0.5.74' -ForegroundColor Green
+
 Invoke-Step "Backend syntax check" {
   docker run --rm -v "${root}:/src" -w /src/backend python:3.14.7-slim python -m compileall -q app tests alembic
+}
+
+Invoke-Step "Backup worker syntax + unit tests" {
+  docker run --rm -v "${root}:/src" -w /src/backup-worker python:3.14.7-slim `
+    sh -lc "python -m pip install -q pytest==9.1.1 && python -m compileall -q worker.py test_worker.py && python -m pytest -q test_worker.py"
 }
 
 Invoke-Step "AI service syntax check" {
@@ -2260,7 +2275,7 @@ if (-not $SkipDockerBuild) {
     docker compose -f docker-compose.yml -f docker-compose.gpu.yml config --quiet
   }
   Invoke-Step "Docker image build" {
-    docker compose build backend ai-service frontend
+    docker compose build backend backup-worker ai-service frontend
   }
 }
 
