@@ -43,7 +43,13 @@ def single_heavy_vehicle_plan(
         return list(range(count)), {}, 0
 
     threshold = max(0.1, min(0.99, float(iou_threshold)))
-    ranked = sorted(range(count), key=lambda idx: float(confidences[idx]), reverse=True)
+    # Stable tie-break for class-aware NMS: equal-confidence CAR/TRUCK/BUS
+    # aliases must choose the same primary even if the model reorders boxes.
+    # Only exact ties change; higher-confidence detections always win.
+    ranked = sorted(range(count), key=lambda idx: (
+        -float(confidences[idx]), str(labels[idx]),
+        tuple(round(float(value), 6) for value in rects[idx]),
+    ))
     suppressed: set[int] = set()
     aliases: dict[int, list[int]] = {}
 
@@ -75,3 +81,22 @@ def keep_single_heavy_vehicle(
 ) -> tuple[list[int], int]:
     keep, _aliases, suppressed = single_heavy_vehicle_plan(rects, labels, confidences, iou_threshold)
     return keep, suppressed
+
+
+def stable_tracking_order(
+    indices: list[int], raw_ids: list[int], rects: list[Rect],
+) -> list[int]:
+    """Process tracked objects in an identity-stable order during MP4 replay.
+
+    YOLO/NMS may return the same boxes in a different array order. Continuity
+    assignment and the crossing-only model budget are stateful, so following
+    that incidental order can change which canonical track gets a crossing.
+    Preserve ALL selected detections, the suppression plan and raw tracker IDs;
+    change only the iteration order on deterministic local-video replays.
+    Never sort by confidence or detection class (these may fluctuate).
+    """
+    return sorted(indices, key=lambda i: (
+        int(raw_ids[i]),
+        tuple(round(float(value), 5) for value in rects[i]),
+        int(i),
+    ))

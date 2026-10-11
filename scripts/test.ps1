@@ -323,7 +323,7 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.71") { throw "VERSION must be 0.5.71, current: $version" }
+  if ($version -ne "0.5.72") { throw "VERSION must be 0.5.72, current: $version" }
   $migration = Join-Path $root "backend\alembic\versions\0085_password_policy_v0571.py"
   if (-not (Test-Path $migration)) { throw "Missing migration 0085_password_policy_v0571.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
@@ -2186,6 +2186,22 @@ if ($passwordBackend -notmatch 'unicodedata\.category' -or $passwordBackend -not
   throw 'V0.5.71 backend password policy is incomplete.'
 }
 Write-Host '[OK] Password UI + API security V0.5.71' -ForegroundColor Green
+
+Write-Host "`n[Traffic AI] Deterministic replay + benchmark gate V0.5.72" -ForegroundColor Cyan
+$stableOrder = Get-Content (Join-Path $Root 'ai-service/app/dedup.py') -Raw -Encoding UTF8
+$workerStable = Get-Content (Join-Path $Root 'ai-service/app/worker.py') -Raw -Encoding UTF8
+$benchmarkGate = Get-Content (Join-Path $Root 'scripts/benchmark-gate.py') -Raw -Encoding UTF8
+if (-not $stableOrder.Contains('def stable_tracking_order(') -or -not $workerStable.Contains('if deterministic_video:') -or -not $workerStable.Contains('stable_tracking_order(keep_indices, ids, xyxy)')) {
+  throw 'V0.5.72 deterministic replay ordering contract missing.'
+}
+if (-not $benchmarkGate.Contains('ground_truth_total') -or -not $benchmarkGate.Contains('false_positives') -or -not $benchmarkGate.Contains('integrity')) {
+  throw 'V0.5.72 benchmark gate evidence contract missing.'
+}
+$migrationV72 = Get-Content (Join-Path $Root 'backend/alembic/versions/0086_replay_guard_v0572.py') -Raw -Encoding UTF8
+if ($migrationV72 -notmatch 'down_revision = "0085_password_policy_v0571"' -or $migrationV72 -notmatch "value='0.5.72'") {
+  throw 'V0.5.72 migration chain contract missing.'
+}
+Write-Host '[OK] Deterministic replay + benchmark gate V0.5.72' -ForegroundColor Green
 
 Invoke-Step "Backend syntax check" {
   docker run --rm -v "${root}:/src" -w /src/backend python:3.14.7-slim python -m compileall -q app tests alembic

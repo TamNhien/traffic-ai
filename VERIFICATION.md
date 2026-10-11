@@ -1,3 +1,26 @@
+# VERIFICATION — Traffic AI V0.5.72 (10/10/2026)
+
+## Nguồn dữ liệu và phân tích
+
+- Đọc source V0.5.70 từ ZIP và source V0.5.71; 5 file lõi đếm/trace/benchmark trùng byte.
+- Giải nén và đọc được `session_174_benchmark-trace.jsonl` từ `camera_1(20261010-144752).rar`: 23.650 frame, 195 proposal, 195 acknowledgment (149 created, 46 deduplicated), 325 rejection validation rescue, 69 long-gap rejection. Các chỉ số này không tự xác thực được 149 GT vì RAR không có `ground-truth.json` và `events.json`.
+
+## Kiểm thử thực hiện
+
+- **AI service: 635/635 passed**, gồm 4 bài kiểm thử mới V0.5.72 cho deterministic tracking order + confidence tie-break.
+- **Backend: 160/160 passed** (không chỉnh thuật toán match GT/backend event).
+- **Benchmark Gate CLI: 5/5 passed** — tự tạo ZIP giả lập có SHA-256 để kiểm thử FAIL trường hợp 149/149/135, PASS 149/149/149, và chặn dữ liệu thiếu GT, integrity lỗi, baseline sai.
+- Python compile: `python -m compileall` cho `backend/app`, `backend/tests`, `backend/alembic`, `ai-service/app`, `ai-service/tests`, `scripts/benchmark-gate.py`.
+- 635 + 160 + 5 = **800 bài kiểm thử Python đạt** tại sandbox. Backend và AI dùng **httpx2 → httpx shim test-only ở ngoài source ZIP** do `httpx2==2.13.0` không tải được trong môi trường này; không thay file requirements hay mã production.
+
+## Chưa kiểm thử / chưa thể khẳng định
+
+- Chưa chạy thành công `scripts/test.ps1` bằng PowerShell trên Windows, Docker Desktop Linux Engine, image pinned httpx2, inference YOLO trên GPU, benchmark GT/AI đầy đủ hay `npm run build` của Vite trên máy Windows. Phải chạy các bước đó **trước `publish.ps1`**.
+- **Chưa xác nhận V0.5.72 giảm 14 lọt và 14 dư thành 0**: cần xuất `Tải hồ sơ benchmark` (report + GT marks + events) và video gốc/GT đồng nhất để đo lại; không thể khẳng định từ số lượng trace proposal.
+- Đầu ra của `check-benchmark.ps1` chỉ là guard đối với dữ liệu benchmark đã xuất; không điều chỉnh điểm benchmark và không tự chứng nhận hiệu năng AI.
+
+---
+
 # VERIFICATION — Traffic AI V0.5.71
 
 V0.5.71 tập trung vào giao diện bảo mật và chính sách mật khẩu, không tác động thuật toán nhận diện/đếm. Kết quả kiểm thử trong môi trường sandbox (2026-10-10):

@@ -36,7 +36,7 @@ from app.counting import (
     CountingLine, HeavyVehicleCrossingRescuer, LineCrossingCounter, RoadZone, VerifiedAnchorSpanRescuer,
     TwoWheelCenterCrossingRescuer, select_event_crossing_frame, signed_distance,
 )
-from app.dedup import single_heavy_vehicle_plan
+from app.dedup import single_heavy_vehicle_plan, stable_tracking_order
 from app.flow_calibration import FlowCalibrator
 from app.gate_roi import gate_roi_for_line, road_zone_roi
 from app.human_guard import (
@@ -1821,6 +1821,12 @@ class PipelineWorker(threading.Thread):
                         self.heavy_duplicate_iou,
                     )
                     self.state.suppressed_class_duplicates_current_frame = suppressed_duplicates
+                    # V0.5.72: make canonical assignment and same-frame class
+                    # refinement independent of YOLO's incidental box ordering.
+                    # Restrict this to seeded offline video replays; RTSP keeps
+                    # its existing latency profile and event ordering.
+                    if deterministic_video:
+                        keep_indices = stable_tracking_order(keep_indices, ids, xyxy)
                     # V0.5.32 telemetry counts *canonical state merges*, not every
                     # transient raw CAR/TRUCK box pair.  The latter still appears in
                     # suppressed_class_duplicates_current_frame, while this cumulative

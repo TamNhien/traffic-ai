@@ -1,3 +1,59 @@
+# Traffic AI V0.5.72 — Stable Replay + Benchmark Regression Gate
+
+## Căn cứ từ Session #174 (camera_1 ngày 10/10/2026)
+
+- **GT 149, AI database 149, khớp 135, lọt 14, dư 14, F1 90,6%**. Tổng GT = AI **không** đồng nghĩa với benchmark đúng.
+- Trace 23.650 frame: worker đề xuất 195 crossing; backend tạo 149 event và từ chối 46 event (22 `same-track-direction-flip`, 19 `same-track-repeat-jitter`, 3 `crossing-signature`, 1 `secondary-shadow-signature`, 1 `direct-secondary-shadow`). Đây là **telemetry**, không phải căn cứ tự khôi phục các mốc GT.
+- So sánh source gốc V0.5.70 với V0.5.71: `ai-service/app/counting.py`, `worker.py`, `tracking.py`, `async_tasks.py` và `backend/app/benchmarking.py` **giống hệt từng byte**. Không thể kết luận giao diện mật khẩu V0.5.71 gây thay đổi thuật toán đếm. Có thể còn các biến đầu vào khác (model/clip/GT/geometry/runtime), chưa có hồ sơ xuất GT/events để xác nhận.
+
+## Những thay đổi thực sự trong V0.5.72
+
+1. **Deterministic MP4 replay — stable track order**: trước khi xử lý continuation/đếm, sắp xếp những detection **đã được ByteTrack gán ID** theo `(raw_track_id, bounding box)`, tránh kế thừa thứ tự mảng từ YOLO/NMS vốn có thể khác giữa các lần chạy. Chỉ áp dụng cho phát lại video với `AI_VIDEO_DETERMINISTIC=1`; không thay ngưỡng vạch, ROI, cứu track, class refinement, cooldown, không bỏ xe hay thêm crossing và không làm chậm camera RTSP. Với CAR/TRUCK/BUS xung đột và confidence **bằng nhau**, dùng tie-break cố định để quyết định ô giữ lại.
+2. **Benchmark release quality gate**: thêm `scripts/benchmark-gate.py` và `scripts/check-benchmark.ps1`; nhận **ZIP “Tải hồ sơ benchmark”** từ giao diện (có `report.json`, `ground-truth.json`, `events.json`, `manifest.json`). Xác thực SHA-256/size, GT hiện diện, integrity backend, phương trình `matched + missed = GT` và `matched + extra = AI`; **FAIL nếu số lọt/dư lớn hơn giới hạn**, kể cả khi GT = AI. Không sửa số liệu hay GT.
+3. **So sánh baseline đã đo**: baseline JSON ghi kết quả thực tế; khi có baseline chỉ so sánh nếu GT/tolerance/clip geometry tương thích. Không tự gán 0 lọt/0 dư. Có thể thêm `-MaxWrongClass` để chặn sai loại xe.
+4. **Migration V0.5.72**: `0086_replay_guard_v0572` tăng duy nhất `system_settings.schema_version`, không đổi bảng, dữ liệu GT, lịch sử event, tài khoản hay mật khẩu. Duy trì bảo mật Argon2id và tính năng tài khoản V0.5.71.
+
+### Lệnh PowerShell mặc định sau mỗi bản build (không tạo lại Admin)
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+
+# Mở khóa toàn bộ PowerShell scripts
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+
+# Kiểm tra source — yêu cầu Docker Desktop đang chạy
+.\scripts\test.ps1
+
+# Khởi động hệ thống
+.\scripts\start.ps1
+```
+
+### Kiểm tra chất lượng trước khi phát hành (bổ sung)
+
+Trong Benchmark Report, chọn **Tải hồ sơ benchmark** sau khi AI hoàn tất phát lại và đã có đủ GT. Sao chép ZIP xuất ra thành `D:\LienThongDH\DoAn\traffic-ai\benchmark-latest.zip` (hoặc dùng đường dẫn thực tế), rồi **mở cửa sổ PowerShell khác**:
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+.\scripts\check-benchmark.ps1 -ExportZip .\benchmark-latest.zip -MaxMissed 0 -MaxExtra 0
+```
+
+Ví dụ V0.5.71 GT/AI 149/149, khớp 135, lọt 14, dư 14: lệnh trên sẽ **FAIL đúng**, không công nhận chất lượng chỉ bằng số tổng. Sau khi benchmark đạt 0 lọt/0 dư và test/run ổn, phát hành:
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+.\scripts\publish.ps1
+```
+
+Nếu cần đo baseline của một phiên trước, dùng `python -X utf8 .\scripts\benchmark-gate.py --export .\benchmark-latest.zip --max-missed 14 --max-extra 14 --write-baseline .\benchmark-baseline.json`. Baseline là dữ liệu đã đo, **không** làm thay đổi AI hay việc chấm điểm.
+
+### Giới hạn kiểm chứng
+
+- Có thể test thuần code qua trace + unit test, **không thể xác nhận mức 0 lọt / 0 dư** của V0.5.72 khi chưa có **GT + danh sách event database + clip gốc** cho cùng benchmark và chưa chạy inference GPU Windows. Gói `.rar` của Session #174 chứa ảnh và trace chứ không có bộ GT/event đầy đủ.
+- Đợt này hướng vào tính ổn định/tính trung thực của kết quả, **không nới rescue** chỉ để tăng tổng số đếm vì có nguy cơ tăng false positive.
+- Xem `VERIFICATION.md` để biết bài nào được test thực tế và giới hạn môi trường.
+
+---
+
 # Traffic AI V0.5.71 — Giao diện bảo mật dọc + Kiểm tra độ mạnh mật khẩu
 
 ## Các cải tiến
