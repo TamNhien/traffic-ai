@@ -4,14 +4,17 @@ from datetime import timedelta
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select, func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.models.all_models import User, AuthSession, SecurityAudit
 from app.security import (COOKIE_NAME, allowed, audit, blocked, digest, fail_limit, get_limit,
                           hash_password, lookup_session, new_session, now_utc, password_needs_rehash,
                           public_user, require_password, throttle_key, verify_password, DUMMY_HASH)
+
+from app.usernames import validate_username, username_key
 
 router = APIRouter(prefix="/api")
 
@@ -22,7 +25,12 @@ class LoginInput(BaseModel):
 
 
 class NewUser(BaseModel):
-    username: str = Field(min_length=3, max_length=80, pattern=r"^[A-Za-z0-9_.-]+$")
+    username: str = Field(min_length=3, max_length=80)
+
+    @field_validator("username")
+    @classmethod
+    def accepted_username(cls, value: str) -> str:
+        return validate_username(value)
     full_name: str = Field(min_length=1, max_length=160)
     role: Literal["admin", "operator", "viewer"] = "viewer"
     password: str = Field(min_length=12, max_length=128)
@@ -69,11 +77,11 @@ def login(payload: LoginInput, request: Request, response: Response, db: Session
     current_time = now_utc()
     # Separate per-address and per-account budgets make credential stuffing harder.
     limits = [get_limit(db, throttle_key("@ip", ip), current_time),
-              get_limit(db, throttle_key(username.casefold(), "@account"), current_time)]
+              get_limit(db, throttle_key(username_key(username), "@account"), current_time)]
     if any(blocked(x, current_time) for x in limits):
         db.commit()
         raise HTTPException(status_code=429, detail="Thử lại sau 15 phút")
-    user = db.scalar(select(User).where(func.lower(User.username) == username.lower()))
+    user = db.scalar(select(User).where(User.username_key == username_key(username)))
     ok = verify_password(user.password_hash if user else DUMMY_HASH, payload.password)
     if not ok or not user or not user.is_active:
         for item in limits:
@@ -163,18 +171,22 @@ def list_users(request: Request, db: Session = Depends(get_db)) -> list[dict]:
 @router.post("/admin/users", status_code=201)
 def create_user(payload: NewUser, request: Request, db: Session = Depends(get_db)) -> dict:
     actor = admin(request)
-    if db.scalar(select(User).where(func.lower(User.username) == payload.username.lower())):
+    if db.scalar(select(User).where(User.username_key == username_key(payload.username))):
         raise HTTPException(409, detail="Tên đăng nhập đã tồn tại")
     try:
         digest_hash = hash_password(payload.password)
     except ValueError as exc:
         raise HTTPException(422, detail=str(exc)) from exc
-    user = User(username=payload.username, full_name=payload.full_name.strip(), role=payload.role,
+    user = User(username=payload.username, username_key=username_key(payload.username), full_name=payload.full_name.strip(), role=payload.role,
                 password_hash=digest_hash, is_active=True, must_change_password=True)
     db.add(user)
-    db.flush()
-    audit(db, user=actor, action="users.create", resource=f"user:{user.id}")
-    db.commit()
+    try:
+        db.flush()
+        audit(db, user=actor, action="users.create", resource=f"user:{user.id}")
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(409, detail="Tên đăng nhập đã tồn tại") from exc
     return public_user(user)
 
 

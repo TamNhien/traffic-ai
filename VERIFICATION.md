@@ -1,3 +1,27 @@
+# VERIFICATION — Traffic AI V0.5.73 (11/10/2026)
+
+## Nguyên nhân và phạm vi sửa
+
+- API V0.5.72 khai báo regex ASCII, vì vậy tên đăng nhập `Đạt` bị HTTP 422; đây **không phải thao tác tạo thành công**. Giao diện lỗi 422 mảng JSON bị ép thành `[object Object]`. V0.5.73 giải quyết tại server, database và frontend.
+- Hỗ trợ username Unicode NFC + khóa casefold duy nhất; migration backfill không xóa bảng hay dữ liệu; UI báo lỗi rõ, xác nhận ID 201, hiển thị tài khoản mới và tải lại bằng no-store.
+- RAR Session #175: trace đã được trích xuất và kiểm tra, metadata `frame_policy=all-frames`, 23.650 frame, worker 192 crossing đề xuất. Screenshot cùng benchmark: GT 149, DB 153, khớp 139, lọt 10, dư 14. RAR **không có đầy đủ `ground-truth.json` và `events.json`**; không sửa thuật toán crossing và không khẳng định đạt 0/0.
+
+## Kiểm thử thực hiện
+
+- Backend: **163/163 PASSED** (bao gồm 3 test mới `test_v0573_usernames.py`); sử dụng SQLite in-memory + lớp chuyển tiếp `httpx2` sang `httpx` **chỉ trong môi trường test**, không đóng gói shim; các tính năng bảo mật CSRF/Argon2id/RBAC vẫn được kiểm thử.
+- AI Service: **635/635 PASSED**; cùng lớp tương thích `httpx2` trong sandbox; không sửa thuật toán AI của V0.5.72.
+- Frontend: **4/4 PASSED** (`npm test`, Node built-in test); JSX parseDiagnostics **0** với TypeScript. Các bài test Node không phải build Vite thật.
+- Benchmark release gate: **5/5 PASSED**, chỉ là kiểm thử chất lượng export ZIP được giả lập; không phải kết quả GT/AI mới của Session #175.
+- Compile Python backend + migration thành công; Alembic/PowerShell contract có bản mới.
+
+## Chưa xác nhận / cần kiểm tra trên Windows
+
+- `npm run build` Vite + audit NPM + Docker Compose build (môi trường sandbox thiếu `node_modules` và Docker Desktop), migration với PostgreSQL thật, tương tác tạo user bằng trình duyệt thật.
+- Chưa có dữ liệu GT đầy đủ để tối ưu Recall/Precision Session #175. Cần ZIP từ nút **Tải hồ sơ benchmark** chứa `manifest.json`, `report.json`, `ground-truth.json`, `events.json`.
+- Khi chạy `scripts/test.ps1` phải bật Docker Desktop Linux containers trước; sau khi test thành công mới chạy `scripts/start.ps1` và nhập lại tài khoản `Đạt` nếu lượt trước đã bị 422.
+
+---
+
 # VERIFICATION — Traffic AI V0.5.72 (10/10/2026)
 
 ## Nguồn dữ liệu và phân tích

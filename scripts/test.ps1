@@ -323,7 +323,7 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.72") { throw "VERSION must be 0.5.72, current: $version" }
+  if ($version -ne "0.5.73") { throw "VERSION must be 0.5.73, current: $version" }
   $migration = Join-Path $root "backend\alembic\versions\0085_password_policy_v0571.py"
   if (-not (Test-Path $migration)) { throw "Missing migration 0085_password_policy_v0571.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
@@ -2203,6 +2203,15 @@ if ($migrationV72 -notmatch 'down_revision = "0085_password_policy_v0571"' -or $
 }
 Write-Host '[OK] Deterministic replay + benchmark gate V0.5.72' -ForegroundColor Green
 
+Write-Host "`n[Traffic AI] Account creation + Unicode username + API error UX V0.5.73" -ForegroundColor Cyan
+$userApi = Get-Content (Join-Path $Root 'backend/app/auth_routes.py') -Raw -Encoding UTF8
+$userModel = Get-Content (Join-Path $Root 'backend/app/models/all_models.py') -Raw -Encoding UTF8
+$userUI = Get-Content (Join-Path $Root 'frontend/src/security.jsx') -Raw -Encoding UTF8
+$userMigration = Get-Content (Join-Path $Root 'backend/alembic/versions/0087_unicode_usernames_v0573.py') -Raw -Encoding UTF8
+if ($userApi -notmatch 'validate_username' -or $userApi -notmatch 'username_key' -or $userModel -notmatch 'username_key' -or $userUI -notmatch 'readableApiDetail' -or $userUI -notmatch 'account-notice-') { throw 'V0.5.73 account creation security/UX contract missing.' }
+if ($userMigration -notmatch 'down_revision = "0086_replay_guard_v0572"' -or $userMigration -notmatch "value='0.5.73'") { throw 'V0.5.73 Unicode username migration contract missing.' }
+Write-Host '[OK] Account creation + Unicode username + API error UX V0.5.73' -ForegroundColor Green
+
 Invoke-Step "Backend syntax check" {
   docker run --rm -v "${root}:/src" -w /src/backend python:3.14.7-slim python -m compileall -q app tests alembic
 }
@@ -2243,7 +2252,7 @@ Invoke-Step "Frontend build" {
   if (Test-Path $frontendLock) { Remove-Item $frontendLock -Force }
   # Isolate Linux node_modules from any Windows node.exe wrappers in the host bind mount.
   docker run --rm -v "${root}:/src" -v /src/frontend/node_modules -w /src/frontend node:26.10.0-alpine `
-    sh -lc "npm install -g npm@12.2.0 && npm install && npm audit --audit-level=high && npm run build"
+    sh -lc "npm install -g npm@12.2.0 && npm install && npm test && npm audit --audit-level=high && npm run build"
 }
 
 if (-not $SkipDockerBuild) {

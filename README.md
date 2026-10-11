@@ -1,3 +1,59 @@
+# Traffic AI V0.5.73 — Unicode Accounts + Reliable Creation Feedback
+
+## Nguyên nhân tài khoản không được tạo trong V0.5.72
+
+Ở trang Admin, tên đăng nhập **`Đạt`** có chữ `Đ`, trong khi backend phiên bản cũ khai báo regex `^[A-Za-z0-9_.-]+$`; FastAPI trả HTTP **422** vì đầu vào không hợp lệ, không lưu `users`. Frontend chuyển cấu trúc lỗi `detail: [{...}]` thành chuỗi **`[object Object]`** rồi trình bày trong hộp thông báo chung màu xanh. Đây không phải thông báo tạo thành công. **Không cần tạo lại Admin**.
+
+## Nâng cấp V0.5.73
+
+1. **Tạo tài khoản Unicode tiếng Việt**: chấp nhận `Đạt`, `Nhiên`, `Phạm-Vĩnh.Đạt`, chữ số, `_`, `.`, `-`; không cho khoảng trắng, emoji, ký tự vô hình/điều khiển, ký tự đặc biệt. Username dài 3–80 ký tự; họ tên có thể dùng dấu và khoảng trắng bình thường.
+2. **Chuẩn hóa đăng nhập NFC + Unicode casefold**, lưu khóa `users.username_key` có **UNIQUE index** ở PostgreSQL. Chống tài khoản trùng do chữ hoa/chữ thường hoặc dấu Unicode tổ hợp; tên hiển thị vẫn giữ nguyên. `Đạt` / `đạt` / `ĐẠT` cùng một định danh. Rate limit đăng nhập dùng cùng khóa chuẩn hóa; giữ Argon2id, RBAC, CSRF và session cookie.
+3. **Thông báo thao tác chính xác**: kiểm tra tên đăng nhập ngay khi gõ, phân biệt lỗi (đỏ), thành công (xanh), cần kiểm tra lại (vàng). Trích xuất thông báo FastAPI 422 theo trường, không hiện `[object Object]` và không làm lộ mật khẩu.
+4. **Lưu là phải hiển thị**: khi server trả HTTP 201 kèm `id` và `username`, giao diện đưa người dùng vừa tạo vào danh sách, xóa bộ lọc tìm kiếm, tô viền tài khoản mới và tải lại danh sách bằng `cache: no-store`. Nếu GET thất bại, vẫn giữ tài khoản đã được server xác nhận và báo rõ lỗi tải danh sách; nếu bị từ chối POST, không xóa form hoặc thông báo tạo thành công.
+5. **Migration** `0087_unicode_usernames_v0573`: backfill `username_key` từ toàn bộ tài khoản đã tồn tại, tạo chỉ mục duy nhất, nâng schema version lên `0.5.73`. Có kiểm tra xung đột canonical để **dừng migration thay vì xóa/đè tài khoản**. Vẫn giữ toàn bộ người dùng, hash mật khẩu, GT, event và session; Postgres khởi động sẽ áp dụng Alembic tự động.
+6. Thêm regression backend cho Unicode/tên trùng/đăng nhập/tính bền vững, kiểm thử Node cho thông báo lỗi và regex, thêm contract V0.5.73 vào `scripts/test.ps1`. Gói giữ toàn bộ source V0.5.72.
+
+**Session #175 ngày 11/10/2026:** GT 149 / AI lưu 153 / khớp 139 / lọt 10 / dư 14 / F1 92,1%. Trace 23.650 frame cho thấy worker đề xuất 192 crossing. Chưa có GT + database events đầy đủ trong RAR nên **không chỉnh ngưỡng thuật toán AI trong V0.5.73**; tuyệt đối không coi bản này đạt 0 lọt / 0 dư. Hãy xuất ZIP **Tải hồ sơ benchmark** để xác minh đủ từng lượt.
+
+### Cập nhật source và chạy đúng thứ tự (Windows PowerShell)
+
+Giải nén **full source ZIP** vào `D:\LienThongDH\DoAn\traffic-ai`, giữ file `.env`, các model/video cá nhân và **PostgreSQL volume**; nên sao lưu database trước migration, tuyệt đối không xóa volume hoặc tạo lại Admin. Docker Desktop phải ở trạng thái Engine running. Sau đó:
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+
+# Mở khóa toàn bộ script PowerShell
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+
+# Kiểm tra source
+.\scripts\test.ps1
+
+# Khởi động hệ thống (tự chạy migration)
+.\scripts\start.ps1
+```
+
+Sau khi trình duyệt đã tải phiên bản V0.5.73 (**Ctrl + F5** nếu còn cache), vào **Quản lý người dùng & phân quyền**, tạo lại tài khoản **`Đạt`** nếu yêu cầu trước đó đã bị HTTP 422 (tức chưa hề được lưu). Thông báo thành công phải có `@Đạt` và mã số `#id`; kiểm tra ngay trong danh sách và thử đăng nhập bằng mật khẩu tạm để buộc đổi mật khẩu lần đầu.
+
+Nếu cần đánh giá benchmark trước khi phát hành, xuất ZIP hồ sơ benchmark và chạy:
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+.\scripts\check-benchmark.ps1 -ExportZip .\benchmark-latest.zip -MaxMissed 0 -MaxExtra 0
+```
+
+Chỉ khi `test.ps1`, khởi động và benchmark đều đạt yêu cầu mới phát hành bằng:
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+.\scripts\publish.ps1
+```
+
+### Giới hạn kiểm tra
+
+Backend 163/163, AI Service 635/635, frontend Node 4/4 và benchmark gate 5/5 đạt trong sandbox tương thích. **Chưa build Vite/NPM thực tế, chưa thử migration với PostgreSQL thực tế hoặc chạy GPU với video gốc.** Kiểm tra Docker / PostgreSQL / browser thực tế bằng `scripts/test.ps1` trên máy Windows trước khi publish. Xem `VERIFICATION.md`.
+
+---
+
 # Traffic AI V0.5.72 — Stable Replay + Benchmark Regression Gate
 
 ## Căn cứ từ Session #174 (camera_1 ngày 10/10/2026)

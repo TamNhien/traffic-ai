@@ -193,3 +193,13 @@
 @media(max-width:560px){.password-requirements{grid-template-columns:1fr}.reset-actions button{flex:1 1 100%}}
 
 .password-confirm-error{display:block;color:#fda4af;font-size:.78rem}
+
+/* V0.5.73: account creation confirmations must never resemble successful failures. */
+.account-notice{margin:14px 0;border-radius:9px;padding:12px 15px;font-weight:600;word-break:break-word}
+.account-notice-error{background:rgba(127,29,29,.23)!important;border:1px solid #e56a78!important;color:#fecdd3!important}
+.account-notice-success{background:rgba(6,95,70,.3)!important;border:1px solid #16a085!important;color:#a7f3d0!important}
+.account-notice-warning{background:rgba(120,83,18,.27)!important;border:1px solid #d6a02f!important;color:#fde68a!important}
+.field-hint{display:block;margin-top:6px;color:#96acc8;font-weight:400;font-size:.78rem}
+.user-list-summary{padding:9px 0;color:#a9c0d9;font-size:.86rem}
+.user-list-empty{padding:14px;border:1px dashed #426284;border-radius:8px;color:#aec4df}
+.user-row-new{outline:1px solid #16a085;outline-offset:-1px;border-radius:8px}

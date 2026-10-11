@@ -7,6 +7,7 @@ from sqlalchemy import Boolean, DateTime, Enum as SAEnum, Float, ForeignKey, Int
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
+from app.usernames import username_key
 
 
 class CameraStatus(str, Enum):
@@ -54,6 +55,8 @@ class User(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     username: Mapped[str] = mapped_column(String(80), nullable=False, unique=True, index=True)
+    username_key: Mapped[str] = mapped_column(String(80), nullable=False, unique=True, index=True,
+        default=lambda context: username_key(context.get_current_parameters()["username"]))
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     full_name: Mapped[str | None] = mapped_column(String(160))
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
