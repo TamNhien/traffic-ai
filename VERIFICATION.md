@@ -1,3 +1,27 @@
+# V0.5.79 Verification — Release version mismatch hotfix
+
+- Observed user failure: `scripts/test.ps1:326`, `VERSION must be 0.5.77, current: 0.5.78`, before backend/AI/frontend tests.
+- Fix: make PowerShell contract dynamic, verify cross-component version and single Alembic head; provide Python release checker and two negative regression cases (old hardcoded PowerShell version, stale frontend package).
+- Version and health metadata synchronized to 0.5.79; new migration 0093 only updates `system_settings.schema_version`.
+- AI counting core and V0.5.78 deduplication algorithm unchanged. No new benchmark result, no claim of 0 missed/extra.
+- Current environment: **175/175 backend**, **635/635 AI**, **4/4 backup worker**, **4/4 frontend Node**, **32/32 stdlib offline tests**, **5/5 benchmark gate pytest tests**; **855/855** cases passed. All Python sources compiled. The Python release metadata checker passes, and four focused tests include negative cases for stale source version.
+- Backend/AI tested under Python 3.13 with `DATABASE_URL_OVERRIDE=sqlite+pysqlite:///:memory:` and a temporary HTTPX compatibility alias **outside the ZIP** (not a Docker/Python 3.14 release-environment run). Actual PowerShell parsing, Docker Compose build/start, PostgreSQL migration and GPU playback have **not** been verified here; run `scripts/test.ps1` on Windows before publishing.
+
+---
+
+# V0.5.78 Verification — direct-shadow ID switch
+
+- Evidence: Benchmark #179 verified manifest, 149 GT and 153 events, complete trace. At 491.920 and 492.200, two direct/out/motorcycle events from different IDs are 0.008587 apart; RAR frame_12299 and frame_12306 visually show overlapping detection boxes on the same motorcycle.
+- Offline reproduction using `app.benchmarking.match_crossings`: baseline 149 GT / 153 AI / 139 matched / 10 missed / 14 extra. Applying the new narrow guard to the saved DB event snapshot predicts 149 / 152 / 139 / 10 / 13. This is **not a new AI session**, and no claim is made that remaining errors have been fixed.
+- Runtime backend guard gets only event time, normalized geometry, method, direction, class, track ID; no Ground Truth. `backend/app/shadow_guard.py` is shared with offline evaluator.
+- Source V0.5.78 only changes the direct/direct near-point deduplication rule; counting engine, rescue branches, model weights and camera config are unchanged. Database migration updates metadata only, preserving data.
+- New tests: 3 backend endpoint/helper regressions and 7 offline evaluator regressions. CI and PowerShell checks updated.
+- Actual code tests in this packaging environment: backend **175/175**, AI Service **635/635**, backup worker **4/4**, offline benchmark/replay/forensics **33/33**, frontend Node unit **4/4**. **851/851 test cases passed**; Python compileall passed. Backend and AI used a temporary local `httpx2` compatibility alias not included in the ZIP. Node v22 could run unit tests; Vite build with pinned Node v26 was not performed.
+- Alembic static revision graph shows one head `0092_direct_shadow_v0578`, parent `0091_gt_forensics_v0577`.
+- Actual GPU replay, PostgreSQL, Docker, GitHub Actions and PowerShell startup require verification on target Windows; do not claim 0 missed / 0 extra.
+
+---
+
 # V0.5.77 Verification — startup and benchmark case forensics
 
 - Source analysis: confirmed undefined `$root` on final V0.5.76 start.ps1 line 474 after Gateway. Fixed to `$ProjectRoot` which is initialized before execution.

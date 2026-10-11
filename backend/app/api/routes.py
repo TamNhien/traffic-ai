@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.db.session import get_db
 from app.geometry import validate_counting_geometry
+from app.shadow_guard import direct_ultra_spatial_shadow_duplicate
 from app.benchmarking import (
     BENCHMARK_TRACE_EXPORT_MAX_BYTES, BenchmarkTraceArchive, BenchmarkTraceTooLarge,
     build_benchmark_export, match_crossings, read_benchmark_trace_chunks,
@@ -835,12 +836,15 @@ def _direct_ultra_spatial_shadow_duplicate(
     Benchmark 149/155 still contains events almost on top of a GT-matched event.
     Previous shadow guards intentionally excluded direct/direct traffic.  Keep
     that protection everywhere except an ultra-tight extension beyond the generic
-    0.22 s signature: both events must be DIRECT, within 0.42 s and within 0.006
-    normalized crossing-point distance.  This is deliberately narrower than the
-    secondary shadow rules so dense legitimate traffic remains distinct.
+    0.22 s signature. Benchmark #55 / Session #179 confirms that one moving
+    motorcycle can receive two overlapping tracker IDs at 491.92 and 492.20 s;
+    the two DIRECT events share direction/class and are 0.00859 gate units apart.
+    Preserve the old DIRECT/DIRECT tail (<=0.42 s, <=0.006) and add only a
+    0.32 s/0.009 ultra-local extension; leave different lanes outside the guard.
+    No Ground Truth is read at runtime.
     """
     methods = {str(current_method or ""), str(other_method or "")}
-    return methods == {"direct"} and float(time_delta) <= 0.42 and float(distance) <= 0.006
+    return direct_ultra_spatial_shadow_duplicate(time_delta, distance, current_method, other_method)
 
 def _secondary_reverse_shadow_duplicate(
     time_delta: float,

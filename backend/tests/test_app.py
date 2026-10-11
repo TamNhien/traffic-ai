@@ -52,7 +52,7 @@ def test_root_metadata() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["name"] == "Traffic AI"
-    assert payload["version"] == "0.5.77"
+    assert payload["version"] == "0.5.79"
     assert payload["docs"] == "/docs"
     assert payload["health"] == "/api/health"
 
@@ -190,7 +190,7 @@ def test_benchmark_clone_compatibility_rejects_different_line() -> None:
 
 
 def test_backend_version_metadata() -> None:
-    assert app.version == "0.5.77"
+    assert app.version == "0.5.79"
 
 
 def test_v0531_startup_crossing_signature_guard_is_narrow() -> None:
@@ -211,7 +211,7 @@ def test_v0533_ground_truth_mark_update_schema() -> None:
 
 
 def test_v0533_version() -> None:
-    assert app.version == "0.5.77"
+    assert app.version == "0.5.79"
 
 
 def test_v0533_ground_truth_mark_update_keeps_timecode() -> None:
@@ -1514,3 +1514,50 @@ def test_v0562_signed_canonical_event_keeps_tracking_and_source_clock() -> None:
     assert event.tracking_id == -1 and event.session_id == 167
     assert event.source_frame_index == 7273 and event.source_time_seconds == 290.88
     assert event.vehicle_type.value == "motorcycle" and event.direction.value == "in"
+
+
+def test_v0578_evidence_bounded_direct_shadow_cutoffs() -> None:
+    """One observed ID switch is closed; adjacent dense vehicles stay distinct."""
+    from app.api.routes import _direct_ultra_spatial_shadow_duplicate
+    # Benchmark #55: 491.920 -> 492.200, same bike briefly had two IDs.
+    assert _direct_ultra_spatial_shadow_duplicate(.28, .008587468, 'direct', 'direct')
+    assert not _direct_ultra_spatial_shadow_duplicate(.33, .008587468, 'direct', 'direct')
+    assert not _direct_ultra_spatial_shadow_duplicate(.28, .010, 'direct', 'direct')
+    assert not _direct_ultra_spatial_shadow_duplicate(.28, .008, 'rescued', 'direct')
+    assert not _direct_ultra_spatial_shadow_duplicate(.28, .008, 'interpolated', 'direct')
+
+
+def test_v0578_backend_direct_shadow_id_switch_keeps_session_totals() -> None:
+    """Real internal endpoint, cross-ID persistence and positive/negative cases."""
+    from sqlalchemy import select, func
+    from app.models.all_models import CountingSession, VehicleEvent
+    with _dedup_event_database() as db:
+        first, _ = _submit_dedup_event(db, tracking_id=181574,
+            direction='out', source_time_seconds=491.920, source_frame_index=12299,
+            crossing_x=.5900, crossing_y=.4200, vehicle_type='motorcycle')
+        second, response = _submit_dedup_event(db, tracking_id=182056,
+            direction='out', source_time_seconds=492.200, source_frame_index=12306,
+            crossing_x=.598587, crossing_y=.4200, vehicle_type='motorcycle')
+        assert second.id == first.id
+        assert response.headers['X-TrafficAI-Dedup-Reason'] == 'direct-ultra-shadow'
+        # A different crossing point must not be confused with the first bike.
+        third, response = _submit_dedup_event(db, tracking_id=182057,
+            direction='out', source_time_seconds=492.240, source_frame_index=12307,
+            crossing_x=.625, crossing_y=.4200, vehicle_type='motorcycle')
+        assert third.id != first.id
+        assert response.headers.get('X-TrafficAI-Deduplicated') == '0'
+        assert db.scalar(select(func.count(VehicleEvent.id))) == 2
+        assert db.get(CountingSession, 1).total_vehicles == 2
+
+
+def test_v0578_direct_shadow_never_crosses_class_or_direction() -> None:
+    with _dedup_event_database() as db:
+        first, _ = _submit_dedup_event(db, tracking_id=1,
+            direction='out', source_time_seconds=491.920, crossing_x=.59, crossing_y=.42)
+        other_class, _ = _submit_dedup_event(db, tracking_id=2,
+            vehicle_type='bicycle', direction='out', source_time_seconds=492.200,
+            crossing_x=.598587, crossing_y=.42)
+        opposite, _ = _submit_dedup_event(db, tracking_id=3,
+            direction='in', source_time_seconds=492.200,
+            crossing_x=.598587, crossing_y=.42)
+        assert first.id != other_class.id != opposite.id

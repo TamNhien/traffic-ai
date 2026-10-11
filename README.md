@@ -1,3 +1,68 @@
+# Traffic AI V0.5.79 — Release Version Consistency Hotfix
+
+**Sửa lỗi chặn `scripts/test.ps1` khi `VERSION=0.5.78` nhưng contract vẫn cố định 0.5.77.** Bản sửa tăng release lên V0.5.79, dựa hoàn toàn trên source V0.5.78.
+
+- Thay so sánh version cứng bằng so khớp file `VERSION` với frontend, backend, AI Service, backup worker và metadata sao lưu; kiểm tra các query cache favicon/manifest.
+- Quét Alembic revision graph để xác nhận chỉ một head, đầy đủ parent và `schema_version` trong head trùng `VERSION`. Bảo toàn migration và dữ liệu cũ. Migration mới `0093_version_contract_v0579` chỉ sửa metadata phiên bản.
+- Thêm `scripts/version-contract.py`, bài test tái hiện hardcode/stale package và kiểm tra trong cả `scripts/test.ps1`, `.github/workflows/ci.yml` và `ci-release-reusable.yml`.
+- Đồng bộ API/health version, frontend, AI Service, backup worker và file icon cache; **không thay đổi logic AI crossing, các ngưỡng chống trùng, mật khẩu, quyền truy cập hoặc dữ liệu PostgreSQL**.
+- Vẫn chưa chứng minh 0 lọt/0 dư. Kết quả Benchmark #179 mới nhất: GT 149, AI 153, khớp 139, lọt 10, dư 14. V0.5.78 dự đoán offline loại được 1 dư nhưng chưa replay thực tế.
+
+## Chạy thử và khởi động Windows
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+.\scripts\test.ps1
+.\scripts\start.ps1
+```
+
+Sau khi test và chạy ổn, phát hành bằng ` .\scripts\publish.ps1 `; không chạy `create-admin.ps1` vì tài khoản Admin đã tồn tại.
+
+---
+
+# Traffic AI V0.5.78 — Bounded Direct Shadow Closure + GT-Verified Counterfactual
+
+**Nâng cấp từ V0.5.77; giữ nguyên cấu hình camera, AI model, PostgreSQL, tài khoản và Backup/Restore.**
+
+### V0.5.78 thay đổi gì?
+
+- Sửa **một lỗi đếm trùng đã có bằng chứng ảnh và GT** của Session #179: tại t=491.920/492.200 giây, cùng xe máy có hai hộp/track ID khác nhau ở cùng vị trí crossing, đều là `direct`, `out`, `motorcycle`. Khoảng cách crossing chuẩn hóa 0.008587, dt 0.28 s. Bản cũ không loại vì giới hạn 0.006.
+- Backend nâng **duy nhất** DIRECT/DIRECT cùng lớp/hướng khác ID lên **dt ≤ 0.32 giây và khoảng cách ≤ 0.009** cho đuôi mới; **giữ nguyên** guard cũ dt ≤ 0.42 giây, khoảng cách ≤ 0.006. Không thay điều kiện các crossing `rescued/interpolated` hoặc các trường hợp khác hướng/khác loại; thêm module thuần `backend/app/shadow_guard.py` để source và phân tích offline dùng chung đúng một quy tắc.
+- Thêm `scripts/evaluate-direct-shadow.ps1` đọc `Tải hồ sơ benchmark` để **giả lập** bộ lọc từ AI events, không đọc GT trước khi chọn ứng viên, đối chiếu lại GT bằng thuật toán benchmark hiện có. Kiểm tra manifest SHA-256; không ghi vào PostgreSQL hay thay đổi GT.
+- Thêm kiểm thử hồi quy cho hai track chồng nhau, giữ xe khác vị trí, hướng/loại khác nhau, guard thời gian chặt và checksum hỏng. Migration Alembic `0092_direct_shadow_v0578.py` chỉ tăng `system_settings.schema_version`; không thay bảng dữ liệu.
+
+### Benchmark #179 (từ ZIP người dùng cung cấp)
+
+| Dữ liệu | Trước | Giả lập V0.5.78 trên events cũ |
+|---|---:|---:|
+| Ground Truth | 149 | 149 |
+| AI | 153 | 152 |
+| Khớp | 139 | 139 |
+| Lọt | 10 | 10 |
+| Dư | 14 | 13 |
+
+**Cảnh báo về chất lượng:** số cột giả lập chỉ chứng minh tác động có thể có trên event snapshot có sẵn; không phải kết quả replay model GPU với thuật toán mới. 10 lượt lọt và 13 lượt dư khác vẫn chưa được chứng minh khắc phục. Không ghép lại các event theo GT lúc chạy AI, không ép tổng AI = 149, không thay ảnh/trace/GT. Các dạng lọt do anchor/Gate/track loss và dư do cứu gap cần được kiểm chứng riêng trước khi thay đổi ngưỡng lớn.
+
+### Lệnh chạy và kiểm tra
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+.\scripts\test.ps1
+.\scripts\start.ps1
+```
+
+Không cần `create-admin.ps1`. Để đánh giá offline:
+
+```powershell
+.\scripts\evaluate-direct-shadow.ps1 -ExportZip .\benchmark-179.zip -OutputDirectory .\shadow-report
+```
+
+Chỉ phát hành sau khi kiểm thử chạy tốt tại máy người dùng bằng `.\scripts\publish.ps1`.
+
+---
+
 # Traffic AI V0.5.77 — Startup Path Fix + Verified GT Case Forensics
 
 **Khắc phục blocker V0.5.76:** `scripts/start.ps1` dùng biến `$root` chưa khai báo khi đọc `VERSION`, khiến PowerShell dừng ở bước Gateway với `Cannot bind argument to parameter 'Path' because it is null`. Đã sửa thành `$ProjectRoot`, biến được khởi tạo ngay đầu script. Có contract kiểm tra để tránh tái phát.

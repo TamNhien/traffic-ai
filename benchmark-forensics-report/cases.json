@@ -1,0 +1,4060 @@
+{
+  "format": "traffic-ai-gt-case-forensics",
+  "version": 1,
+  "session_id": 179,
+  "benchmark_id": 55,
+  "ground_truth_total": 149,
+  "ai_total": 153,
+  "matched": 139,
+  "missed": 10,
+  "extra": 14,
+  "window_seconds": 1.0,
+  "trace_available": true,
+  "trace_reason": null,
+  "source_trace_sha256": "a3702b335f8d7d0d361385f7347440ef5701599d9d0ed4fe2693e48e20279475",
+  "cases": [
+    {
+      "kind": "extra",
+      "time": 54.296,
+      "direction": "out",
+      "vehicle_type": "motorcycle",
+      "ground_truth_id": null,
+      "ai_event_id": 11331,
+      "diagnostic_reason": "rescued_gap_unmatched",
+      "report_evidence": null,
+      "matching_audit": null,
+      "review_candidate": null,
+      "trace_evidence": {
+        "frames": 50,
+        "tracks": {
+          "15369": {
+            "label": "motorcycle",
+            "first_time": 53.32,
+            "last_time": 55.28,
+            "side_negative": true,
+            "side_positive": true,
+            "near_line_samples": 9,
+            "samples": 40
+          },
+          "-1": {
+            "label": "motorcycle",
+            "first_time": 53.32,
+            "last_time": 55.28,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 50,
+            "samples": 50
+          },
+          "15831": {
+            "label": "motorcycle",
+            "first_time": 54.16,
+            "last_time": 55.28,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 27,
+            "samples": 27
+          },
+          "12074": {
+            "label": "motorcycle",
+            "first_time": 53.32,
+            "last_time": 55.28,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "13014": {
+            "label": "motorcycle",
+            "first_time": 53.32,
+            "last_time": 55.28,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "3": {
+            "label": "motorcycle",
+            "first_time": 53.32,
+            "last_time": 55.28,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "3907": {
+            "label": "motorcycle",
+            "first_time": 53.32,
+            "last_time": 55.28,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "3949": {
+            "label": "motorcycle",
+            "first_time": 53.32,
+            "last_time": 55.28,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "6": {
+            "label": "motorcycle",
+            "first_time": 53.32,
+            "last_time": 55.28,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "6620": {
+            "label": "motorcycle",
+            "first_time": 53.32,
+            "last_time": 55.28,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "9": {
+            "label": "motorcycle",
+            "first_time": 53.32,
+            "last_time": 55.28,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "10": {
+            "label": "motorcycle",
+            "first_time": 53.32,
+            "last_time": 55.28,
+            "side_negative": false,
+            "side_positive": true,
+            "near_line_samples": 0,
+            "samples": 36
+          }
+        },
+        "proposals": [
+          {
+            "time": 54.2956,
+            "track_id": 15369,
+            "direction": "out",
+            "method": "rescued"
+          }
+        ],
+        "deliveries": [
+          {
+            "time": 54.296,
+            "event_id": 11331,
+            "outcome": "created",
+            "dedup_reason": null,
+            "track_id": 15369,
+            "direction": "out",
+            "crossing_method": "rescued"
+          }
+        ],
+        "reject_delta": {},
+        "tracks_both_sides": 1,
+        "near_line_tracks": 3
+      }
+    },
+    {
+      "kind": "missed",
+      "time": 59.446,
+      "direction": "in",
+      "vehicle_type": "motorcycle",
+      "ground_truth_id": 7907,
+      "ai_event_id": null,
+      "diagnostic_reason": "not_classified",
+      "report_evidence": {
+        "candidate_count": 1,
+        "identity_proven": false,
+        "nearby_persisted_events": [
+          {
+            "ai_direction": "in",
+            "ai_event_id": 11332,
+            "ai_vehicle_type": "motorcycle",
+            "assigned_ground_truth_id": 7906,
+            "assignment": "assigned_other_gt",
+            "delta_seconds": -0.5535,
+            "direction_agrees": true
+          }
+        ],
+        "status": "persisted_event_claimed_by_other_gt",
+        "truncated": false
+      },
+      "matching_audit": {
+        "ground_truth_time": 59.445965,
+        "identity_scope": "physical_identity_unproven",
+        "nearby_matched_events": [
+          {
+            "ai_event_id": 11332,
+            "ai_time": 58.8925,
+            "assigned_delta_seconds": -0.09147099999999853,
+            "assigned_ground_truth_direction": "out",
+            "assigned_ground_truth_id": 7906,
+            "assigned_ground_truth_time": 58.983971,
+            "assigned_ground_truth_vehicle_type": "motorcycle",
+            "delta_seconds": -0.5534650000000028,
+            "direction": "in",
+            "tracking_id": 17,
+            "vehicle_type": "motorcycle"
+          }
+        ],
+        "omitted_count": 0,
+        "scope": "temporal_neighbor_assignment",
+        "window_seconds": 0.75
+      },
+      "review_candidate": null,
+      "trace_evidence": {
+        "frames": 50,
+        "tracks": {
+          "17": {
+            "label": "motorcycle",
+            "first_time": 58.52,
+            "last_time": 60.36,
+            "side_negative": true,
+            "side_positive": true,
+            "near_line_samples": 13,
+            "samples": 40
+          },
+          "-1": {
+            "label": "motorcycle",
+            "first_time": 58.48,
+            "last_time": 60.44,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 50,
+            "samples": 50
+          },
+          "17187": {
+            "label": "motorcycle",
+            "first_time": 58.6,
+            "last_time": 59.36,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 10,
+            "samples": 11
+          },
+          "17463": {
+            "label": "motorcycle",
+            "first_time": 59.4,
+            "last_time": 60.44,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 1,
+            "samples": 25
+          },
+          "12074": {
+            "label": "motorcycle",
+            "first_time": 58.48,
+            "last_time": 60.44,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "13014": {
+            "label": "motorcycle",
+            "first_time": 58.48,
+            "last_time": 60.44,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "3": {
+            "label": "motorcycle",
+            "first_time": 58.48,
+            "last_time": 60.44,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "3907": {
+            "label": "motorcycle",
+            "first_time": 58.48,
+            "last_time": 60.44,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "6": {
+            "label": "motorcycle",
+            "first_time": 58.48,
+            "last_time": 60.44,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "6620": {
+            "label": "motorcycle",
+            "first_time": 58.48,
+            "last_time": 60.44,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "9": {
+            "label": "motorcycle",
+            "first_time": 58.48,
+            "last_time": 60.44,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "15530": {
+            "label": "motorcycle",
+            "first_time": 58.48,
+            "last_time": 60.44,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 43
+          }
+        },
+        "proposals": [
+          {
+            "time": 58.8925,
+            "track_id": 17,
+            "direction": "in",
+            "method": "interpolated"
+          }
+        ],
+        "deliveries": [
+          {
+            "time": 58.892,
+            "event_id": 11332,
+            "outcome": "created",
+            "dedup_reason": null,
+            "track_id": 17,
+            "direction": "in",
+            "crossing_method": "interpolated"
+          }
+        ],
+        "reject_delta": {},
+        "tracks_both_sides": 1,
+        "near_line_tracks": 4
+      }
+    },
+    {
+      "kind": "extra",
+      "time": 70.52,
+      "direction": "out",
+      "vehicle_type": "motorcycle",
+      "ground_truth_id": null,
+      "ai_event_id": 11336,
+      "diagnostic_reason": "direct_unmatched",
+      "report_evidence": null,
+      "matching_audit": null,
+      "review_candidate": null,
+      "trace_evidence": {
+        "frames": 51,
+        "tracks": {
+          "17464": {
+            "label": "motorcycle",
+            "first_time": 69.52,
+            "last_time": 71.04,
+            "side_negative": true,
+            "side_positive": true,
+            "near_line_samples": 12,
+            "samples": 15
+          },
+          "20690": {
+            "label": "motorcycle",
+            "first_time": 69.52,
+            "last_time": 71.52,
+            "side_negative": true,
+            "side_positive": true,
+            "near_line_samples": 2,
+            "samples": 27
+          },
+          "21545": {
+            "label": "motorcycle",
+            "first_time": 69.68,
+            "last_time": 71.16,
+            "side_negative": true,
+            "side_positive": true,
+            "near_line_samples": 1,
+            "samples": 24
+          },
+          "-1": {
+            "label": "motorcycle",
+            "first_time": 69.52,
+            "last_time": 71.52,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 38,
+            "samples": 46
+          },
+          "12074": {
+            "label": "motorcycle",
+            "first_time": 69.52,
+            "last_time": 71.52,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 51
+          },
+          "15530": {
+            "label": "motorcycle",
+            "first_time": 69.52,
+            "last_time": 71.52,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 51
+          },
+          "18458": {
+            "label": "motorcycle",
+            "first_time": 69.52,
+            "last_time": 71.52,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 51
+          },
+          "20197": {
+            "label": "motorcycle",
+            "first_time": 69.52,
+            "last_time": 71.52,
+            "side_negative": false,
+            "side_positive": true,
+            "near_line_samples": 0,
+            "samples": 51
+          },
+          "3": {
+            "label": "motorcycle",
+            "first_time": 69.52,
+            "last_time": 71.52,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 51
+          },
+          "6620": {
+            "label": "motorcycle",
+            "first_time": 69.52,
+            "last_time": 71.52,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 51
+          },
+          "9": {
+            "label": "motorcycle",
+            "first_time": 69.52,
+            "last_time": 71.52,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 51
+          },
+          "13014": {
+            "label": "motorcycle",
+            "first_time": 69.52,
+            "last_time": 71.52,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 49
+          }
+        },
+        "proposals": [
+          {
+            "time": 69.4394,
+            "track_id": 20690,
+            "direction": "out",
+            "method": "interpolated"
+          },
+          {
+            "time": 69.7164,
+            "track_id": 21545,
+            "direction": "out",
+            "method": "interpolated"
+          },
+          {
+            "time": 70.52,
+            "track_id": 17464,
+            "direction": "out",
+            "method": "direct"
+          },
+          {
+            "time": 71.04,
+            "track_id": 17464,
+            "direction": "in",
+            "method": "rescued"
+          }
+        ],
+        "deliveries": [
+          {
+            "time": 69.716,
+            "event_id": 11335,
+            "outcome": "created",
+            "dedup_reason": null,
+            "track_id": 21545,
+            "direction": "out",
+            "crossing_method": "interpolated"
+          },
+          {
+            "time": 70.52,
+            "event_id": 11336,
+            "outcome": "created",
+            "dedup_reason": null,
+            "track_id": 17464,
+            "direction": "out",
+            "crossing_method": "direct"
+          },
+          {
+            "time": 71.04,
+            "event_id": 11336,
+            "outcome": "deduplicated",
+            "dedup_reason": "same-track-direction-flip",
+            "track_id": 17464,
+            "direction": "in",
+            "crossing_method": "rescued"
+          }
+        ],
+        "reject_delta": {},
+        "tracks_both_sides": 3,
+        "near_line_tracks": 4
+      }
+    },
+    {
+      "kind": "missed",
+      "time": 237.042,
+      "direction": "out",
+      "vehicle_type": "motorcycle",
+      "ground_truth_id": 7937,
+      "ai_event_id": null,
+      "diagnostic_reason": "not_classified",
+      "report_evidence": {
+        "candidate_count": 1,
+        "identity_proven": false,
+        "nearby_persisted_events": [
+          {
+            "ai_direction": "in",
+            "ai_event_id": 11362,
+            "ai_vehicle_type": "motorcycle",
+            "assigned_ground_truth_id": 7936,
+            "assignment": "assigned_other_gt",
+            "delta_seconds": -0.7437,
+            "direction_agrees": false
+          }
+        ],
+        "status": "persisted_event_claimed_by_other_gt",
+        "truncated": false
+      },
+      "matching_audit": {
+        "ground_truth_time": 237.042059,
+        "identity_scope": "physical_identity_unproven",
+        "nearby_matched_events": [
+          {
+            "ai_event_id": 11362,
+            "ai_time": 236.2984,
+            "assigned_delta_seconds": -0.2606710000000021,
+            "assigned_ground_truth_direction": "in",
+            "assigned_ground_truth_id": 7936,
+            "assigned_ground_truth_time": 236.559071,
+            "assigned_ground_truth_vehicle_type": "motorcycle",
+            "delta_seconds": -0.7436590000000081,
+            "direction": "in",
+            "tracking_id": 84351,
+            "vehicle_type": "motorcycle"
+          }
+        ],
+        "omitted_count": 0,
+        "scope": "temporal_neighbor_assignment",
+        "window_seconds": 0.75
+      },
+      "review_candidate": null,
+      "trace_evidence": {
+        "frames": 50,
+        "tracks": {
+          "84351": {
+            "label": "motorcycle",
+            "first_time": 236.08,
+            "last_time": 237.64,
+            "side_negative": true,
+            "side_positive": true,
+            "near_line_samples": 5,
+            "samples": 34
+          },
+          "13014": {
+            "label": "motorcycle",
+            "first_time": 236.08,
+            "last_time": 238.04,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "48091": {
+            "label": "motorcycle",
+            "first_time": 236.08,
+            "last_time": 238.04,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "68533": {
+            "label": "motorcycle",
+            "first_time": 236.08,
+            "last_time": 238.04,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "84177": {
+            "label": "motorcycle",
+            "first_time": 236.08,
+            "last_time": 238.04,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "25767": {
+            "label": "motorcycle",
+            "first_time": 236.08,
+            "last_time": 238.04,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 49
+          },
+          "48646": {
+            "label": "motorcycle",
+            "first_time": 236.08,
+            "last_time": 238.04,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 49
+          },
+          "80616": {
+            "label": "motorcycle",
+            "first_time": 236.08,
+            "last_time": 238.04,
+            "side_negative": false,
+            "side_positive": true,
+            "near_line_samples": 0,
+            "samples": 48
+          },
+          "82933": {
+            "label": "motorcycle",
+            "first_time": 236.16,
+            "last_time": 238.04,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 46
+          },
+          "56737": {
+            "label": "motorcycle",
+            "first_time": 236.08,
+            "last_time": 238.04,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 42
+          },
+          "-1": {
+            "label": "motorcycle",
+            "first_time": 236.68,
+            "last_time": 238.04,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 35
+          },
+          "12074": {
+            "label": "motorcycle",
+            "first_time": 236.08,
+            "last_time": 238.04,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 34
+          }
+        },
+        "proposals": [
+          {
+            "time": 236.2984,
+            "track_id": 84351,
+            "direction": "in",
+            "method": "interpolated"
+          }
+        ],
+        "deliveries": [
+          {
+            "time": 236.298,
+            "event_id": 11362,
+            "outcome": "created",
+            "dedup_reason": null,
+            "track_id": 84351,
+            "direction": "in",
+            "crossing_method": "interpolated"
+          }
+        ],
+        "reject_delta": {},
+        "tracks_both_sides": 1,
+        "near_line_tracks": 1
+      }
+    },
+    {
+      "kind": "extra",
+      "time": 292.324,
+      "direction": "in",
+      "vehicle_type": "motorcycle",
+      "ground_truth_id": null,
+      "ai_event_id": 11375,
+      "diagnostic_reason": "interpolated_unmatched",
+      "report_evidence": null,
+      "matching_audit": null,
+      "review_candidate": null,
+      "trace_evidence": {
+        "frames": 50,
+        "tracks": {
+          "110284": {
+            "label": "motorcycle",
+            "first_time": 291.36,
+            "last_time": 293.32,
+            "side_negative": true,
+            "side_positive": true,
+            "near_line_samples": 31,
+            "samples": 49
+          },
+          "108431": {
+            "label": "motorcycle",
+            "first_time": 291.36,
+            "last_time": 293.32,
+            "side_negative": false,
+            "side_positive": true,
+            "near_line_samples": 16,
+            "samples": 36
+          },
+          "109336": {
+            "label": "motorcycle",
+            "first_time": 291.52,
+            "last_time": 292.28,
+            "side_negative": false,
+            "side_positive": true,
+            "near_line_samples": 12,
+            "samples": 15
+          },
+          "107857": {
+            "label": "motorcycle",
+            "first_time": 291.36,
+            "last_time": 293.32,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "12074": {
+            "label": "motorcycle",
+            "first_time": 291.36,
+            "last_time": 293.32,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "3907": {
+            "label": "motorcycle",
+            "first_time": 291.36,
+            "last_time": 293.32,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "48091": {
+            "label": "motorcycle",
+            "first_time": 291.36,
+            "last_time": 293.32,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "48646": {
+            "label": "motorcycle",
+            "first_time": 291.36,
+            "last_time": 293.32,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "84177": {
+            "label": "motorcycle",
+            "first_time": 291.36,
+            "last_time": 293.32,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "108778": {
+            "label": "motorcycle",
+            "first_time": 291.4,
+            "last_time": 293.32,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 49
+          },
+          "95080": {
+            "label": "motorcycle",
+            "first_time": 291.36,
+            "last_time": 293.32,
+            "side_negative": false,
+            "side_positive": true,
+            "near_line_samples": 0,
+            "samples": 41
+          },
+          "100932": {
+            "label": "motorcycle",
+            "first_time": 291.36,
+            "last_time": 292.6,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 32
+          }
+        },
+        "proposals": [
+          {
+            "time": 292.3242,
+            "track_id": 110284,
+            "direction": "in",
+            "method": "interpolated"
+          }
+        ],
+        "deliveries": [
+          {
+            "time": 292.324,
+            "event_id": 11375,
+            "outcome": "created",
+            "dedup_reason": null,
+            "track_id": 110284,
+            "direction": "in",
+            "crossing_method": "interpolated"
+          }
+        ],
+        "reject_delta": {},
+        "tracks_both_sides": 1,
+        "near_line_tracks": 3
+      }
+    },
+    {
+      "kind": "missed",
+      "time": 392.179,
+      "direction": "out",
+      "vehicle_type": "motorcycle",
+      "ground_truth_id": 7966,
+      "ai_event_id": null,
+      "diagnostic_reason": "not_classified",
+      "report_evidence": null,
+      "matching_audit": null,
+      "review_candidate": null,
+      "trace_evidence": {
+        "frames": 50,
+        "tracks": {
+          "127516": {
+            "label": "motorcycle",
+            "first_time": 391.2,
+            "last_time": 393.16,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 50,
+            "samples": 50
+          },
+          "143964": {
+            "label": "motorcycle",
+            "first_time": 391.2,
+            "last_time": 393.16,
+            "side_negative": false,
+            "side_positive": true,
+            "near_line_samples": 28,
+            "samples": 36
+          },
+          "145785": {
+            "label": "motorcycle",
+            "first_time": 393.08,
+            "last_time": 393.16,
+            "side_negative": false,
+            "side_positive": true,
+            "near_line_samples": 1,
+            "samples": 3
+          },
+          "107857": {
+            "label": "motorcycle",
+            "first_time": 391.2,
+            "last_time": 393.16,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "108778": {
+            "label": "motorcycle",
+            "first_time": 391.2,
+            "last_time": 393.16,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "116160": {
+            "label": "motorcycle",
+            "first_time": 391.2,
+            "last_time": 393.16,
+            "side_negative": false,
+            "side_positive": true,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "12074": {
+            "label": "motorcycle",
+            "first_time": 391.2,
+            "last_time": 393.16,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "121518": {
+            "label": "motorcycle",
+            "first_time": 391.2,
+            "last_time": 393.16,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "125158": {
+            "label": "motorcycle",
+            "first_time": 391.2,
+            "last_time": 393.16,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "125464": {
+            "label": "motorcycle",
+            "first_time": 391.2,
+            "last_time": 393.16,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "137086": {
+            "label": "motorcycle",
+            "first_time": 391.2,
+            "last_time": 393.16,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "143399": {
+            "label": "motorcycle",
+            "first_time": 391.2,
+            "last_time": 393.16,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          }
+        },
+        "proposals": [],
+        "deliveries": [],
+        "reject_delta": {},
+        "tracks_both_sides": 0,
+        "near_line_tracks": 3
+      }
+    },
+    {
+      "kind": "missed",
+      "time": 397.288,
+      "direction": "in",
+      "vehicle_type": "motorcycle",
+      "ground_truth_id": 7969,
+      "ai_event_id": null,
+      "diagnostic_reason": "not_classified",
+      "report_evidence": null,
+      "matching_audit": null,
+      "review_candidate": null,
+      "trace_evidence": {
+        "frames": 50,
+        "tracks": {
+          "143399": {
+            "label": "motorcycle",
+            "first_time": 396.32,
+            "last_time": 398.28,
+            "side_negative": true,
+            "side_positive": true,
+            "near_line_samples": 20,
+            "samples": 47
+          },
+          "127516": {
+            "label": "motorcycle",
+            "first_time": 396.32,
+            "last_time": 398.28,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 50,
+            "samples": 50
+          },
+          "143964": {
+            "label": "motorcycle",
+            "first_time": 397.32,
+            "last_time": 397.96,
+            "side_negative": false,
+            "side_positive": true,
+            "near_line_samples": 17,
+            "samples": 17
+          },
+          "145572": {
+            "label": "motorcycle",
+            "first_time": 396.32,
+            "last_time": 397.36,
+            "side_negative": false,
+            "side_positive": true,
+            "near_line_samples": 3,
+            "samples": 25
+          },
+          "107857": {
+            "label": "motorcycle",
+            "first_time": 396.32,
+            "last_time": 398.28,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "12074": {
+            "label": "motorcycle",
+            "first_time": 396.32,
+            "last_time": 398.28,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "121518": {
+            "label": "motorcycle",
+            "first_time": 396.32,
+            "last_time": 398.28,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "125158": {
+            "label": "motorcycle",
+            "first_time": 396.32,
+            "last_time": 398.28,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "137086": {
+            "label": "motorcycle",
+            "first_time": 396.32,
+            "last_time": 398.28,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "144140": {
+            "label": "motorcycle",
+            "first_time": 396.32,
+            "last_time": 398.28,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "84177": {
+            "label": "motorcycle",
+            "first_time": 396.32,
+            "last_time": 398.28,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "48646": {
+            "label": "motorcycle",
+            "first_time": 396.32,
+            "last_time": 398.28,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 49
+          }
+        },
+        "proposals": [
+          {
+            "time": 396.32,
+            "track_id": 145572,
+            "direction": "in",
+            "method": "direct"
+          }
+        ],
+        "deliveries": [
+          {
+            "time": 396.32,
+            "event_id": 11393,
+            "outcome": "created",
+            "dedup_reason": null,
+            "track_id": 145572,
+            "direction": "in",
+            "crossing_method": "direct"
+          }
+        ],
+        "reject_delta": {},
+        "tracks_both_sides": 1,
+        "near_line_tracks": 4
+      }
+    },
+    {
+      "kind": "missed",
+      "time": 406.488,
+      "direction": "out",
+      "vehicle_type": "motorcycle",
+      "ground_truth_id": 7971,
+      "ai_event_id": null,
+      "diagnostic_reason": "not_classified",
+      "report_evidence": {
+        "candidate_count": 1,
+        "identity_proven": false,
+        "nearby_persisted_events": [
+          {
+            "ai_direction": "in",
+            "ai_event_id": 11395,
+            "ai_vehicle_type": "motorcycle",
+            "assigned_ground_truth_id": 7972,
+            "assignment": "assigned_other_gt",
+            "delta_seconds": 0.4826,
+            "direction_agrees": false
+          }
+        ],
+        "status": "persisted_event_claimed_by_other_gt",
+        "truncated": false
+      },
+      "matching_audit": {
+        "ground_truth_time": 406.488445,
+        "identity_scope": "physical_identity_unproven",
+        "nearby_matched_events": [
+          {
+            "ai_event_id": 11395,
+            "ai_time": 406.971,
+            "assigned_delta_seconds": -0.44999899999999116,
+            "assigned_ground_truth_direction": "in",
+            "assigned_ground_truth_id": 7972,
+            "assigned_ground_truth_time": 407.420999,
+            "assigned_ground_truth_vehicle_type": "motorcycle",
+            "delta_seconds": 0.48255499999999074,
+            "direction": "in",
+            "tracking_id": 149041,
+            "vehicle_type": "motorcycle"
+          }
+        ],
+        "omitted_count": 0,
+        "scope": "temporal_neighbor_assignment",
+        "window_seconds": 0.75
+      },
+      "review_candidate": null,
+      "trace_evidence": {
+        "frames": 50,
+        "tracks": {
+          "149041": {
+            "label": "motorcycle",
+            "first_time": 405.6,
+            "last_time": 407.48,
+            "side_negative": true,
+            "side_positive": true,
+            "near_line_samples": 14,
+            "samples": 41
+          },
+          "127516": {
+            "label": "motorcycle",
+            "first_time": 405.88,
+            "last_time": 407.48,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 41,
+            "samples": 41
+          },
+          "107857": {
+            "label": "motorcycle",
+            "first_time": 405.52,
+            "last_time": 407.48,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "108778": {
+            "label": "motorcycle",
+            "first_time": 405.52,
+            "last_time": 407.48,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "116160": {
+            "label": "motorcycle",
+            "first_time": 405.52,
+            "last_time": 407.48,
+            "side_negative": false,
+            "side_positive": true,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "12074": {
+            "label": "motorcycle",
+            "first_time": 405.52,
+            "last_time": 407.48,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "121518": {
+            "label": "motorcycle",
+            "first_time": 405.52,
+            "last_time": 407.48,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "125158": {
+            "label": "motorcycle",
+            "first_time": 405.52,
+            "last_time": 407.48,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "137086": {
+            "label": "motorcycle",
+            "first_time": 405.52,
+            "last_time": 407.48,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "144140": {
+            "label": "motorcycle",
+            "first_time": 405.52,
+            "last_time": 407.48,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "149602": {
+            "label": "motorcycle",
+            "first_time": 405.52,
+            "last_time": 407.48,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "48646": {
+            "label": "motorcycle",
+            "first_time": 405.52,
+            "last_time": 407.48,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          }
+        },
+        "proposals": [
+          {
+            "time": 406.971,
+            "track_id": 149041,
+            "direction": "in",
+            "method": "rescued"
+          }
+        ],
+        "deliveries": [
+          {
+            "time": 406.971,
+            "event_id": 11395,
+            "outcome": "created",
+            "dedup_reason": null,
+            "track_id": 149041,
+            "direction": "in",
+            "crossing_method": "rescued"
+          }
+        ],
+        "reject_delta": {},
+        "tracks_both_sides": 1,
+        "near_line_tracks": 2
+      }
+    },
+    {
+      "kind": "extra",
+      "time": 491.92,
+      "direction": "out",
+      "vehicle_type": "motorcycle",
+      "ground_truth_id": null,
+      "ai_event_id": 11404,
+      "diagnostic_reason": "spatial_duplicate_near_gt",
+      "report_evidence": {
+        "candidate_count": 1,
+        "identity_proven": false,
+        "nearby_ground_truth": [
+          {
+            "assigned_ai_event_id": 11405,
+            "delta_seconds": -0.1638,
+            "direction_agrees": true,
+            "ground_truth_id": 7981
+          }
+        ],
+        "truncated": false
+      },
+      "matching_audit": null,
+      "review_candidate": null,
+      "trace_evidence": {
+        "frames": 51,
+        "tracks": {
+          "181574": {
+            "label": "motorcycle",
+            "first_time": 491.08,
+            "last_time": 492.68,
+            "side_negative": true,
+            "side_positive": true,
+            "near_line_samples": 9,
+            "samples": 27
+          },
+          "182056": {
+            "label": "motorcycle",
+            "first_time": 492.16,
+            "last_time": 492.92,
+            "side_negative": true,
+            "side_positive": true,
+            "near_line_samples": 1,
+            "samples": 18
+          },
+          "127516": {
+            "label": "motorcycle",
+            "first_time": 490.96,
+            "last_time": 492.92,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 50,
+            "samples": 50
+          },
+          "12074": {
+            "label": "motorcycle",
+            "first_time": 490.92,
+            "last_time": 492.92,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 51
+          },
+          "121518": {
+            "label": "motorcycle",
+            "first_time": 490.92,
+            "last_time": 492.92,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 51
+          },
+          "125158": {
+            "label": "motorcycle",
+            "first_time": 490.92,
+            "last_time": 492.92,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 51
+          },
+          "144140": {
+            "label": "motorcycle",
+            "first_time": 490.92,
+            "last_time": 492.92,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 51
+          },
+          "160260": {
+            "label": "motorcycle",
+            "first_time": 490.92,
+            "last_time": 492.92,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 51
+          },
+          "167925": {
+            "label": "motorcycle",
+            "first_time": 490.92,
+            "last_time": 492.92,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 51
+          },
+          "172935": {
+            "label": "motorcycle",
+            "first_time": 490.92,
+            "last_time": 492.92,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 51
+          },
+          "177874": {
+            "label": "motorcycle",
+            "first_time": 490.92,
+            "last_time": 492.92,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 51
+          },
+          "48646": {
+            "label": "motorcycle",
+            "first_time": 490.92,
+            "last_time": 492.92,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 51
+          }
+        },
+        "proposals": [
+          {
+            "time": 491.92,
+            "track_id": 181574,
+            "direction": "out",
+            "method": "direct"
+          },
+          {
+            "time": 492.2,
+            "track_id": 182056,
+            "direction": "out",
+            "method": "direct"
+          }
+        ],
+        "deliveries": [
+          {
+            "time": 491.92,
+            "event_id": 11404,
+            "outcome": "created",
+            "dedup_reason": null,
+            "track_id": 181574,
+            "direction": "out",
+            "crossing_method": "direct"
+          },
+          {
+            "time": 492.2,
+            "event_id": 11405,
+            "outcome": "created",
+            "dedup_reason": null,
+            "track_id": 182056,
+            "direction": "out",
+            "crossing_method": "direct"
+          }
+        ],
+        "reject_delta": {},
+        "tracks_both_sides": 2,
+        "near_line_tracks": 3
+      }
+    },
+    {
+      "kind": "extra",
+      "time": 519.52,
+      "direction": "out",
+      "vehicle_type": "motorcycle",
+      "ground_truth_id": null,
+      "ai_event_id": 11408,
+      "diagnostic_reason": "direct_unmatched",
+      "report_evidence": {
+        "candidate_count": 1,
+        "identity_proven": false,
+        "nearby_ground_truth": [
+          {
+            "assigned_ai_event_id": 11409,
+            "delta_seconds": -0.1384,
+            "direction_agrees": true,
+            "ground_truth_id": 7984
+          }
+        ],
+        "truncated": false
+      },
+      "matching_audit": null,
+      "review_candidate": null,
+      "trace_evidence": {
+        "frames": 51,
+        "tracks": {
+          "191795": {
+            "label": "motorcycle",
+            "first_time": 518.56,
+            "last_time": 520.52,
+            "side_negative": true,
+            "side_positive": true,
+            "near_line_samples": 23,
+            "samples": 47
+          },
+          "191794": {
+            "label": "motorcycle",
+            "first_time": 518.52,
+            "last_time": 520.4,
+            "side_negative": true,
+            "side_positive": true,
+            "near_line_samples": 13,
+            "samples": 24
+          },
+          "192389": {
+            "label": "motorcycle",
+            "first_time": 519.56,
+            "last_time": 520.52,
+            "side_negative": true,
+            "side_positive": true,
+            "near_line_samples": 2,
+            "samples": 22
+          },
+          "127516": {
+            "label": "motorcycle",
+            "first_time": 518.52,
+            "last_time": 520.52,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 48,
+            "samples": 48
+          },
+          "12074": {
+            "label": "motorcycle",
+            "first_time": 518.52,
+            "last_time": 520.52,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 51
+          },
+          "121518": {
+            "label": "motorcycle",
+            "first_time": 518.52,
+            "last_time": 520.52,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 51
+          },
+          "125158": {
+            "label": "motorcycle",
+            "first_time": 518.52,
+            "last_time": 520.52,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 51
+          },
+          "144140": {
+            "label": "motorcycle",
+            "first_time": 518.52,
+            "last_time": 520.52,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 51
+          },
+          "160260": {
+            "label": "motorcycle",
+            "first_time": 518.52,
+            "last_time": 520.52,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 51
+          },
+          "167925": {
+            "label": "motorcycle",
+            "first_time": 518.52,
+            "last_time": 520.52,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 51
+          },
+          "172935": {
+            "label": "motorcycle",
+            "first_time": 518.52,
+            "last_time": 520.52,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 51
+          },
+          "177874": {
+            "label": "motorcycle",
+            "first_time": 518.52,
+            "last_time": 520.52,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 51
+          }
+        },
+        "proposals": [
+          {
+            "time": 519.52,
+            "track_id": 191795,
+            "direction": "out",
+            "method": "direct"
+          },
+          {
+            "time": 519.654,
+            "track_id": 192389,
+            "direction": "out",
+            "method": "interpolated"
+          }
+        ],
+        "deliveries": [
+          {
+            "time": 519.52,
+            "event_id": 11408,
+            "outcome": "created",
+            "dedup_reason": null,
+            "track_id": 191795,
+            "direction": "out",
+            "crossing_method": "direct"
+          },
+          {
+            "time": 519.654,
+            "event_id": 11409,
+            "outcome": "created",
+            "dedup_reason": null,
+            "track_id": 192389,
+            "direction": "out",
+            "crossing_method": "interpolated"
+          }
+        ],
+        "reject_delta": {},
+        "tracks_both_sides": 3,
+        "near_line_tracks": 4
+      }
+    },
+    {
+      "kind": "missed",
+      "time": 525.21,
+      "direction": "out",
+      "vehicle_type": "motorcycle",
+      "ground_truth_id": 7985,
+      "ai_event_id": null,
+      "diagnostic_reason": "not_classified",
+      "report_evidence": null,
+      "matching_audit": null,
+      "review_candidate": null,
+      "trace_evidence": {
+        "frames": 50,
+        "tracks": {
+          "194513": {
+            "label": "motorcycle",
+            "first_time": 524.72,
+            "last_time": 526.2,
+            "side_negative": true,
+            "side_positive": true,
+            "near_line_samples": 7,
+            "samples": 19
+          },
+          "127516": {
+            "label": "motorcycle",
+            "first_time": 524.24,
+            "last_time": 526.2,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 50,
+            "samples": 50
+          },
+          "12074": {
+            "label": "motorcycle",
+            "first_time": 524.24,
+            "last_time": 526.2,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "121518": {
+            "label": "motorcycle",
+            "first_time": 524.24,
+            "last_time": 526.2,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "125158": {
+            "label": "motorcycle",
+            "first_time": 524.24,
+            "last_time": 526.2,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "144140": {
+            "label": "motorcycle",
+            "first_time": 524.24,
+            "last_time": 526.2,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "160260": {
+            "label": "motorcycle",
+            "first_time": 524.24,
+            "last_time": 526.2,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "167925": {
+            "label": "motorcycle",
+            "first_time": 524.24,
+            "last_time": 526.2,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "172935": {
+            "label": "motorcycle",
+            "first_time": 524.24,
+            "last_time": 526.2,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "177874": {
+            "label": "motorcycle",
+            "first_time": 524.24,
+            "last_time": 526.2,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "48646": {
+            "label": "motorcycle",
+            "first_time": 524.24,
+            "last_time": 526.2,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "191795": {
+            "label": "motorcycle",
+            "first_time": 524.44,
+            "last_time": 525.96,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 39
+          }
+        },
+        "proposals": [],
+        "deliveries": [],
+        "reject_delta": {},
+        "tracks_both_sides": 1,
+        "near_line_tracks": 2
+      }
+    },
+    {
+      "kind": "missed",
+      "time": 534.087,
+      "direction": "in",
+      "vehicle_type": "bicycle",
+      "ground_truth_id": 7986,
+      "ai_event_id": null,
+      "diagnostic_reason": "not_classified",
+      "report_evidence": null,
+      "matching_audit": null,
+      "review_candidate": null,
+      "trace_evidence": {
+        "frames": 50,
+        "tracks": {
+          "127516": {
+            "label": "motorcycle",
+            "first_time": 533.12,
+            "last_time": 535.08,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 15,
+            "samples": 48
+          },
+          "121518": {
+            "label": "motorcycle",
+            "first_time": 533.12,
+            "last_time": 535.08,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "125158": {
+            "label": "motorcycle",
+            "first_time": 533.12,
+            "last_time": 535.08,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "144140": {
+            "label": "motorcycle",
+            "first_time": 533.12,
+            "last_time": 535.08,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "167925": {
+            "label": "motorcycle",
+            "first_time": 533.12,
+            "last_time": 535.08,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "177874": {
+            "label": "motorcycle",
+            "first_time": 533.12,
+            "last_time": 535.08,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "48646": {
+            "label": "motorcycle",
+            "first_time": 533.12,
+            "last_time": 535.08,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "12074": {
+            "label": "motorcycle",
+            "first_time": 533.12,
+            "last_time": 535.08,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 44
+          },
+          "172935": {
+            "label": "motorcycle",
+            "first_time": 533.12,
+            "last_time": 535.08,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 32
+          },
+          "196734": {
+            "label": "motorcycle",
+            "first_time": 533.6,
+            "last_time": 535.08,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 32
+          },
+          "160260": {
+            "label": "motorcycle",
+            "first_time": 533.72,
+            "last_time": 535.08,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 29
+          },
+          "198982": {
+            "label": "motorcycle",
+            "first_time": 534.16,
+            "last_time": 534.76,
+            "side_negative": false,
+            "side_positive": true,
+            "near_line_samples": 0,
+            "samples": 8
+          }
+        },
+        "proposals": [],
+        "deliveries": [],
+        "reject_delta": {},
+        "tracks_both_sides": 0,
+        "near_line_tracks": 1
+      }
+    },
+    {
+      "kind": "missed",
+      "time": 591.091,
+      "direction": "in",
+      "vehicle_type": "bicycle",
+      "ground_truth_id": 7991,
+      "ai_event_id": null,
+      "diagnostic_reason": "not_classified",
+      "report_evidence": null,
+      "matching_audit": null,
+      "review_candidate": null,
+      "trace_evidence": {
+        "frames": 50,
+        "tracks": {
+          "12074": {
+            "label": "motorcycle",
+            "first_time": 590.12,
+            "last_time": 592.08,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "121518": {
+            "label": "motorcycle",
+            "first_time": 590.12,
+            "last_time": 592.08,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "125158": {
+            "label": "motorcycle",
+            "first_time": 590.12,
+            "last_time": 592.08,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "144140": {
+            "label": "motorcycle",
+            "first_time": 590.12,
+            "last_time": 592.08,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "167925": {
+            "label": "motorcycle",
+            "first_time": 590.12,
+            "last_time": 592.08,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "172935": {
+            "label": "motorcycle",
+            "first_time": 590.12,
+            "last_time": 592.08,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "177874": {
+            "label": "motorcycle",
+            "first_time": 590.12,
+            "last_time": 592.08,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "196734": {
+            "label": "motorcycle",
+            "first_time": 590.12,
+            "last_time": 592.08,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "202326": {
+            "label": "motorcycle",
+            "first_time": 590.12,
+            "last_time": 592.08,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "213462": {
+            "label": "motorcycle",
+            "first_time": 590.12,
+            "last_time": 592.08,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "127516": {
+            "label": "motorcycle",
+            "first_time": 590.24,
+            "last_time": 591.96,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 39
+          }
+        },
+        "proposals": [],
+        "deliveries": [],
+        "reject_delta": {},
+        "tracks_both_sides": 0,
+        "near_line_tracks": 0
+      }
+    },
+    {
+      "kind": "extra",
+      "time": 606.0,
+      "direction": "out",
+      "vehicle_type": "motorcycle",
+      "ground_truth_id": null,
+      "ai_event_id": 11415,
+      "diagnostic_reason": "spatial_duplicate_near_gt",
+      "report_evidence": {
+        "candidate_count": 1,
+        "identity_proven": false,
+        "nearby_ground_truth": [
+          {
+            "assigned_ai_event_id": 11416,
+            "delta_seconds": -0.1819,
+            "direction_agrees": true,
+            "ground_truth_id": 7993
+          }
+        ],
+        "truncated": false
+      },
+      "matching_audit": null,
+      "review_candidate": null,
+      "trace_evidence": {
+        "frames": 51,
+        "tracks": {
+          "234512": {
+            "label": "motorcycle",
+            "first_time": 605.0,
+            "last_time": 607.0,
+            "side_negative": true,
+            "side_positive": true,
+            "near_line_samples": 7,
+            "samples": 44
+          },
+          "127516": {
+            "label": "motorcycle",
+            "first_time": 605.0,
+            "last_time": 606.96,
+            "side_negative": true,
+            "side_positive": true,
+            "near_line_samples": 3,
+            "samples": 34
+          },
+          "235019": {
+            "label": "motorcycle",
+            "first_time": 605.12,
+            "last_time": 607.0,
+            "side_negative": true,
+            "side_positive": true,
+            "near_line_samples": 1,
+            "samples": 30
+          },
+          "232474": {
+            "label": "motorcycle",
+            "first_time": 605.0,
+            "last_time": 607.0,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 51,
+            "samples": 51
+          },
+          "121518": {
+            "label": "motorcycle",
+            "first_time": 605.0,
+            "last_time": 607.0,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 51
+          },
+          "167925": {
+            "label": "motorcycle",
+            "first_time": 605.0,
+            "last_time": 607.0,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 51
+          },
+          "177874": {
+            "label": "motorcycle",
+            "first_time": 605.0,
+            "last_time": 607.0,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 51
+          },
+          "196734": {
+            "label": "motorcycle",
+            "first_time": 605.0,
+            "last_time": 607.0,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 51
+          },
+          "202326": {
+            "label": "motorcycle",
+            "first_time": 605.0,
+            "last_time": 607.0,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 51
+          },
+          "213462": {
+            "label": "motorcycle",
+            "first_time": 605.0,
+            "last_time": 607.0,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 51
+          },
+          "144140": {
+            "label": "motorcycle",
+            "first_time": 605.0,
+            "last_time": 606.92,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 49
+          },
+          "12074": {
+            "label": "motorcycle",
+            "first_time": 605.0,
+            "last_time": 607.0,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 39
+          }
+        },
+        "proposals": [
+          {
+            "time": 606.0,
+            "track_id": 234512,
+            "direction": "out",
+            "method": "direct"
+          },
+          {
+            "time": 605.9572,
+            "track_id": 127516,
+            "direction": "in",
+            "method": "rescued"
+          },
+          {
+            "time": 606.2309,
+            "track_id": 235019,
+            "direction": "out",
+            "method": "interpolated"
+          },
+          {
+            "time": 606.2665,
+            "track_id": 127516,
+            "direction": "out",
+            "method": "rescued"
+          }
+        ],
+        "deliveries": [
+          {
+            "time": 606.0,
+            "event_id": 11415,
+            "outcome": "created",
+            "dedup_reason": null,
+            "track_id": 234512,
+            "direction": "out",
+            "crossing_method": "direct"
+          },
+          {
+            "time": 605.957,
+            "event_id": 11415,
+            "outcome": "deduplicated",
+            "dedup_reason": "secondary-reverse-shadow",
+            "track_id": 127516,
+            "direction": "in",
+            "crossing_method": "rescued"
+          },
+          {
+            "time": 606.231,
+            "event_id": 11416,
+            "outcome": "created",
+            "dedup_reason": null,
+            "track_id": 235019,
+            "direction": "out",
+            "crossing_method": "interpolated"
+          },
+          {
+            "time": 606.266,
+            "event_id": 11415,
+            "outcome": "deduplicated",
+            "dedup_reason": "two-wheel-spatial-signature",
+            "track_id": 127516,
+            "direction": "out",
+            "crossing_method": "rescued"
+          }
+        ],
+        "reject_delta": {},
+        "tracks_both_sides": 3,
+        "near_line_tracks": 4
+      }
+    },
+    {
+      "kind": "extra",
+      "time": 631.992,
+      "direction": "in",
+      "vehicle_type": "motorcycle",
+      "ground_truth_id": null,
+      "ai_event_id": 11418,
+      "diagnostic_reason": "rescued_gap_unmatched",
+      "report_evidence": null,
+      "matching_audit": null,
+      "review_candidate": null,
+      "trace_evidence": {
+        "frames": 50,
+        "tracks": {
+          "248105": {
+            "label": "motorcycle",
+            "first_time": 631.0,
+            "last_time": 632.96,
+            "side_negative": true,
+            "side_positive": true,
+            "near_line_samples": 24,
+            "samples": 29
+          },
+          "232474": {
+            "label": "motorcycle",
+            "first_time": 631.32,
+            "last_time": 632.52,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 31,
+            "samples": 31
+          },
+          "12074": {
+            "label": "motorcycle",
+            "first_time": 631.0,
+            "last_time": 632.96,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "121518": {
+            "label": "motorcycle",
+            "first_time": 631.0,
+            "last_time": 632.96,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "177874": {
+            "label": "motorcycle",
+            "first_time": 631.0,
+            "last_time": 632.96,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "196734": {
+            "label": "motorcycle",
+            "first_time": 631.0,
+            "last_time": 632.96,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "202326": {
+            "label": "motorcycle",
+            "first_time": 631.0,
+            "last_time": 632.96,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "213462": {
+            "label": "motorcycle",
+            "first_time": 631.0,
+            "last_time": 632.96,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "235226": {
+            "label": "motorcycle",
+            "first_time": 631.0,
+            "last_time": 632.96,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "237441": {
+            "label": "motorcycle",
+            "first_time": 631.0,
+            "last_time": 632.96,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "250957": {
+            "label": "motorcycle",
+            "first_time": 631.0,
+            "last_time": 632.96,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "247546": {
+            "label": "motorcycle",
+            "first_time": 631.2,
+            "last_time": 632.96,
+            "side_negative": false,
+            "side_positive": true,
+            "near_line_samples": 0,
+            "samples": 45
+          }
+        },
+        "proposals": [
+          {
+            "time": 631.9924,
+            "track_id": 248105,
+            "direction": "in",
+            "method": "rescued"
+          }
+        ],
+        "deliveries": [
+          {
+            "time": 631.992,
+            "event_id": 11418,
+            "outcome": "created",
+            "dedup_reason": null,
+            "track_id": 248105,
+            "direction": "in",
+            "crossing_method": "rescued"
+          }
+        ],
+        "reject_delta": {},
+        "tracks_both_sides": 1,
+        "near_line_tracks": 2
+      }
+    },
+    {
+      "kind": "extra",
+      "time": 637.988,
+      "direction": "out",
+      "vehicle_type": "motorcycle",
+      "ground_truth_id": null,
+      "ai_event_id": 11419,
+      "diagnostic_reason": "rescued_gap_unmatched",
+      "report_evidence": null,
+      "matching_audit": null,
+      "review_candidate": null,
+      "trace_evidence": {
+        "frames": 50,
+        "tracks": {
+          "248105": {
+            "label": "motorcycle",
+            "first_time": 637.04,
+            "last_time": 638.96,
+            "side_negative": true,
+            "side_positive": true,
+            "near_line_samples": 4,
+            "samples": 17
+          },
+          "255407": {
+            "label": "motorcycle",
+            "first_time": 638.68,
+            "last_time": 638.72,
+            "side_negative": true,
+            "side_positive": true,
+            "near_line_samples": 1,
+            "samples": 2
+          },
+          "251681": {
+            "label": "motorcycle",
+            "first_time": 637.0,
+            "last_time": 638.96,
+            "side_negative": true,
+            "side_positive": true,
+            "near_line_samples": 0,
+            "samples": 37
+          },
+          "234512": {
+            "label": "motorcycle",
+            "first_time": 637.0,
+            "last_time": 638.96,
+            "side_negative": false,
+            "side_positive": true,
+            "near_line_samples": 35,
+            "samples": 35
+          },
+          "255484": {
+            "label": "motorcycle",
+            "first_time": 638.8,
+            "last_time": 638.88,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 3,
+            "samples": 3
+          },
+          "121518": {
+            "label": "motorcycle",
+            "first_time": 637.0,
+            "last_time": 638.96,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "177874": {
+            "label": "motorcycle",
+            "first_time": 637.0,
+            "last_time": 638.96,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "196734": {
+            "label": "motorcycle",
+            "first_time": 637.0,
+            "last_time": 638.96,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "202326": {
+            "label": "motorcycle",
+            "first_time": 637.0,
+            "last_time": 638.96,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "235226": {
+            "label": "motorcycle",
+            "first_time": 637.0,
+            "last_time": 638.96,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "237441": {
+            "label": "motorcycle",
+            "first_time": 637.0,
+            "last_time": 638.96,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "250957": {
+            "label": "motorcycle",
+            "first_time": 637.0,
+            "last_time": 638.96,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          }
+        },
+        "proposals": [
+          {
+            "time": 637.9877,
+            "track_id": 248105,
+            "direction": "out",
+            "method": "rescued"
+          },
+          {
+            "time": 638.12,
+            "track_id": 251681,
+            "direction": "in",
+            "method": "direct"
+          },
+          {
+            "time": 638.72,
+            "track_id": 255407,
+            "direction": "out",
+            "method": "direct"
+          }
+        ],
+        "deliveries": [
+          {
+            "time": 637.988,
+            "event_id": 11419,
+            "outcome": "created",
+            "dedup_reason": null,
+            "track_id": 248105,
+            "direction": "out",
+            "crossing_method": "rescued"
+          },
+          {
+            "time": 638.12,
+            "event_id": 11420,
+            "outcome": "created",
+            "dedup_reason": null,
+            "track_id": 251681,
+            "direction": "in",
+            "crossing_method": "direct"
+          },
+          {
+            "time": 638.72,
+            "event_id": 11421,
+            "outcome": "created",
+            "dedup_reason": null,
+            "track_id": 255407,
+            "direction": "out",
+            "crossing_method": "direct"
+          }
+        ],
+        "reject_delta": {},
+        "tracks_both_sides": 3,
+        "near_line_tracks": 4
+      }
+    },
+    {
+      "kind": "extra",
+      "time": 638.12,
+      "direction": "in",
+      "vehicle_type": "motorcycle",
+      "ground_truth_id": null,
+      "ai_event_id": 11420,
+      "diagnostic_reason": "direct_unmatched",
+      "report_evidence": null,
+      "matching_audit": null,
+      "review_candidate": null,
+      "trace_evidence": {
+        "frames": 51,
+        "tracks": {
+          "234512": {
+            "label": "motorcycle",
+            "first_time": 637.16,
+            "last_time": 639.12,
+            "side_negative": true,
+            "side_positive": true,
+            "near_line_samples": 38,
+            "samples": 38
+          },
+          "248105": {
+            "label": "motorcycle",
+            "first_time": 637.88,
+            "last_time": 639.12,
+            "side_negative": true,
+            "side_positive": true,
+            "near_line_samples": 4,
+            "samples": 20
+          },
+          "255484": {
+            "label": "motorcycle",
+            "first_time": 638.8,
+            "last_time": 639.12,
+            "side_negative": true,
+            "side_positive": true,
+            "near_line_samples": 3,
+            "samples": 4
+          },
+          "255407": {
+            "label": "motorcycle",
+            "first_time": 638.68,
+            "last_time": 638.72,
+            "side_negative": true,
+            "side_positive": true,
+            "near_line_samples": 1,
+            "samples": 2
+          },
+          "251681": {
+            "label": "motorcycle",
+            "first_time": 637.12,
+            "last_time": 639.12,
+            "side_negative": true,
+            "side_positive": true,
+            "near_line_samples": 0,
+            "samples": 38
+          },
+          "121518": {
+            "label": "motorcycle",
+            "first_time": 637.12,
+            "last_time": 639.12,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 51
+          },
+          "177874": {
+            "label": "motorcycle",
+            "first_time": 637.12,
+            "last_time": 639.12,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 51
+          },
+          "196734": {
+            "label": "motorcycle",
+            "first_time": 637.12,
+            "last_time": 639.12,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 51
+          },
+          "202326": {
+            "label": "motorcycle",
+            "first_time": 637.12,
+            "last_time": 639.12,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 51
+          },
+          "235226": {
+            "label": "motorcycle",
+            "first_time": 637.12,
+            "last_time": 639.12,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 51
+          },
+          "237441": {
+            "label": "motorcycle",
+            "first_time": 637.12,
+            "last_time": 639.12,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 51
+          },
+          "250957": {
+            "label": "motorcycle",
+            "first_time": 637.12,
+            "last_time": 639.12,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 51
+          }
+        },
+        "proposals": [
+          {
+            "time": 637.9877,
+            "track_id": 248105,
+            "direction": "out",
+            "method": "rescued"
+          },
+          {
+            "time": 638.12,
+            "track_id": 251681,
+            "direction": "in",
+            "method": "direct"
+          },
+          {
+            "time": 638.72,
+            "track_id": 255407,
+            "direction": "out",
+            "method": "direct"
+          }
+        ],
+        "deliveries": [
+          {
+            "time": 637.988,
+            "event_id": 11419,
+            "outcome": "created",
+            "dedup_reason": null,
+            "track_id": 248105,
+            "direction": "out",
+            "crossing_method": "rescued"
+          },
+          {
+            "time": 638.12,
+            "event_id": 11420,
+            "outcome": "created",
+            "dedup_reason": null,
+            "track_id": 251681,
+            "direction": "in",
+            "crossing_method": "direct"
+          },
+          {
+            "time": 638.72,
+            "event_id": 11421,
+            "outcome": "created",
+            "dedup_reason": null,
+            "track_id": 255407,
+            "direction": "out",
+            "crossing_method": "direct"
+          }
+        ],
+        "reject_delta": {},
+        "tracks_both_sides": 5,
+        "near_line_tracks": 4
+      }
+    },
+    {
+      "kind": "missed",
+      "time": 640.141,
+      "direction": "in",
+      "vehicle_type": "motorcycle",
+      "ground_truth_id": 7996,
+      "ai_event_id": null,
+      "diagnostic_reason": "not_classified",
+      "report_evidence": null,
+      "matching_audit": null,
+      "review_candidate": null,
+      "trace_evidence": {
+        "frames": 50,
+        "tracks": {
+          "251681": {
+            "label": "motorcycle",
+            "first_time": 639.16,
+            "last_time": 640.84,
+            "side_negative": true,
+            "side_positive": true,
+            "near_line_samples": 11,
+            "samples": 36
+          },
+          "234512": {
+            "label": "motorcycle",
+            "first_time": 639.16,
+            "last_time": 640.96,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 22,
+            "samples": 26
+          },
+          "255407": {
+            "label": "motorcycle",
+            "first_time": 639.6,
+            "last_time": 641.0,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 5,
+            "samples": 14
+          },
+          "12074": {
+            "label": "motorcycle",
+            "first_time": 639.16,
+            "last_time": 641.12,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 2,
+            "samples": 47
+          },
+          "121518": {
+            "label": "motorcycle",
+            "first_time": 639.16,
+            "last_time": 641.12,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "177874": {
+            "label": "motorcycle",
+            "first_time": 639.16,
+            "last_time": 641.12,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "196734": {
+            "label": "motorcycle",
+            "first_time": 639.16,
+            "last_time": 641.12,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "213462": {
+            "label": "motorcycle",
+            "first_time": 639.16,
+            "last_time": 641.12,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "250957": {
+            "label": "motorcycle",
+            "first_time": 639.16,
+            "last_time": 641.12,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "254023": {
+            "label": "car",
+            "first_time": 639.16,
+            "last_time": 641.12,
+            "side_negative": false,
+            "side_positive": true,
+            "near_line_samples": 0,
+            "samples": 49
+          },
+          "202326": {
+            "label": "motorcycle",
+            "first_time": 639.16,
+            "last_time": 640.92,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 45
+          },
+          "237441": {
+            "label": "motorcycle",
+            "first_time": 639.16,
+            "last_time": 641.12,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 42
+          }
+        },
+        "proposals": [
+          {
+            "time": 639.7107,
+            "track_id": 251681,
+            "direction": "in",
+            "method": "rescued"
+          }
+        ],
+        "deliveries": [
+          {
+            "time": 639.711,
+            "event_id": 11420,
+            "outcome": "deduplicated",
+            "dedup_reason": "same-track-repeat-jitter",
+            "track_id": 251681,
+            "direction": "in",
+            "crossing_method": "rescued"
+          }
+        ],
+        "reject_delta": {},
+        "tracks_both_sides": 1,
+        "near_line_tracks": 4
+      }
+    },
+    {
+      "kind": "extra",
+      "time": 808.0,
+      "direction": "out",
+      "vehicle_type": "motorcycle",
+      "ground_truth_id": null,
+      "ai_event_id": 11449,
+      "diagnostic_reason": "direct_unmatched",
+      "report_evidence": {
+        "candidate_count": 2,
+        "identity_proven": false,
+        "nearby_ground_truth": [
+          {
+            "assigned_ai_event_id": 11450,
+            "delta_seconds": -0.6799,
+            "direction_agrees": true,
+            "ground_truth_id": 8024
+          },
+          {
+            "assigned_ai_event_id": 11448,
+            "delta_seconds": 0.726,
+            "direction_agrees": true,
+            "ground_truth_id": 8023
+          }
+        ],
+        "truncated": false
+      },
+      "matching_audit": null,
+      "review_candidate": null,
+      "trace_evidence": {
+        "frames": 51,
+        "tracks": {
+          "365295": {
+            "label": "motorcycle",
+            "first_time": 807.0,
+            "last_time": 808.92,
+            "side_negative": true,
+            "side_positive": true,
+            "near_line_samples": 11,
+            "samples": 43
+          },
+          "368014": {
+            "label": "motorcycle",
+            "first_time": 807.92,
+            "last_time": 808.96,
+            "side_negative": true,
+            "side_positive": true,
+            "near_line_samples": 8,
+            "samples": 13
+          },
+          "362194": {
+            "label": "motorcycle",
+            "first_time": 807.0,
+            "last_time": 809.0,
+            "side_negative": true,
+            "side_positive": true,
+            "near_line_samples": 2,
+            "samples": 16
+          },
+          "366926": {
+            "label": "motorcycle",
+            "first_time": 807.04,
+            "last_time": 809.0,
+            "side_negative": true,
+            "side_positive": true,
+            "near_line_samples": 1,
+            "samples": 46
+          },
+          "345897": {
+            "label": "motorcycle",
+            "first_time": 807.68,
+            "last_time": 809.0,
+            "side_negative": true,
+            "side_positive": true,
+            "near_line_samples": 0,
+            "samples": 6
+          },
+          "365623": {
+            "label": "motorcycle",
+            "first_time": 807.0,
+            "last_time": 808.92,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 22,
+            "samples": 40
+          },
+          "250957": {
+            "label": "motorcycle",
+            "first_time": 807.0,
+            "last_time": 809.0,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 51
+          },
+          "286434": {
+            "label": "truck",
+            "first_time": 807.0,
+            "last_time": 809.0,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 51
+          },
+          "307814": {
+            "label": "motorcycle",
+            "first_time": 807.0,
+            "last_time": 809.0,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 51
+          },
+          "365987": {
+            "label": "motorcycle",
+            "first_time": 807.0,
+            "last_time": 809.0,
+            "side_negative": false,
+            "side_positive": true,
+            "near_line_samples": 0,
+            "samples": 51
+          },
+          "-3": {
+            "label": "motorcycle",
+            "first_time": 807.0,
+            "last_time": 809.0,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "360295": {
+            "label": "motorcycle",
+            "first_time": 807.0,
+            "last_time": 809.0,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          }
+        },
+        "proposals": [
+          {
+            "time": 806.9492,
+            "track_id": 365295,
+            "direction": "in",
+            "method": "rescued"
+          },
+          {
+            "time": 807.0165,
+            "track_id": 365295,
+            "direction": "out",
+            "method": "rescued"
+          },
+          {
+            "time": 808.0,
+            "track_id": 368014,
+            "direction": "out",
+            "method": "direct"
+          },
+          {
+            "time": 808.3966,
+            "track_id": 368014,
+            "direction": "in",
+            "method": "rescued"
+          },
+          {
+            "time": 808.6273,
+            "track_id": 368014,
+            "direction": "out",
+            "method": "rescued"
+          },
+          {
+            "time": 808.84,
+            "track_id": 362194,
+            "direction": "out",
+            "method": "direct"
+          }
+        ],
+        "deliveries": [
+          {
+            "time": 807.016,
+            "event_id": 11448,
+            "outcome": "deduplicated",
+            "dedup_reason": "same-track-repeat-jitter",
+            "track_id": 365295,
+            "direction": "out",
+            "crossing_method": "rescued"
+          },
+          {
+            "time": 808.0,
+            "event_id": 11449,
+            "outcome": "created",
+            "dedup_reason": null,
+            "track_id": 368014,
+            "direction": "out",
+            "crossing_method": "direct"
+          },
+          {
+            "time": 808.397,
+            "event_id": 11449,
+            "outcome": "deduplicated",
+            "dedup_reason": "same-track-direction-flip",
+            "track_id": 368014,
+            "direction": "in",
+            "crossing_method": "rescued"
+          },
+          {
+            "time": 808.627,
+            "event_id": 11449,
+            "outcome": "deduplicated",
+            "dedup_reason": "same-track-repeat-jitter",
+            "track_id": 368014,
+            "direction": "out",
+            "crossing_method": "rescued"
+          },
+          {
+            "time": 808.84,
+            "event_id": 11450,
+            "outcome": "created",
+            "dedup_reason": null,
+            "track_id": 362194,
+            "direction": "out",
+            "crossing_method": "direct"
+          }
+        ],
+        "reject_delta": {},
+        "tracks_both_sides": 5,
+        "near_line_tracks": 5
+      }
+    },
+    {
+      "kind": "extra",
+      "time": 811.64,
+      "direction": "in",
+      "vehicle_type": "motorcycle",
+      "ground_truth_id": null,
+      "ai_event_id": 11451,
+      "diagnostic_reason": "direct_unmatched",
+      "report_evidence": null,
+      "matching_audit": null,
+      "review_candidate": null,
+      "trace_evidence": {
+        "frames": 51,
+        "tracks": {
+          "345897": {
+            "label": "motorcycle",
+            "first_time": 810.64,
+            "last_time": 812.64,
+            "side_negative": true,
+            "side_positive": true,
+            "near_line_samples": 30,
+            "samples": 43
+          },
+          "366926": {
+            "label": "motorcycle",
+            "first_time": 810.68,
+            "last_time": 812.64,
+            "side_negative": true,
+            "side_positive": true,
+            "near_line_samples": 16,
+            "samples": 25
+          },
+          "365623": {
+            "label": "motorcycle",
+            "first_time": 810.64,
+            "last_time": 811.44,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 18,
+            "samples": 18
+          },
+          "370771": {
+            "label": "motorcycle",
+            "first_time": 812.2,
+            "last_time": 812.64,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 12,
+            "samples": 12
+          },
+          "-3": {
+            "label": "motorcycle",
+            "first_time": 810.64,
+            "last_time": 812.64,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 51
+          },
+          "121518": {
+            "label": "motorcycle",
+            "first_time": 810.64,
+            "last_time": 812.64,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 51
+          },
+          "250957": {
+            "label": "motorcycle",
+            "first_time": 810.64,
+            "last_time": 812.64,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 51
+          },
+          "286434": {
+            "label": "truck",
+            "first_time": 810.64,
+            "last_time": 812.64,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 51
+          },
+          "307814": {
+            "label": "motorcycle",
+            "first_time": 810.64,
+            "last_time": 812.64,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 51
+          },
+          "349506": {
+            "label": "motorcycle",
+            "first_time": 810.64,
+            "last_time": 812.64,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 51
+          },
+          "360295": {
+            "label": "motorcycle",
+            "first_time": 810.64,
+            "last_time": 812.64,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 51
+          },
+          "361282": {
+            "label": "motorcycle",
+            "first_time": 810.64,
+            "last_time": 812.64,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 51
+          }
+        },
+        "proposals": [
+          {
+            "time": 811.64,
+            "track_id": 345897,
+            "direction": "in",
+            "method": "direct"
+          },
+          {
+            "time": 811.776,
+            "track_id": 345897,
+            "direction": "out",
+            "method": "rescued"
+          },
+          {
+            "time": 812.1012,
+            "track_id": 345897,
+            "direction": "in",
+            "method": "rescued"
+          },
+          {
+            "time": 812.1736,
+            "track_id": 345897,
+            "direction": "out",
+            "method": "rescued"
+          }
+        ],
+        "deliveries": [
+          {
+            "time": 811.64,
+            "event_id": 11451,
+            "outcome": "created",
+            "dedup_reason": null,
+            "track_id": 345897,
+            "direction": "in",
+            "crossing_method": "direct"
+          },
+          {
+            "time": 811.776,
+            "event_id": 11451,
+            "outcome": "deduplicated",
+            "dedup_reason": "same-track-direction-flip",
+            "track_id": 345897,
+            "direction": "out",
+            "crossing_method": "rescued"
+          },
+          {
+            "time": 812.101,
+            "event_id": 11451,
+            "outcome": "deduplicated",
+            "dedup_reason": "same-track-repeat-jitter",
+            "track_id": 345897,
+            "direction": "in",
+            "crossing_method": "rescued"
+          },
+          {
+            "time": 812.174,
+            "event_id": 11451,
+            "outcome": "deduplicated",
+            "dedup_reason": "same-track-direction-flip",
+            "track_id": 345897,
+            "direction": "out",
+            "crossing_method": "rescued"
+          },
+          {
+            "time": 812.571,
+            "event_id": 11452,
+            "outcome": "created",
+            "dedup_reason": null,
+            "track_id": 366926,
+            "direction": "out",
+            "crossing_method": "rescued"
+          }
+        ],
+        "reject_delta": {},
+        "tracks_both_sides": 2,
+        "near_line_tracks": 4
+      }
+    },
+    {
+      "kind": "extra",
+      "time": 812.571,
+      "direction": "out",
+      "vehicle_type": "motorcycle",
+      "ground_truth_id": null,
+      "ai_event_id": 11452,
+      "diagnostic_reason": "rescued_gap_unmatched",
+      "report_evidence": null,
+      "matching_audit": null,
+      "review_candidate": null,
+      "trace_evidence": {
+        "frames": 50,
+        "tracks": {
+          "345897": {
+            "label": "motorcycle",
+            "first_time": 811.6,
+            "last_time": 813.56,
+            "side_negative": true,
+            "side_positive": true,
+            "near_line_samples": 22,
+            "samples": 50
+          },
+          "366926": {
+            "label": "motorcycle",
+            "first_time": 811.72,
+            "last_time": 813.56,
+            "side_negative": true,
+            "side_positive": true,
+            "near_line_samples": 9,
+            "samples": 15
+          },
+          "370771": {
+            "label": "motorcycle",
+            "first_time": 812.2,
+            "last_time": 813.56,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 35,
+            "samples": 35
+          },
+          "-3": {
+            "label": "motorcycle",
+            "first_time": 811.6,
+            "last_time": 813.56,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "121518": {
+            "label": "motorcycle",
+            "first_time": 811.6,
+            "last_time": 813.56,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "250957": {
+            "label": "motorcycle",
+            "first_time": 811.6,
+            "last_time": 813.56,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "286434": {
+            "label": "truck",
+            "first_time": 811.6,
+            "last_time": 813.56,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "307814": {
+            "label": "motorcycle",
+            "first_time": 811.6,
+            "last_time": 813.56,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "349506": {
+            "label": "motorcycle",
+            "first_time": 811.6,
+            "last_time": 813.56,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "360295": {
+            "label": "motorcycle",
+            "first_time": 811.6,
+            "last_time": 813.56,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "361282": {
+            "label": "motorcycle",
+            "first_time": 811.6,
+            "last_time": 813.56,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "363621": {
+            "label": "motorcycle",
+            "first_time": 811.6,
+            "last_time": 813.56,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          }
+        },
+        "proposals": [
+          {
+            "time": 811.64,
+            "track_id": 345897,
+            "direction": "in",
+            "method": "direct"
+          },
+          {
+            "time": 811.776,
+            "track_id": 345897,
+            "direction": "out",
+            "method": "rescued"
+          },
+          {
+            "time": 812.1012,
+            "track_id": 345897,
+            "direction": "in",
+            "method": "rescued"
+          },
+          {
+            "time": 812.1736,
+            "track_id": 345897,
+            "direction": "out",
+            "method": "rescued"
+          },
+          {
+            "time": 812.5711,
+            "track_id": 366926,
+            "direction": "out",
+            "method": "rescued"
+          }
+        ],
+        "deliveries": [
+          {
+            "time": 811.64,
+            "event_id": 11451,
+            "outcome": "created",
+            "dedup_reason": null,
+            "track_id": 345897,
+            "direction": "in",
+            "crossing_method": "direct"
+          },
+          {
+            "time": 811.776,
+            "event_id": 11451,
+            "outcome": "deduplicated",
+            "dedup_reason": "same-track-direction-flip",
+            "track_id": 345897,
+            "direction": "out",
+            "crossing_method": "rescued"
+          },
+          {
+            "time": 812.101,
+            "event_id": 11451,
+            "outcome": "deduplicated",
+            "dedup_reason": "same-track-repeat-jitter",
+            "track_id": 345897,
+            "direction": "in",
+            "crossing_method": "rescued"
+          },
+          {
+            "time": 812.174,
+            "event_id": 11451,
+            "outcome": "deduplicated",
+            "dedup_reason": "same-track-direction-flip",
+            "track_id": 345897,
+            "direction": "out",
+            "crossing_method": "rescued"
+          },
+          {
+            "time": 812.571,
+            "event_id": 11452,
+            "outcome": "created",
+            "dedup_reason": null,
+            "track_id": 366926,
+            "direction": "out",
+            "crossing_method": "rescued"
+          }
+        ],
+        "reject_delta": {},
+        "tracks_both_sides": 2,
+        "near_line_tracks": 3
+      }
+    },
+    {
+      "kind": "extra",
+      "time": 815.248,
+      "direction": "out",
+      "vehicle_type": "motorcycle",
+      "ground_truth_id": null,
+      "ai_event_id": 11453,
+      "diagnostic_reason": "rescued_gap_unmatched",
+      "report_evidence": null,
+      "matching_audit": null,
+      "review_candidate": null,
+      "trace_evidence": {
+        "frames": 50,
+        "tracks": {
+          "345897": {
+            "label": "motorcycle",
+            "first_time": 814.28,
+            "last_time": 816.24,
+            "side_negative": true,
+            "side_positive": true,
+            "near_line_samples": 19,
+            "samples": 48
+          },
+          "372156": {
+            "label": "motorcycle",
+            "first_time": 814.8,
+            "last_time": 816.24,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 29,
+            "samples": 30
+          },
+          "370771": {
+            "label": "motorcycle",
+            "first_time": 814.28,
+            "last_time": 816.24,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 11,
+            "samples": 41
+          },
+          "-3": {
+            "label": "motorcycle",
+            "first_time": 814.28,
+            "last_time": 816.24,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "286434": {
+            "label": "truck",
+            "first_time": 814.28,
+            "last_time": 816.24,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "307814": {
+            "label": "motorcycle",
+            "first_time": 814.28,
+            "last_time": 816.24,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "349506": {
+            "label": "motorcycle",
+            "first_time": 814.28,
+            "last_time": 816.24,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "361282": {
+            "label": "motorcycle",
+            "first_time": 814.28,
+            "last_time": 816.24,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "363621": {
+            "label": "motorcycle",
+            "first_time": 814.28,
+            "last_time": 816.24,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "364961": {
+            "label": "motorcycle",
+            "first_time": 814.28,
+            "last_time": 816.24,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "121518": {
+            "label": "motorcycle",
+            "first_time": 814.28,
+            "last_time": 816.24,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 49
+          },
+          "250957": {
+            "label": "motorcycle",
+            "first_time": 814.28,
+            "last_time": 816.24,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 49
+          }
+        },
+        "proposals": [
+          {
+            "time": 815.1514,
+            "track_id": 345897,
+            "direction": "in",
+            "method": "interpolated"
+          },
+          {
+            "time": 815.2484,
+            "track_id": 345897,
+            "direction": "out",
+            "method": "rescued"
+          },
+          {
+            "time": 815.597,
+            "track_id": 345897,
+            "direction": "in",
+            "method": "rescued"
+          },
+          {
+            "time": 815.68,
+            "track_id": 345897,
+            "direction": "out",
+            "method": "rescued"
+          }
+        ],
+        "deliveries": [
+          {
+            "time": 815.151,
+            "event_id": 11451,
+            "outcome": "deduplicated",
+            "dedup_reason": "same-track-repeat-jitter",
+            "track_id": 345897,
+            "direction": "in",
+            "crossing_method": "interpolated"
+          },
+          {
+            "time": 815.248,
+            "event_id": 11453,
+            "outcome": "created",
+            "dedup_reason": null,
+            "track_id": 345897,
+            "direction": "out",
+            "crossing_method": "rescued"
+          },
+          {
+            "time": 815.597,
+            "event_id": 11453,
+            "outcome": "deduplicated",
+            "dedup_reason": "same-track-direction-flip",
+            "track_id": 345897,
+            "direction": "in",
+            "crossing_method": "rescued"
+          },
+          {
+            "time": 815.68,
+            "event_id": 11453,
+            "outcome": "deduplicated",
+            "dedup_reason": "same-track-repeat-jitter",
+            "track_id": 345897,
+            "direction": "out",
+            "crossing_method": "rescued"
+          }
+        ],
+        "reject_delta": {},
+        "tracks_both_sides": 1,
+        "near_line_tracks": 3
+      }
+    },
+    {
+      "kind": "missed",
+      "time": 816.965,
+      "direction": "in",
+      "vehicle_type": "motorcycle",
+      "ground_truth_id": 8025,
+      "ai_event_id": null,
+      "diagnostic_reason": "not_classified",
+      "report_evidence": null,
+      "matching_audit": null,
+      "review_candidate": null,
+      "trace_evidence": {
+        "frames": 50,
+        "tracks": {
+          "345897": {
+            "label": "motorcycle",
+            "first_time": 816.0,
+            "last_time": 817.96,
+            "side_negative": true,
+            "side_positive": true,
+            "near_line_samples": 19,
+            "samples": 48
+          },
+          "360295": {
+            "label": "motorcycle",
+            "first_time": 816.12,
+            "last_time": 817.96,
+            "side_negative": true,
+            "side_positive": true,
+            "near_line_samples": 0,
+            "samples": 13
+          },
+          "370771": {
+            "label": "motorcycle",
+            "first_time": 816.0,
+            "last_time": 817.96,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 50,
+            "samples": 50
+          },
+          "372156": {
+            "label": "motorcycle",
+            "first_time": 816.2,
+            "last_time": 817.96,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 45,
+            "samples": 45
+          },
+          "-3": {
+            "label": "motorcycle",
+            "first_time": 816.0,
+            "last_time": 817.96,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "307814": {
+            "label": "motorcycle",
+            "first_time": 816.0,
+            "last_time": 817.96,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "349506": {
+            "label": "motorcycle",
+            "first_time": 816.0,
+            "last_time": 817.96,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "361282": {
+            "label": "motorcycle",
+            "first_time": 816.0,
+            "last_time": 817.96,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "364961": {
+            "label": "motorcycle",
+            "first_time": 816.0,
+            "last_time": 817.96,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "286434": {
+            "label": "truck",
+            "first_time": 816.0,
+            "last_time": 817.96,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 49
+          },
+          "121518": {
+            "label": "motorcycle",
+            "first_time": 816.0,
+            "last_time": 817.96,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 46
+          },
+          "372198": {
+            "label": "motorcycle",
+            "first_time": 816.0,
+            "last_time": 817.96,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 46
+          }
+        },
+        "proposals": [
+          {
+            "time": 816.44,
+            "track_id": 345897,
+            "direction": "in",
+            "method": "direct"
+          },
+          {
+            "time": 816.5002,
+            "track_id": 345897,
+            "direction": "out",
+            "method": "rescued"
+          },
+          {
+            "time": 816.73,
+            "track_id": 345897,
+            "direction": "in",
+            "method": "rescued"
+          }
+        ],
+        "deliveries": [
+          {
+            "time": 816.44,
+            "event_id": 11453,
+            "outcome": "deduplicated",
+            "dedup_reason": "same-track-direction-flip",
+            "track_id": 345897,
+            "direction": "in",
+            "crossing_method": "direct"
+          },
+          {
+            "time": 816.5,
+            "event_id": 11453,
+            "outcome": "deduplicated",
+            "dedup_reason": "same-track-repeat-jitter",
+            "track_id": 345897,
+            "direction": "out",
+            "crossing_method": "rescued"
+          },
+          {
+            "time": 816.73,
+            "event_id": 11453,
+            "outcome": "deduplicated",
+            "dedup_reason": "same-track-direction-flip",
+            "track_id": 345897,
+            "direction": "in",
+            "crossing_method": "rescued"
+          }
+        ],
+        "reject_delta": {},
+        "tracks_both_sides": 2,
+        "near_line_tracks": 3
+      }
+    },
+    {
+      "kind": "extra",
+      "time": 882.29,
+      "direction": "in",
+      "vehicle_type": "truck",
+      "ground_truth_id": null,
+      "ai_event_id": 11465,
+      "diagnostic_reason": "interpolated_unmatched",
+      "report_evidence": null,
+      "matching_audit": null,
+      "review_candidate": null,
+      "trace_evidence": {
+        "frames": 50,
+        "tracks": {
+          "286434": {
+            "label": "truck",
+            "first_time": 881.32,
+            "last_time": 883.28,
+            "side_negative": true,
+            "side_positive": true,
+            "near_line_samples": 18,
+            "samples": 49
+          },
+          "372156": {
+            "label": "motorcycle",
+            "first_time": 881.32,
+            "last_time": 883.28,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 50,
+            "samples": 50
+          },
+          "415968": {
+            "label": "motorcycle",
+            "first_time": 882.76,
+            "last_time": 883.28,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 13,
+            "samples": 14
+          },
+          "121518": {
+            "label": "motorcycle",
+            "first_time": 881.32,
+            "last_time": 883.28,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "250957": {
+            "label": "motorcycle",
+            "first_time": 881.32,
+            "last_time": 883.28,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "360295": {
+            "label": "motorcycle",
+            "first_time": 881.32,
+            "last_time": 883.28,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "403237": {
+            "label": "motorcycle",
+            "first_time": 881.32,
+            "last_time": 883.28,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "406665": {
+            "label": "motorcycle",
+            "first_time": 881.32,
+            "last_time": 883.28,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "408364": {
+            "label": "motorcycle",
+            "first_time": 881.32,
+            "last_time": 883.28,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "413223": {
+            "label": "motorcycle",
+            "first_time": 881.32,
+            "last_time": 883.28,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 50
+          },
+          "413164": {
+            "label": "motorcycle",
+            "first_time": 881.32,
+            "last_time": 883.28,
+            "side_negative": false,
+            "side_positive": true,
+            "near_line_samples": 0,
+            "samples": 49
+          },
+          "-3": {
+            "label": "motorcycle",
+            "first_time": 881.32,
+            "last_time": 883.28,
+            "side_negative": true,
+            "side_positive": false,
+            "near_line_samples": 0,
+            "samples": 44
+          }
+        },
+        "proposals": [
+          {
+            "time": 882.2898,
+            "track_id": 286434,
+            "direction": "in",
+            "method": "interpolated"
+          }
+        ],
+        "deliveries": [
+          {
+            "time": 882.29,
+            "event_id": 11465,
+            "outcome": "created",
+            "dedup_reason": null,
+            "track_id": 286434,
+            "direction": "in",
+            "crossing_method": "interpolated"
+          }
+        ],
+        "reject_delta": {},
+        "tracks_both_sides": 1,
+        "near_line_tracks": 3
+      }
+    }
+  ],
+  "disclaimer": "Read-only diagnostic. A two-sided tracker observation is not proof of a distinct physical vehicle. GT is never altered."
+}

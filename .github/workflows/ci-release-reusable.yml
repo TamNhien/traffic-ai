@@ -46,6 +46,11 @@ jobs:
           node-version: '26.10.0'
           package-manager-cache: false
 
+      - name: Validate release metadata and migration chain
+        run: |
+          python scripts/version-contract.py
+          python -m unittest discover -s scripts/tests -p test_version_contract.py -v
+
       - name: Backend tests
         working-directory: backend
         run: |
@@ -64,7 +69,7 @@ jobs:
       - name: Offline GT forensic and replay audit tests
         run: |
           python -m unittest discover -s scripts/tests -p 'test_*.py' -v
-          python -m compileall -q scripts/benchmark-forensics.py scripts/benchmark-gate.py scripts/replay-diff.py
+          python -m compileall -q scripts/benchmark-forensics.py scripts/benchmark-gate.py scripts/replay-diff.py scripts/evaluate-direct-shadow.py
 
       - name: Frontend build
         working-directory: frontend

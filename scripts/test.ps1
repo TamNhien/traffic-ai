@@ -323,14 +323,66 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.77") { throw "VERSION must be 0.5.77, current: $version" }
-  $migration = Join-Path $root "backend\alembic\versions\0085_password_policy_v0571.py"
-  if (-not (Test-Path $migration)) { throw "Missing migration 0085_password_policy_v0571.py." }
-  $migrationText = Get-Content $migration -Raw -Encoding UTF8
-  if ($migrationText -notmatch 'revision = "0085_password_policy_v0571"' -or $migrationText -notmatch 'down_revision = "0084_postgres_auth_guard_v0570"' -or $migrationText -notmatch "value='0.5.71'") {
-    throw "Migration 0085_password_policy_v0571 is invalid."
+  if ($version -notmatch '^\d+\.\d+\.\d+$') {
+    throw "VERSION phải có định dạng major.minor.patch, current: '$version'"
   }
-  Write-Host "[OK] Version/migration consistency contract" -ForegroundColor Green
+  $package = Get-Content (Join-Path $root 'frontend/package.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+  if ($package.version -ne $version) { throw "frontend/package.json=$($package.version) khác VERSION=$version" }
+
+  $expectedLiterals = @(
+    @{ File='frontend/src/main.jsx'; Token="const APP_VERSION = '$version'" },
+    @{ File='backend/app/main.py'; Token="version=`"$version`"" },
+    @{ File='backend/app/main.py'; Token="`"version`": `"$version`"" },
+    @{ File='ai-service/app/main.py'; Token="APP_VERSION = '$version'" },
+    @{ File='backup-worker/worker.py'; Token="'version':'$version'" },
+    @{ File='backend/app/backup_routes.py'; Token="'version':'$version'" }
+  )
+  foreach ($item in $expectedLiterals) {
+    $text = Get-Content (Join-Path $root $item.File) -Raw -Encoding UTF8
+    if (-not $text.Contains($item.Token)) {
+      throw "Version mismatch: $($item.File) thiếu literal $($item.Token)"
+    }
+  }
+  $html = Get-Content (Join-Path $root 'frontend/index.html') -Raw -Encoding UTF8
+  $cacheVersions = [regex]::Matches($html, '[?]v=(\d+\.\d+\.\d+)')
+  if ($cacheVersions.Count -lt 4) { throw 'Frontend thiếu cache-busting version cho favicon/manifest.' }
+  foreach ($match in $cacheVersions) {
+    if ($match.Groups[1].Value -ne $version) {
+      throw "Frontend asset version=$($match.Groups[1].Value) khác VERSION=$version"
+    }
+  }
+
+  $versionsDir = Join-Path $root 'backend/alembic/versions'
+  $revisionFiles = @{}
+  $parents = [System.Collections.Generic.HashSet[string]]::new()
+  foreach ($file in Get-ChildItem $versionsDir -Filter '*.py' -File) {
+    $source = Get-Content $file.FullName -Raw -Encoding UTF8
+    $revisionMatch = [regex]::Match($source, '(?m)^revision(?:\s*:\s*str)?\s*=\s*["'']([^"'']+)["'']')
+    if (-not $revisionMatch.Success) { continue }
+    $revision = $revisionMatch.Groups[1].Value
+    if ($revisionFiles.ContainsKey($revision)) { throw "Alembic trùng revision: $revision" }
+    $revisionFiles[$revision] = $file.FullName
+    $parentMatch = [regex]::Match($source, '(?m)^down_revision(?:\s*:\s*[^=]+)?\s*=\s*["'']([^"'']+)["'']')
+    if ($parentMatch.Success) { [void]$parents.Add($parentMatch.Groups[1].Value) }
+  }
+  $heads = @($revisionFiles.Keys | Where-Object { -not $parents.Contains($_) })
+  if ($heads.Count -ne 1) { throw "Alembic phải có 1 head, found: $($heads -join ', ')" }
+  $headPath = $revisionFiles[$heads[0]]
+  $headSource = Get-Content -LiteralPath $headPath -Raw -Encoding UTF8
+  if (-not $headSource.Contains("value='$version'")) {
+    throw "Alembic head $($heads[0]) không cập nhật schema_version=$version"
+  }
+  foreach ($parent in $parents) {
+    if (-not $revisionFiles.ContainsKey($parent)) { throw "Alembic thiếu parent revision: $parent" }
+  }
+  # Keep the earlier password migration contract instead of replacing history.
+  $passwordMigration = Get-Content (Join-Path $versionsDir '0085_password_policy_v0571.py') -Raw -Encoding UTF8
+  if ($passwordMigration -notmatch 'revision = "0085_password_policy_v0571"' -or
+      $passwordMigration -notmatch 'down_revision = "0084_postgres_auth_guard_v0570"' -or
+      $passwordMigration -notmatch "value='0.5.71'") {
+    throw 'Historical password migration V0.5.71 is invalid.'
+  }
+  Write-Host "[OK] Version/migration consistency contract: $version, Alembic head $($heads[0])" -ForegroundColor Green
 }
 
 function Assert-AlembicRevisionSafetyContract {
@@ -2267,6 +2319,35 @@ if ($latestStart -notmatch 'Join-Path \$ProjectRoot "VERSION"' -or
   throw 'V0.5.77 startup path / GT audit contract failed.'
 }
 Write-Host '[OK] V0.5.77 Startup path + GT case forensics contract' -ForegroundColor Green
+
+Write-Host "`n[Traffic AI] V0.5.78 Direct Shadow Evidence Gate" -ForegroundColor Cyan
+$shadowSource = Get-Content (Join-Path $Root 'backend/app/shadow_guard.py') -Raw -Encoding UTF8
+$shadowAPI = Get-Content (Join-Path $Root 'backend/app/api/routes.py') -Raw -Encoding UTF8
+$shadowCLI = Get-Content (Join-Path $Root 'scripts/evaluate-direct-shadow.py') -Raw -Encoding UTF8
+$shadowMigration = Get-Content (Join-Path $Root 'backend/alembic/versions/0092_direct_shadow_v0578.py') -Raw -Encoding UTF8
+if ($shadowSource -notmatch 'DIRECT_SHADOW_MAX_TIME_SECONDS = 0.32' -or
+    $shadowSource -notmatch 'DIRECT_SHADOW_MAX_DISTANCE = 0.009' -or
+    $shadowAPI -notmatch 'direct_ultra_spatial_shadow_duplicate' -or
+    $shadowCLI -notmatch 'def dedup_counterfactual' -or
+    $shadowCLI -notmatch 'match_crossings' -or
+    $shadowMigration -notmatch 'down_revision = "0091_gt_forensics_v0577"' -or
+    $shadowMigration -notmatch "value='0.5.78'") {
+  throw 'V0.5.78 Direct Shadow evidence / migration contract failed.'
+}
+Write-Host '[OK] V0.5.78 Direct Shadow Evidence Gate' -ForegroundColor Green
+
+Invoke-Step "Release version drift regression (stdlib-only)" {
+  docker run --rm -v "${root}:/src" -w /src python:3.14.7-slim `
+    python scripts/version-contract.py
+  if ($LASTEXITCODE -ne 0) { throw "Release version metadata drift." }
+  docker run --rm -v "${root}:/src" -w /src python:3.14.7-slim `
+    python -m unittest discover -s scripts/tests -p test_version_contract.py -v
+}
+
+Invoke-Step "Direct Shadow offline counterfactual tests (stdlib-only)" {
+  docker run --rm -v "${root}:/src" -w /src python:3.14.7-slim `
+    python -m unittest discover -s scripts/tests -p test_direct_shadow_578.py -v
+}
 
 Invoke-Step "GT case forensics unit tests (stdlib-only)" {
   docker run --rm -v "${root}:/src" -w /src python:3.14.7-slim `
