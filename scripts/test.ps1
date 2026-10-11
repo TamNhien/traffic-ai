@@ -323,7 +323,7 @@ function Assert-GatewayRuntimeContract {
 function Assert-VersionConsistencyContract {
   Write-Host "`n[Traffic AI] Version/migration consistency contract" -ForegroundColor Cyan
   $version = (Get-Content (Join-Path $root "VERSION") -Raw -Encoding UTF8).Trim()
-  if ($version -ne "0.5.74") { throw "VERSION must be 0.5.74, current: $version" }
+  if ($version -ne "0.5.75") { throw "VERSION must be 0.5.75, current: $version" }
   $migration = Join-Path $root "backend\alembic\versions\0085_password_policy_v0571.py"
   if (-not (Test-Path $migration)) { throw "Missing migration 0085_password_policy_v0571.py." }
   $migrationText = Get-Content $migration -Raw -Encoding UTF8
@@ -2221,6 +2221,26 @@ $backupStart = Get-Content (Join-Path $Root 'scripts/start.ps1') -Raw -Encoding 
 $backupMigration = Get-Content (Join-Path $Root 'backend/alembic/versions/0088_backup_scheduler_v0574.py') -Raw -Encoding UTF8
 if ($backupUI -notmatch 'Khôi phục an toàn' -or $backupApi -notmatch 'Depends\(admin\)' -or $backupWorker -notmatch 'pg_restore' -or $backupCompose -notmatch 'traffic_ai_backup_data' -or $backupStart -notmatch 'backup-worker' -or $backupMigration -notmatch '0087_unicode_usernames_v0573') { throw 'V0.5.74 PostgreSQL backup/restore contract missing.' }
 Write-Host '[OK] PostgreSQL backup/restore + portability V0.5.74' -ForegroundColor Green
+
+Write-Host "`n[Traffic AI] Replay Drift Audit V0.5.75" -ForegroundColor Cyan
+$replayAudit = Get-Content (Join-Path $Root 'scripts/replay-diff.py') -Raw -Encoding UTF8
+$replayTests = Get-Content (Join-Path $Root 'scripts/tests/test_replay_diff.py') -Raw -Encoding UTF8
+$replayScript = Get-Content (Join-Path $Root 'scripts/compare-replays.ps1') -Raw -Encoding UTF8
+$replayMigration = Get-Content (Join-Path $Root 'backend/alembic/versions/0089_replay_drift_v0575.py') -Raw -Encoding UTF8
+if ($replayAudit -notmatch 'def check_compatible\(' -or $replayAudit -notmatch 'def pair_crossings\(' -or $replayAudit -notmatch 'def _open_trace\(' -or
+    $replayAudit -notmatch 'def _hungarian\(' -or $replayAudit -notmatch 'delivery_drain_complete' -or
+    $replayAudit -notmatch 'sha256' -or $replayTests -notmatch 'test_decision_flip_is_reported' -or
+    $replayScript -notmatch 'replay-diff\.py' -or
+    $replayMigration -notmatch 'down_revision = "0088_backup_scheduler_v0574"' -or
+    $replayMigration -notmatch "value='0.5.75'") {
+  throw 'V0.5.75 replay drift analysis contract missing.'
+}
+Write-Host '[OK] Replay Drift Audit V0.5.75' -ForegroundColor Green
+
+Invoke-Step "Replay audit unit tests (stdlib-only)" {
+  docker run --rm -v "${root}:/src" -w /src python:3.14.7-slim `
+    python -m unittest discover -s scripts/tests -p test_replay_diff.py -v
+}
 
 Invoke-Step "Backend syntax check" {
   docker run --rm -v "${root}:/src" -w /src/backend python:3.14.7-slim python -m compileall -q app tests alembic

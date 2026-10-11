@@ -1,3 +1,14 @@
+# Verification V0.5.75 — Replay Drift Audit
+
+- Base archive: `traffic-ai-v0.5.74-full-source.zip`; preserve Backup/Restore and all core counting thresholds.
+- New modules: `scripts/replay-diff.py`, `scripts/compare-replays.ps1`, `scripts/tests/test_replay_diff.py`; historical run analysis in `docs/replay-session-174-vs-175.md`.
+- New Alembic head: `0089_replay_drift_v0575` → `0088_backup_scheduler_v0574`; schema_version updated to 0.5.75 without data schema changes.
+- Replay #174 (195 proposals/149 created/46 deduplicated) vs #175 (192/153/39): proposal pairs 187, removed 8, introduced 5; decision changes 6; created pairs 148, only #174 1 and only #175 5. Audit strict FAIL=expected, because the replay results demonstrably differ; not proof of true missed/extra vehicles. Check `docs/` for timecodes.
+- Tests: 171/171 backend, 635/635 AI Service, 4/4 frontend unit, 4/4 backup worker, 5/5 benchmark gate, 15/15 replay-audit unit. Python compileall passed. Backend/AI test runs used temporary `httpx2` compatibility alias only in the test environment, excluded from ZIP.
+- Docker/PowerShell/Vite build with pinned Node v26 and PostgreSQL restore integration were not run in this packaging environment. Source ZIP is not evidence of a live AI accuracy improvement. User must run scripts/test.ps1 and test with PostgreSQL before publishing.
+
+---
+
 # Kiểm thử Traffic AI V0.5.74
 
 ## Kết quả đo được trong môi trường đóng gói

@@ -155,7 +155,7 @@ Set-EnvDefaultUpgrade "AI_GATE_HISTORY_GAP" "30" "45"
 # V0.5.47 keeps the V0.5.46 passage re-arm default; custom values remain untouched.
 Set-EnvDefaultUpgrade "AI_GATE_PASSAGE_REARM_MIN_FRAMES" "10" "16"
 # V0.5.47: evidence-gated Balanced Recall Recovery; only add missing keys.
-# V0.5.74: defaults only; never overwrite existing schedule configuration.
+# V0.5.75: defaults only; never overwrite existing schedule configuration.
 Ensure-EnvSetting "BACKUP_AUTO_ENABLED" "true"
 Ensure-EnvSetting "BACKUP_INTERVAL_HOURS" "24"
 Ensure-EnvSetting "BACKUP_RETENTION_COUNT" "14"
@@ -420,7 +420,7 @@ if (-not (Wait-ContainerHealthy "traffic-ai-backend" 180)) {
   throw "Backend did not become healthy within 180s. Check the PostgreSQL and Backend logs printed above (Alembic/DB import/healthcheck)."
 }
 
-# V0.5.74: independent PostgreSQL 18 backup worker, separate from AI runtime.
+# V0.5.75: independent PostgreSQL 18 backup worker, separate from AI runtime.
 Write-Host "[Traffic AI] Starting PostgreSQL backup scheduler..." -ForegroundColor Cyan
 & docker @baseComposeArgs up -d --build --no-deps backup-worker
 if ($LASTEXITCODE -ne 0) {
@@ -471,7 +471,7 @@ if (-not $dashboardOk -or -not $apiOk) {
 }
 
 Write-Host ""
-Write-Host "[OK] Traffic AI V0.5.74 đã khởi động." -ForegroundColor Green
+Write-Host "[OK] Traffic AI V0.5.75 đã khởi động." -ForegroundColor Green
 Write-Host "Dashboard : https://traffic-ai.test:8443"
 Write-Host "API Docs  : https://traffic-ai.test:8444/docs"
 $envNow = Get-Content $envPath -Raw -Encoding UTF8

@@ -1,3 +1,75 @@
+# Traffic AI V0.5.75 — Replay Drift Audit / Stability Gate
+
+## V0.5.75 bổ sung chức năng gì?
+
+**Kế thừa nguyên vẹn V0.5.74**: Backup/Restore PostgreSQL, lịch sao lưu, chuyển máy, tài khoản Unicode, Argon2id, phân quyền, camera, dataset và benchmark. Thuật toán đếm, ngưỡng Gate/ROI/rescue/cooldown/FP closure **không bị tự động nới hoặc chỉnh** trong phiên bản này vì chưa có file ZIP đối chiếu GT/AI hoàn chỉnh cho Session #175.
+
+- **Replay Drift Audit** (`scripts/replay-diff.py`): phát hiện chênh lệch của hai lần chạy cùng video theo **source timecode, hướng IN/OUT và tọa độ crossing**; không phụ thuộc raw tracker ID hoặc mã event database (có thể đổi qua lần chạy).
+- Nhận đầu vào dạng **ZIP “Tải hồ sơ benchmark”** từ giao diện (nếu chứa `benchmark-trace.jsonl.gz`/`.jsonl`), hoặc file `session_<id>_benchmark-trace.jsonl`/`.jsonl.gz` trong thư mục camera. Với ZIP, bắt buộc manifest đúng schema và SHA-256 của trace phải khớp.
+- **Kiểm tra tương thích chặt**: session phải khác nhau, camera ID, FPS, số frame và Road Zone/đường đếm phải giống nhau; trace đủ tất cả frame, delivery đã drain, không rơi acknowledgement. ZIP thiếu trace, lỗi dữ liệu hoặc checksum → FAIL thay vì đưa ra kết quả giả.
+- **Ghép 1–1 toàn cục** trong cửa sổ 0,75 giây và 0,025 đơn vị tọa độ chuẩn hóa (thay đổi được), phân biệt crossing mới, crossing mất, **backend thay đổi quyết định lưu/loại**, timecode dịch >2 frame. Xuất `replay-diff.json` và `replay-diff.md` với những timecode cần xem lại.
+- **Chế độ strict** dành cho regression: FAIL (exit 1) khi event DB chỉ còn ở một run hoặc quyết định dedup đổi; lỗi dữ liệu không hợp lệ trả exit 2. Mặc định chỉ tạo báo cáo, không tự đổi tham số AI hay GT.
+- Thêm PowerShell `scripts/compare-replays.ps1`, 15 unit tests stdlib mới tích hợp `scripts/test.ps1`, migration Alembic `0089_replay_drift_v0575` tiếp nối V0.5.74 (chỉ thay `system_settings.schema_version`). Không sửa bảng người dùng, dữ liệu hoặc restore.
+- Kèm báo cáo thực tế `docs/replay-session-174-vs-175.md` từ hai trace gốc do người dùng gửi; **không kèm trace 196 MB/video/ảnh cá nhân** trong source.
+
+### Kết quả Replay Audit thực tế (hai trace 23.650 frame)
+
+| Chỉ số | Session #174 | Session #175 |
+|---|---:|---:|
+| Worker đề xuất crossing | 195 | 192 |
+| Backend ghi event | 149 | 153 |
+| Backend từ chối trùng | 46 | 39 |
+
+Trong cửa sổ so sánh mặc định: **187 đề xuất ghép gần nhau, 8 đề xuất chỉ có ở #174, 5 đề xuất chỉ có ở #175, 6 đề xuất đổi trạng thái/reason; 1 event DB chỉ có ở #174 và 5 event DB chỉ có ở #175**. Kết quả strict trả FAIL đúng. Đây là **dao động giữa hai lần phát lại, không phải số xe lọt/dư xác định**; các ghép chỉ dựa timecode/vị trí, không xác minh danh tính vật lý. Trace hiện chưa chứa hash nội dung clip nên vẫn phải tự xác nhận sử dụng cùng video.
+
+### Kiểm tra, chạy trên Windows PowerShell
+
+Dùng source ZIP mới, giữ nguyên `.env`, volumes PostgreSQL và Backup, model/video/dataset. Không chạy `docker compose down -v`, không tạo lại Admin.
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+.\scripts\test.ps1
+.\scripts\start.ps1
+```
+
+### So sánh hai phiên và xuất báo cáo
+
+Trong trang Ground Truth Benchmark của mỗi session đã hoàn tất, bấm **Tải hồ sơ benchmark** để có hai ZIP. Nếu ZIP bị thiếu trace, hãy lấy file `session_XXX_benchmark-trace.jsonl` đã được lưu cùng ảnh camera, hoặc export lại sau khi chạy xong; tool từ chối ZIP thiếu trace.
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+
+# Thay đường dẫn bằng hai ZIP tải thực tế từ web
+.\scripts\compare-replays.ps1 -PreviousTrace .\benchmark-174.zip -CurrentTrace .\benchmark-175.zip -OutputDirectory .\replay-diff-report
+
+# Kiểm tra nghiêm ngặt: chủ động báo lỗi nếu các lần phát lại không nhất quán
+.\scripts\compare-replays.ps1 -PreviousTrace .\benchmark-174.zip -CurrentTrace .\benchmark-175.zip -OutputDirectory .\replay-diff-report -Strict
+```
+
+Mở `replay-diff-report/replay-diff.md` để xem timecode, hoặc xem `replay-diff.json` cho công cụ xử lý tiếp. Có thể thay đường dẫn ZIP bằng `.jsonl`/`.jsonl.gz`. Tool yêu cầu Python >=3.10 trên Windows, không cần Ultralytics/GPU để phân tích.
+
+**Điểm Ground Truth bắt buộc kiểm riêng** (không thay bằng Replay Drift Audit):
+
+```powershell
+.\scripts\check-benchmark.ps1 -ExportZip .\benchmark-175.zip -MaxMissed 0 -MaxExtra 0
+```
+
+Chỉ khi đã kiểm tra/test ổn định mới phát hành GitHub với `./scripts/publish.ps1` hoặc trong PowerShell:
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+.\scripts\publish.ps1
+```
+
+### Giới hạn kiểm thử / chất lượng AI
+
+- **Backend 171/171**, **AI 635/635**, **frontend unit 4/4**, **backup worker 4/4**, **benchmark gate 5/5** và **Replay Audit 15/15** đạt trong môi trường kiểm thử. Backend/AI cần lớp tương thích `httpx2` ở môi trường hiện tại; lớp đó **không đóng gói vào source**. Đã thử công cụ mới trực tiếp với hai file trace 196 MB (không chứa GT toàn bộ). 
+- Chưa chạy `npm run build` với Node v26/Vite v8, Docker Compose/PostgreSQL thật, migration và GPU/replay video thực tế trên Windows ở môi trường đóng gói. Hãy chạy `test.ps1` trên máy của bạn trước khi publish.
+- **Không cam kết giảm 10 lượt lọt / 14 lượt dư** của Session #175; chỉ sau khi cung cấp ZIP benchmark hoàn chỉnh mới có thể đối chiếu GT–AI và hiệu chỉnh thuật toán một cách có căn cứ.
+
+---
+
 # Traffic AI V0.5.74 — PostgreSQL Backup & Restore / Migration Kit
 
 ## Mới trong V0.5.74
