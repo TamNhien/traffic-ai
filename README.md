@@ -1,3 +1,32 @@
+# Traffic AI V0.5.81 — Quiet Startup + Backup Worker pip Test Hygiene
+
+**Nâng cấp trực tiếp từ V0.5.80**, không thay đổi thuật toán đếm AI, model, mật khẩu, database hoặc hành vi Backup/Restore. Bản này sửa hiển thị khi chạy test và khởi động.
+
+- Trong `scripts/test.ps1`, chỉ riêng bước Backup Worker unit test được thêm biến môi trường `PIP_ROOT_USER_ACTION=ignore` và `PIP_DISABLE_PIP_VERSION_CHECK=1` vào **container Docker dùng một lần**. Tránh cảnh báo pip cài bằng root trong container; **không** tắt cảnh báo/lỗi của Docker, PowerShell, pytest hoặc quy trình vận hành thật.
+- Trong `scripts/start.ps1`, bỏ log thời gian chờ `Waiting for ... (starting, Xs/Ys)` và `healthy after Ns`; khi thành công chỉ hiển thị `[OK] <container> healthy.`.
+- **Vẫn chờ container ready và giữ các giới hạn an toàn 120/180/240 giây** cùng healthchecks, thông báo timeout, trạng thái failed và log chẩn đoán khi lỗi. Không thay đổi độ trễ hoặc cho phép khởi động bỏ qua service lỗi.
+- Thêm 4 bài kiểm thử hợp đồng console/startup. Chạy trong `scripts/test.ps1` và GitHub Actions, ngăn lần nâng cấp sau vô tình đưa bộ đếm thời gian chờ trở lại.
+- Đồng bộ `VERSION=0.5.81`, API, frontend, AI Service, Backup Worker, favicon cache; migration `0095_quiet_startup_v0581` chỉ cập nhật `schema_version`, không thay đổi bảng dữ liệu.
+- Benchmark #57 / Session #182 từ máy người dùng: GT 149 / AI 152 / khớp 139 / lọt 10 / dư 13. **V0.5.81 không sửa lỗi đếm**; không dùng việc tắt log để tuyên bố cải thiện Recall/Precision.
+
+## Chạy trên Windows (tài khoản Admin đã tồn tại)
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+
+# Kiểm tra source
+.\scripts\test.ps1
+
+# Khởi động hệ thống
+.\scripts\start.ps1
+```
+
+Sau khi chạy và kiểm thử ổn định, xuất bản bằng ` .\scripts\publish.ps1 `. Nếu timeout hoặc service unhealthy, `start.ps1` vẫn thông báo lỗi và in log chẩn đoán; chỉ ẩn dòng đếm giây trong lúc chờ.
+
+---
+
 # Traffic AI V0.5.80 — Incumbent Identity Protection (Cross-ID Anti-Swap)
 
 **Nâng cấp từ V0.5.79; giữ nguyên PostgreSQL, tài khoản, Backup/Restore và chính sách chống đếm trùng V0.5.78.**

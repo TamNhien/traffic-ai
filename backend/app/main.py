@@ -9,7 +9,7 @@ from app.core.config import settings
 
 app = FastAPI(
     title="Traffic AI API",
-    version="0.5.80",
+    version="0.5.81",
     description="Backend API for the traffic vehicle detection, tracking and counting project.",
 )
 
@@ -36,7 +36,7 @@ app.include_router(backup_router)
 def root() -> dict:
     return {
         "name": settings.app_name,
-        "version": "0.5.80",
+        "version": "0.5.81",
         "docs": "/docs",
         "health": "/api/health",
     }

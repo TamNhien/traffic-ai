@@ -2336,6 +2336,11 @@ if ($shadowSource -notmatch 'DIRECT_SHADOW_MAX_TIME_SECONDS = 0.32' -or
 }
 Write-Host '[OK] V0.5.78 Direct Shadow Evidence Gate' -ForegroundColor Green
 
+Invoke-Step "Quiet startup and isolated pip warning contract (stdlib-only)" {
+  docker run --rm -v "${root}:/src" -w /src python:3.14.7-slim `
+    python -m unittest discover -s scripts/tests -p test_startup_silence_v0581.py -v
+}
+
 Invoke-Step "Release version drift regression (stdlib-only)" {
   docker run --rm -v "${root}:/src" -w /src python:3.14.7-slim `
     python scripts/version-contract.py
@@ -2364,7 +2369,11 @@ Invoke-Step "Backend syntax check" {
 }
 
 Invoke-Step "Backup worker syntax + unit tests" {
-  docker run --rm -v "${root}:/src" -w /src/backup-worker python:3.14.7-slim `
+  # pytest is installed only into a disposable Docker container, not the host.
+  docker run --rm `
+    -e PIP_ROOT_USER_ACTION=ignore `
+    -e PIP_DISABLE_PIP_VERSION_CHECK=1 `
+    -v "${root}:/src" -w /src/backup-worker python:3.14.7-slim `
     sh -lc "python -m pip install -q pytest==9.1.1 && python -m compileall -q worker.py test_worker.py && python -m pytest -q test_worker.py"
 }
 

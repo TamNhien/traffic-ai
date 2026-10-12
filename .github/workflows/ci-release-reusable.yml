@@ -50,6 +50,7 @@ jobs:
         run: |
           python scripts/version-contract.py
           python -m unittest discover -s scripts/tests -p test_version_contract.py -v
+          python -m unittest discover -s scripts/tests -p test_startup_silence_v0581.py -v
 
       - name: Backend tests
         working-directory: backend

@@ -45,21 +45,18 @@ function Show-GatewayDiagnostics {
 
 function Wait-ContainerHealthy([string]$Name, [int]$TimeoutSeconds = 180) {
   $timer = [System.Diagnostics.Stopwatch]::StartNew()
-  $previousStatus = ''
   while ($timer.Elapsed.TotalSeconds -lt $TimeoutSeconds) {
     $state = Get-ContainerHealth $Name
     if ($state -eq 'healthy') {
-      Write-Host "[OK] $Name healthy after $([int]$timer.Elapsed.TotalSeconds)s." -ForegroundColor Green
+      Write-Host "[OK] $Name healthy." -ForegroundColor Green
       return $true
     }
     if ($state -in @('unhealthy', 'exited', 'dead')) {
       Write-Warning "$Name has failed health/state check: $state."
       return $false
     }
-    if ($state -ne $previousStatus -or [int]$timer.Elapsed.TotalSeconds % 15 -eq 0) {
-      Write-Host "[Traffic AI] Waiting for $Name ($state, $([int]$timer.Elapsed.TotalSeconds)s/${TimeoutSeconds}s)..." -ForegroundColor DarkYellow
-      $previousStatus = $state
-    }
+    # Quiet bounded polling: do not print elapsed or remaining time.
+    # Failure messages and diagnostics are intentionally retained.
     Start-Sleep -Seconds 3
   }
   Write-Warning "Timed out after $TimeoutSeconds seconds waiting for $Name (last state: $(Get-ContainerHealth $Name))."

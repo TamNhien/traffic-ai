@@ -1,3 +1,16 @@
+# V0.5.81 — Verification of quiet startup and pip warning policy
+
+- Input source: V0.5.80 full-source ZIP. Only startup console text, temporary pip test environment, release metadata and test contracts changed; counting/tracking/backend business logic stays identical.
+- `scripts/version-contract.py`: PASS; Alembic has one head `0095_quiet_startup_v0581` with parent `0094_incumbent_identity_v0580`.
+- `scripts/tests/test_startup_silence_v0581.py`: 4/4 PASS. Checks bounded polling / `healthy` success / no normal countdown / error diagnostics retained / pip root warning scoped only to disposable backup-worker container.
+- Full local checks: backend 175/175, AI Service 640/640, Backup Worker 4/4, frontend Node unit 4/4, scripts stdlib offline 36/36 = **859/859** tests passed.
+- Backend and AI tests used a temporary `httpx2` to installed `httpx` compatibility alias **outside** the deliverable, because pinned dependency `httpx2` is unavailable in this environment. This is not a native Docker/Python 3.14 test.
+- `scripts/tests/test_version_contract.py`: 4/4 PASS. Python `compileall` passed.
+- User-provided Benchmark #57 / Session #182 remains GT 149 / AI 152 / matched 139 / missed 10 / extra 13. No AI accuracy change claimed for this release.
+- This environment does not provide PowerShell or Docker runtime and does not run NVIDIA replay. The user must run `scripts/test.ps1` and `scripts/start.ps1` on Windows to verify end-to-end startup. The full suite results from earlier versions are not automatically attributed to this release.
+
+---
+
 # V0.5.80 — Verification
 
 - Benchmark #56 Session #180 (dữ liệu đầu vào): GT 149, AI 152, matched 139, missed 10, extra 13.
