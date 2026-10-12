@@ -1,4 +1,7 @@
 from fastapi.testclient import TestClient
+from pathlib import Path
+
+EXPECTED_VERSION = (Path(__file__).resolve().parents[2] / "VERSION").read_text(encoding="utf-8").strip()
 
 from app.main import app
 
@@ -9,7 +12,7 @@ def test_health() -> None:
     payload = response.json()
     assert payload["status"] == "ready"
     assert payload["pipeline"] == "yolo26s-bytetrack-hybrid-crossing-v7.2"
-    assert payload["version"] == "0.5.82"
+    assert payload["version"] == EXPECTED_VERSION
     assert "runtime" in payload
 
 

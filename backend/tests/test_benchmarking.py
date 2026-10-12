@@ -790,3 +790,31 @@ def test_v0556_diagnostics_source_identity_redacts_remote_credentials_and_local_
     assert benchmark_source_identity("/data/videos/clip1.mp4") == "clip1.mp4"
     assert benchmark_source_identity("rtsp://admin:pwd@camera:invalid/live") == "[source omitted]"
     assert benchmark_source_identity(None) is None
+
+
+def test_v0583_temporal_match_does_not_hide_wrong_direction() -> None:
+    result = match_crossings([item(1, 289.824, 'in')], [item(11, 290.064, 'out')], 0.75)
+    assert (result['matched'], result['missed'], result['false_positives']) == (1, 0, 0)
+    assert result['direction_mismatches'] == 1
+    assert result['direction_mismatch_items'][0]['ground_truth_direction'] == 'in'
+    assert result['direction_mismatch_items'][0]['ai_direction'] == 'out'
+    assert result['strict_matches'] == 0
+    assert result['strict_precision'] == result['strict_recall'] == result['strict_f1'] == 0
+
+
+def test_v0583_temporal_match_must_agree_both_type_and_direction_for_strict_score() -> None:
+    result = match_crossings(
+        [item(1, 1.0, 'in', 'motorcycle'), item(2, 3.0, 'out', 'bicycle'), item(3, 6.0, 'in', 'car')],
+        [item(11, 1.02, 'in', 'motorcycle'), item(12, 3.02, 'out', 'motorcycle'), item(13, 6.02, 'out', 'car')], 0.75)
+    assert (result['matched'], result['missed'], result['false_positives']) == (3, 0, 0)
+    assert result['strict_matches'] == 1
+    assert result['direction_mismatches'] == result['class_mismatches'] == 1
+    assert result['strict_precision'] == result['strict_recall'] == result['strict_f1'] == 0.333333
+    assert result['direction_accuracy'] == result['class_accuracy'] == 0.666667
+
+
+def test_v0583_unmarked_benchmark_has_no_fake_strict_scores() -> None:
+    result = match_crossings([], [item(11, 1.0)])
+    assert result['strict_matches'] is None
+    assert result['strict_precision'] is result['strict_recall'] is result['strict_f1'] is None
+    assert result['direction_mismatch_items'] == []

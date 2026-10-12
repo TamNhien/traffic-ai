@@ -1,3 +1,47 @@
+# Traffic AI V0.5.83 — Direction-aware Benchmark + Replay Regression Witness
+
+Nâng cấp từ **V0.5.82**. Bổ sung chỉ số đánh giá đúng timecode + hướng + loại xe,
+giao diện hiển thị các cặp GT/AI sai hướng và công cụ chứng cứ sự kiện biến mất
+khi chạy lại cùng clip. Không sửa GT, không thay ngưỡng thuật toán AI và không
+can thiệp dữ liệu PostgreSQL.
+
+## V0.5.83 — Những thay đổi
+
+- `strict_matches`, `strict_precision`, `strict_recall`, `strict_f1` chỉ công nhận
+  các cặp timecode khớp **đồng thời đúng IN/OUT và loại phương tiện**.
+- `direction_mismatches` và `direction_mismatch_items` chỉ rõ từng GT/AI sai hướng;
+  nút timecode trên giao diện cho phép xem lại video. Các chỉ số `matched`,
+  `missed`, `false_positives`, `counting_recall` truyền thống không đổi.
+- `scripts/compare-gt-replays.ps1`: so sánh reference ZIP benchmark với trace
+  chạy mới, báo những event mất/xuất hiện và chứng cứ hướng GT đã ghép trước đó.
+  Sử dụng `-Strict` để fail khi có thay đổi; không dùng PASS làm chứng nhận accuracy.
+- Benchmark #57 / Session #182: 139 cặp khớp timecode; **3 sai hướng**, **2 sai loại**,
+  **134 cặp khớp đủ 3 điều kiện**. Trace Session #183 giảm còn 151 event, mất
+  một event OUT tại 290.064s; baseline event này đã từng ghép GT IN tại 289.824s.
+- `test.ps1`, GitHub Actions và migration `0097_direction_audit_v0583` tích hợp
+  kiểm tra mới. Chỉ nâng metadata schema version; không sửa bảng DB.
+
+### Kiểm tra chênh lệch Session #182 và #183
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+.\scripts\compare-gt-replays.ps1 `
+  -ReferenceBenchmark .\traffic-ai-benchmark-57-session-182.zip `
+  -CurrentTrace .\session_183_benchmark-trace.jsonl `
+  -OutputDirectory .\gt-replay-witness-report `
+  -Strict
+```
+
+Trace Session #183 là file JSONL trong bộ camera RAR, cần giải nén trước; hoặc
+sử dụng ZIP “Tải hồ sơ benchmark” #183 và truyền trực tiếp làm `-CurrentTrace`.
+Với trace hiện tại, `-Strict` **dự kiến FAIL** vì một event biến mất.
+
+> **Chưa có kết quả GPU replay chứng minh 11 lọt / 13 dư được giảm.**
+> Bản này cải thiện đo lường, phát hiện hồi quy và bằng chứng chấm điểm,
+> không âm thầm điều chỉnh thuật toán đếm dựa trên giả định về GT.
+
+---
+
 # Traffic AI V0.5.82 — Raw ID Reuse Guard + Gate Trace Audit 10.1
 
 **Nâng cấp từ full source V0.5.81.** Tập trung ngăn ByteTrack tái sử dụng cùng Raw Track ID cho xe khác ngay gần vạch đếm, gây kế thừa nhầm quỹ đạo, class và trạng thái crossing. Không thay đổi các ngưỡng Gate, cooldown, rescue hoặc chống trùng đã có.

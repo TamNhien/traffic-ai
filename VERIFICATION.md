@@ -1,3 +1,28 @@
+# Traffic AI V0.5.83 — Verification
+
+- Source: full source V0.5.82 + V0.5.83 benchmark direction evidence, UI and
+  `gt-replay-witness` CLI. One Alembic head: `0097_direction_audit_v0583`.
+- Baseline benchmark #57 Session #182: **GT 149 / AI 152 / timecode matched 139 /
+  missed 10 / extra 13**, plus **3 wrong-direction pairs, 2 wrong-class pairs,
+  134 pairs correct on all three dimensions**.
+- Session #183 raw trace extracted from `camera_1(20261012-142939).rar`:
+  replay delta **DB 152 -> 151**, removed **1**, introduced **0**, decision flips **0**.
+  Lost 290.064s OUT event had a wrong-direction historical match with GT IN
+  at 289.824s. Not proof of a newly missed *physical* vehicle.
+- Executed tests: **Backend 178/178, AI Service 646/646, Backup Worker 4/4,
+  frontend Node unit 4/4, offline tooling/versions/replay/GT witness 45/45**.
+  Total **877/877 tests passed**. Backend and AI used a temporary compatibility
+  wrapper for unavailable `httpx2` in the test environment; not shipped in source.
+- `scripts/version-contract.py` **PASS**; Python compile and ZIP integrity check
+  are separate from GPU/Docker validations.
+- Limitations: Vite production build was not verified because npm could not
+  download required packages in this environment. No Windows PowerShell, live
+  Docker migration or GPU counting replay was executed here. The algorithm
+  counting thresholds remain unchanged, so **11 missed / 13 extra have not
+  been fixed or verified to improve**.
+
+---
+
 # V0.5.82 — Verification (Raw ID Reuse Guard)
 
 - Input: `traffic-ai-v0.5.81-full-source.zip` and user-provided `traffic-ai-benchmark-57-session-182.zip` (GT=149, saved AI=152, matched=139, missed=10, extra=13).

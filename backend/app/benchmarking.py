@@ -671,6 +671,12 @@ def _empty_ground_truth_report(ai: list[TimedCrossing], tolerance: float) -> dic
         "counting_f1": None,
         "direction_accuracy": None,
         "class_accuracy": None,
+        "direction_mismatches": None,
+        "direction_mismatch_items": [],
+        "strict_matches": None,
+        "strict_precision": None,
+        "strict_recall": None,
+        "strict_f1": None,
         "class_mismatches": None,
         "class_mismatch_items": [],
         "matched_items": [],
@@ -766,6 +772,35 @@ def match_crossings(ground_truth: Iterable[Any], ai_events: Iterable[Any], toler
     f1 = (2.0 * precision * recall / (precision + recall)) if precision + recall else 0.0
     direction_correct = sum(1 for item in matched if item["direction_correct"])
     class_correct = sum(1 for item in matched if item["class_correct"])
+    # V0.5.83: leave timecode matching unchanged for historic comparability.
+    # A matched timestamp alone does NOT prove the vehicle travelled in the
+    # correct direction or was classified correctly. Score these independently.
+    # Never auto-correct IN/OUT from a temporal neighbor: two vehicles may
+    # cross near one another in opposite directions.
+    strict_matches = sum(
+        1 for matched_item in matched
+        if matched_item["direction_correct"] and matched_item["class_correct"]
+    )
+    strict_precision = strict_matches / ai_total if ai_total else 0.0
+    strict_recall = strict_matches / gt_total
+    strict_f1 = (2.0 * strict_precision * strict_recall / (strict_precision + strict_recall)
+                 if strict_precision + strict_recall else 0.0)
+    direction_mismatch_items = [
+        {
+            "ground_truth_id": matched_item["ground_truth_id"],
+            "ai_event_id": matched_item["ai_event_id"],
+            "time": matched_item["ground_truth_time"],
+            "ai_time": matched_item["ai_time"],
+            "delta_seconds": matched_item["delta_seconds"],
+            "ground_truth_direction": matched_item["ground_truth_direction"],
+            "ai_direction": matched_item["ai_direction"],
+            "ground_truth_vehicle_type": matched_item["ground_truth_vehicle_type"],
+            "ai_vehicle_type": matched_item["ai_vehicle_type"],
+            "tracking_id": matched_item["tracking_id"],
+            "crossing_method": matched_item["crossing_method"],
+        }
+        for matched_item in matched if not matched_item["direction_correct"]
+    ]
     class_mismatch_items = [
         {
             "ground_truth_id": item["ground_truth_id"],
@@ -822,6 +857,12 @@ def match_crossings(ground_truth: Iterable[Any], ai_events: Iterable[Any], toler
         "counting_recall": round(recall, 6),
         "counting_f1": round(f1, 6),
         "direction_accuracy": round(direction_correct / matched_total, 6) if matched_total else None,
+        "direction_mismatches": len(direction_mismatch_items),
+        "direction_mismatch_items": direction_mismatch_items,
+        "strict_matches": strict_matches,
+        "strict_precision": round(strict_precision, 6),
+        "strict_recall": round(strict_recall, 6),
+        "strict_f1": round(strict_f1, 6),
         "class_accuracy": round(class_correct / matched_total, 6) if matched_total else None,
         "class_mismatches": len(class_mismatch_items),
         "class_mismatch_items": class_mismatch_items,
