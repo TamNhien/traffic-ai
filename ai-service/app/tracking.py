@@ -88,6 +88,12 @@ class TrackContinuityResolver:
         self.raw_reuse_jump_ratio = max(0.0, float(raw_reuse_jump_ratio))
         self.raw_id_discontinuities = 0
         self._raw_to_canonical: dict[int, int] = {}
+        # V0.5.84: raw-token observations are NOT interchangeable with the
+        # canonical identity's latest position. A canonical may be updated by
+        # another ByteTrack alias between two observations of this raw token.
+        # Testing against the canonical state could then falsely classify the
+        # returning raw token as a teleport and tear down a valid crossing.
+        self._raw_observations: dict[int, _IdentityState] = {}
         self._states: dict[int, _IdentityState] = {}
         # V0.5.62: a raw tracker token can also be an occupied canonical ID.
         # Keep collision-only identities in a separate, decreasing namespace.
@@ -137,12 +143,29 @@ class TrackContinuityResolver:
         detached_canonical: int | None = None
         if canonical is not None and canonical not in claimed:
             previous = self._states.get(canonical)
-            if (
-                previous is not None
+            # Dual-provenance guard. A canonical identity may have been updated
+            # by another raw alias since this token was last observed. Check
+            # BOTH trajectories to avoid two dangerous cases:
+            # - the raw ID genuinely teleported but the other alias moved the
+            #   canonical nearby, hiding a reuse from the old detector;
+            # - the raw token stayed nearby while the canonical jumped far due
+            #   to another alias. Keeping them merged would fabricate a crossing.
+            own_previous = self._raw_observations.get(raw_id)
+            if own_previous is None and previous is not None and previous.last_raw_id == raw_id:
+                own_previous = previous
+            own_jump = (
+                own_previous is not None
+                and self._raw_reuse_is_discontinuous(
+                    own_previous, point, frame_index, frame_width, frame_height, rect
+                )
+            )
+            alias_jump = (
+                previous is not None and previous.last_raw_id != raw_id
                 and self._raw_reuse_is_discontinuous(
                     previous, point, frame_index, frame_width, frame_height, rect
                 )
-            ):
+            )
+            if own_jump or alias_jump:
                 # Do not merge a distant new object's observations with the old
                 # identity. Retire only the raw mapping; the previous canonical
                 # trajectory may still reappear under a different ByteTrack ID.
@@ -153,6 +176,7 @@ class TrackContinuityResolver:
                 canonical = None
             else:
                 self._canonical_raw_ids.setdefault(canonical, set()).add(raw_id)
+                self._record_raw_observation(raw_id, point, label, frame_index, rect)
                 self._update_state(canonical, raw_id, point, label, frame_index, rect)
                 self._cleanup(frame_index)
                 return canonical, False
@@ -231,6 +255,7 @@ class TrackContinuityResolver:
         canonical = best[1] if best is not None else self._fresh_canonical_id(raw_id, claimed)
         self._raw_to_canonical[raw_id] = canonical
         self._canonical_raw_ids.setdefault(canonical, set()).add(raw_id)
+        self._record_raw_observation(raw_id, point, label, frame_index, rect)
         self._update_state(canonical, raw_id, point, label, frame_index, rect)
         if stitched:
             self.stitch_count += 1
@@ -238,6 +263,16 @@ class TrackContinuityResolver:
                 self.heavy_stitch_count += 1
         self._cleanup(frame_index)
         return canonical, stitched
+
+    def _record_raw_observation(
+        self, raw_id: int, point: Point, label: str, frame_index: int, rect: Rect | None,
+    ) -> None:
+        prior = self._raw_observations.get(raw_id)
+        if prior is not None and frame_index <= prior.frame_index:
+            return
+        self._raw_observations[raw_id] = _IdentityState(
+            point, int(frame_index), str(label), int(raw_id), rect=rect,
+        )
 
     def _raw_reuse_is_discontinuous(
         self, previous: _IdentityState, point: Point, frame_index: int,
@@ -443,3 +478,4 @@ class TrackContinuityResolver:
         for raw_id, cid in list(self._raw_to_canonical.items()):
             if cid in stale:
                 self._raw_to_canonical.pop(raw_id, None)
+                self._raw_observations.pop(raw_id, None)

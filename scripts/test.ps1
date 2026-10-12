@@ -2374,6 +2374,11 @@ Invoke-Step "V0.5.83 GT-direction and replay witness tests (stdlib-only)" {
     python -m unittest discover -s scripts/tests -p test_gt_replay_witness_v0583.py -v
 }
 
+Invoke-Step "V0.5.84 raw-provenance diagnostics contract (stdlib-only)" {
+  docker run --rm -v "${root}:/src" -w /src python:3.14.7-slim `
+    python -m unittest discover -s scripts/tests -p test_raw_provenance_v0584.py -v
+}
+
 Invoke-Step "Backend syntax check" {
   docker run --rm -v "${root}:/src" -w /src/backend python:3.14.7-slim python -m compileall -q app tests alembic
 }

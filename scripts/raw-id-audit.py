@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""V0.5.82: audit same-raw-ID jumps in gate-visible trace data, offline.
+"""V0.5.84: audit raw-ID reset provenance and gate-visible jumps, offline.
 
 This is a diagnostic, never a scoring or event-mutation utility. It cannot
 prove the absence of jumps outside the finite-gate track sampling window.
@@ -72,6 +72,8 @@ def inspect_zip(path: Path, limit: float = DEFAULT_LIMIT) -> dict:
         last = {}
         flagged = []
         counted_frames = 0
+        worker_raw_resets = 0
+        reset_increase_frames = []
         seen_geometry = False
         width = height = 0.0
         with gzip.open(archive.open('benchmark-trace.jsonl.gz'), 'rt', encoding='utf-8') as f:
@@ -87,6 +89,14 @@ def inspect_zip(path: Path, limit: float = DEFAULT_LIMIT) -> dict:
                 if not seen_geometry:
                     raise ValueError('Frame evidence arrived without geometry metadata.')
                 counted_frames += 1
+                current_resets = int(obj.get('raw_id_discontinuities') or 0)
+                if current_resets > worker_raw_resets:
+                    reset_increase_frames.append({
+                        'frame': int(obj['frame_index']),
+                        'source_time_seconds': round(float(obj.get('source_time_seconds') or 0.0), 3),
+                        'new_resets': current_resets - worker_raw_resets,
+                    })
+                worker_raw_resets = max(worker_raw_resets, current_resets)
                 for row in obj.get('gate_tracks') or []:
                     raw_id = row.get('raw_track_id')
                     if raw_id is None or row.get('center') is None or row.get('rect') is None:
@@ -110,6 +120,26 @@ def inspect_zip(path: Path, limit: float = DEFAULT_LIMIT) -> dict:
         if counted_frames == 0:
             raise ValueError('Trace has no frame records.')
         events = json.loads(archive.read('events.json'))
+        # A time-near miss is only a REVIEW HINT. The source trace does not
+        # identify which raw ID caused the global counter to increase, and GT
+        # cannot prove that a raw reset caused the miss.
+        report = json.loads(archive.read('report.json')) if 'report.json' in members else {}
+        misses = report.get('missed_items') or []
+        wrong_directions = report.get('direction_mismatch_items') or []
+        for row in reset_increase_frames:
+            t = row['source_time_seconds']
+            row['nearby_missed_gt'] = [
+                {'time': item.get('time'), 'direction': item.get('direction'),
+                 'reason': (item.get('diagnosis') or {}).get('reason')}
+                for item in misses
+                if isinstance(item.get('time'), (int, float)) and abs(item['time'] - t) <= 2.0
+            ]
+            row['nearby_wrong_direction'] = [
+                {'time': item.get('time'), 'gt_direction': item.get('ground_truth_direction'),
+                 'ai_direction': item.get('ai_direction')}
+                for item in wrong_directions
+                if isinstance(item.get('time'), (int, float)) and abs(item['time'] - t) <= 2.0
+            ]
         for incident in flagged:
             timecode = incident['source_time_seconds']
             incident['nearby_persisted_events'] = [
@@ -120,7 +150,7 @@ def inspect_zip(path: Path, limit: float = DEFAULT_LIMIT) -> dict:
                 and abs(e['source_time_seconds'] - timecode) <= 1.0
             ]
         return {
-            'schema_version': 1, 'version': '0.5.82',
+            'schema_version': 2, 'version': '0.5.84',
             'session_id': manifest.get('session_id'),
             'benchmark_id': manifest.get('benchmark_id'),
             'scope': 'gate_tracks visible in trace only (not all detections)',
@@ -128,9 +158,11 @@ def inspect_zip(path: Path, limit: float = DEFAULT_LIMIT) -> dict:
             'frame_count': counted_frames,
             'raw_ids_seen_near_gate': len(last),
             'flagged_discontinuities': len(flagged),
+            'worker_raw_resets': worker_raw_resets,
+            'reset_increase_frames': reset_increase_frames,
             'incidents': flagged,
             'warning': ('This is a read-only candidate audit. Neither GT nor AI events are changed. '
-                        'Zero flagged gate-visible jumps does NOT prove that the AI is accurate.'),
+                        'Temporal GT proximity does NOT prove a raw reset caused a missed vehicle; zero gate-visible jumps does NOT prove accuracy.'),
         }
 
 
@@ -138,14 +170,20 @@ def write_report(data: dict, dest: Path) -> None:
     dest.mkdir(parents=True, exist_ok=True)
     (dest / 'raw-id-audit.json').write_text(json.dumps(data, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
     lines = [
-        '# Traffic AI V0.5.82 - Raw ID Continuity Audit', '',
+        '# Traffic AI V0.5.84 - Raw ID Continuity Audit', '',
         f"- Session: **{data['session_id']}** / Benchmark: **{data['benchmark_id']}**",
         f"- Frames audited: **{data['frame_count']}**",
         f"- Raw IDs visible near gate: **{data['raw_ids_seen_near_gate']}**",
-        f"- Large near-instant same-raw discontinuities: **{data['flagged_discontinuities']}**",
+        f"- Large near-instant same-raw discontinuities in sampled gate tracks: **{data['flagged_discontinuities']}**",
+        f"- Cumulative worker Raw ID resets (ALL tracked locations): **{data.get('worker_raw_resets', 0)}**",
         f"- Scope: {data['scope']}",
         '', data['warning'], '',
     ]
+    for row in data.get('reset_increase_frames', []):
+        lines.append(f"- Worker Raw ID reset at **{row['source_time_seconds']:.3f}s** "
+                     f"(frame {row['frame']}): +{row['new_resets']}; "
+                     f"missed GT within 2s: {len(row.get('nearby_missed_gt', []))}; "
+                     f"wrong-direction pairs within 2s: {len(row.get('nearby_wrong_direction', []))}." )
     for row in data['incidents']:
         lines.append(f"- **{row['source_time_seconds']:.3f}s** raw={row['raw_track_id']}, "
                      f"gap={row['gap_frames']} frames, {row['distance_pixels']} px. "
@@ -165,7 +203,8 @@ def main() -> int:
     except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
         parser.exit(2, f'[FAIL] Raw ID audit: {exc}\n')
     print(f"[OK] Session #{data['session_id']}, {data['frame_count']} frames; "
-          f"{data['flagged_discontinuities']} gate-visible discontinuities. ")
+          f"{data['flagged_discontinuities']} gate-visible discontinuities; "
+          f"{data.get('worker_raw_resets', 0)} worker resets overall. ")
     print(f"Report: {args.output_directory / 'raw-id-audit.md'}")
     return 0
 

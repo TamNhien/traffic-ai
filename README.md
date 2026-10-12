@@ -1,3 +1,40 @@
+# Traffic AI V0.5.84 — Per-Raw Provenance for ByteTrack Aliases
+
+Nâng cấp từ full source V0.5.83. V0.5.84 xử lý trường hợp **Raw ID
+thực sự bị tái sử dụng nhưng vị trí Canonical ID đã được alias khác cập nhật
+nên che khuất bước nhảy**. Bộ kiểm tra mới dùng lịch sử theo từng Raw ID
+**và** bảo vệ gián đoạn lớn của Canonical ID khi đổi alias. Trường hợp
+hai ID cùng lái một danh tính qua hai vị trí không thể liên tục vẫn bị
+tách để tránh crossing ảo. Không thay ngưỡng chuyển động Gate/rescue.
+
+- Lưu raw-token position/rect/frame độc lập với Canonical ID; phát hiện
+  teleport cả khi bị vị trí alias khác che khuất, đồng thời giữ quy tắc
+  an toàn chống nối quỹ đạo Canonical vượt quãng đường bất thường.
+- Xóa quan sát raw khi canonical hết TTL. Không đổi ngưỡng Gate, rescue,
+  cooldown, thời gian giao sự kiện hoặc GT.
+- `audit-raw-id.ps1` phân biệt số reset cộng dồn trên **toàn bộ frame** với
+  jump tìm thấy trong `gate_tracks` (chỉ các track được trace quanh vạch).
+  Ghi timecode và frame khi counter tăng, hỗ trợ đối chiếu video.
+- Thêm 5 bài test cho alias có/không có lịch sử đo, teleport bị che, teleport thật và TTL;
+  đồng bộ metadata, migrations, script test và hợp đồng CI.
+- Benchmark #59 Session #185 (GT 149, AI 151, khớp timecode 138,
+  strict 134, lọt 11, dư 13, sai hướng 2, sai loại 2) là **baseline**.
+  **Chưa có GPU replay để khẳng định V0.5.84 cải thiện các con số này.**
+
+## Chạy/kiểm thử sau nâng cấp
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+.\scripts\test.ps1
+.\scripts\start.ps1
+```
+
+Sau khi chạy ổn định, phát hành GitHub bằng `.\scripts\publish.ps1`.
+Tài khoản Admin đã tồn tại, **không chạy** `create-admin.ps1`.
+
+---
+
 # Traffic AI V0.5.83 — Direction-aware Benchmark + Replay Regression Witness
 
 Nâng cấp từ **V0.5.82**. Bổ sung chỉ số đánh giá đúng timecode + hướng + loại xe,

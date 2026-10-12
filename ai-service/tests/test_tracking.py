@@ -969,3 +969,76 @@ def test_v0582_operator_can_disable_raw_reuse_guard_without_affecting_stitches()
     same, _ = r.resolve(70, (900., 700.), 'motorcycle', 11, 1440, 811,
                         rect=(880., 680., 920., 720.))
     assert same == original and r.raw_id_discontinuities == 0
+
+
+# V0.5.84: aliased raw IDs must use their OWN last real coordinates for
+# teleport detection, not canonical coordinates recently written by another ID.
+def test_v0584_alias_jump_does_not_corrupt_original_raw_owner():
+    r = TrackContinuityResolver()
+    small_a = (95., 95., 145., 145.)
+    small_b = (900., 600., 950., 650.)
+    original, _ = r.resolve(10, (120., 120.), 'motorcycle', 10, 1440, 811, rect=small_a)
+    remote, _ = r.resolve(20, (925., 625.), 'motorcycle', 10, 1440, 811,
+                          {original}, rect=small_b)
+    assert remote != original
+    # Explicit alias merger updates the canonical to a far location. Raw 10
+    # still has a valid, separately observed position near (120,120).
+    r.alias_raw_id(20, original)
+    remote_after, _ = r.resolve(20, (930., 629.), 'motorcycle', 11, 1440, 811, rect=small_b)
+    assert remote_after != original  # alias divergence was isolated
+    same, stitched = r.resolve(10, (124., 121.), 'motorcycle', 12, 1440, 811,
+                               rect=(99., 96., 149., 146.))
+    assert same == original and not stitched
+    assert r.raw_id_discontinuities == 1
+
+
+def test_v0584_alias_with_no_own_measurement_is_still_guarded():
+    r = TrackContinuityResolver()
+    original, _ = r.resolve(11, (100., 100.), 'motorcycle', 10, 1440, 811,
+                            rect=(80., 80., 120., 120.))
+    r.alias_raw_id(12, original)
+    same, stitched = r.resolve(12, (900., 650.), 'motorcycle', 11, 1440, 811,
+                               rect=(880., 630., 920., 670.))
+    assert same != original and not stitched
+    assert r.raw_id_discontinuities == 1
+
+
+def test_v0584_raw_reuse_cannot_hide_behind_other_alias_position():
+    r = TrackContinuityResolver()
+    box_a = (90., 90., 130., 130.)
+    box_b = (885., 590., 925., 630.)
+    original, _ = r.resolve(18, (110., 110.), 'motorcycle', 10, 1440, 811, rect=box_a)
+    remote, _ = r.resolve(19, (905., 610.), 'motorcycle', 10, 1440, 811,
+                          {original}, rect=box_b)
+    assert remote != original
+    r.alias_raw_id(19, original)
+    # Expanded box prevents the canonical-only jump guard from splitting ID 19.
+    r.resolve(19, (910., 610.), 'motorcycle', 11, 1440, 811,
+              rect=(0., 0., 1300., 800.))
+    # The old guard saw canonical=(910,610) and raw18=(915,615), and
+    # incorrectly accepted it despite raw18's own (110,110) history.
+    new, stitched = r.resolve(18, (915., 615.), 'motorcycle', 12, 1440, 811,
+                               rect=(895., 595., 935., 635.))
+    assert new != original and not stitched
+    assert r.raw_id_discontinuities == 1
+
+
+def test_v0584_genuine_teleport_still_detaches_after_alias_activity():
+    r = TrackContinuityResolver()
+    box_a = (90., 90., 130., 130.)
+    box_b = (880., 590., 920., 630.)
+    original, _ = r.resolve(14, (110., 110.), 'car', 10, 1440, 811, rect=box_a)
+    other, _ = r.resolve(15, (115., 113.), 'car', 11, 1440, 811, rect=box_a)
+    assert other == original
+    new, stitched = r.resolve(14, (900., 610.), 'car', 12, 1440, 811, rect=box_b)
+    assert new != original and not stitched
+    assert r.raw_id_discontinuities == 1
+
+
+def test_v0584_raw_observations_cleanup_with_mapping_expiry():
+    r = TrackContinuityResolver(max_gap_frames=2, heavy_max_gap_frames=2)
+    r.resolve(31, (100., 100.), 'motorcycle', 1, 1440, 811, rect=(80.,80.,120.,120.))
+    r.resolve(32, (900., 600.), 'motorcycle', 100, 1440, 811,
+              rect=(880.,580.,920.,620.))
+    assert 31 not in r._raw_observations
+    assert 31 not in r._raw_to_canonical
