@@ -885,3 +885,87 @@ def test_v0580_order_independent_incumbent_claim() -> None:
         assert identities[30] != old
         results.append(identities)
     assert results[0] == results[1]
+
+
+# V0.5.82 Raw-ID reuse/teleport safety; does not depend on a benchmark label.
+def test_v0582_same_raw_impossible_teleport_starts_fresh_identity():
+    from app.tracking import TrackContinuityResolver
+    resolver = TrackContinuityResolver(max_gap_frames=30)
+    rect_a = (100., 120., 145., 190.)
+    rect_b = (900., 620., 950., 700.)
+    first, _ = resolver.resolve(12, (120., 160.), 'motorcycle', 10, 1440, 811, rect=rect_a)
+    second, stitched = resolver.resolve(12, (930., 660.), 'motorcycle', 11, 1440, 811, rect=rect_b)
+    assert second != first and not stitched
+    assert resolver.raw_id_discontinuities == 1
+    assert resolver._states[first].point == (120., 160.)
+    assert resolver._raw_to_canonical[12] == second
+    assert resolver.lineage_size(first) == 1
+    third, _ = resolver.resolve(12, (934., 667.), 'motorcycle', 12, 1440, 811, rect=rect_b)
+    assert third == second
+    assert resolver.raw_id_discontinuities == 1
+
+
+def test_v0582_fast_large_motion_and_long_gap_are_preserved():
+    from app.tracking import TrackContinuityResolver
+    resolver = TrackContinuityResolver(max_gap_frames=30)
+    first, _ = resolver.resolve(7, (400., 400.), 'motorcycle', 10, 1440, 811,
+                                rect=(390., 390., 410., 410.))
+    # Real video perspective often expands a detection bounding box abruptly.
+    big_box = (395., 380., 960., 780.)
+    again, _ = resolver.resolve(7, (680., 580.), 'motorcycle', 11, 1440, 811, rect=big_box)
+    assert again == first
+    # Fast vehicle with a short detector gap has a continuous raw ID.
+    after_gap, _ = resolver.resolve(7, (1300., 760.), 'motorcycle', 19, 1440, 811,
+                                    rect=(1285., 740., 1320., 795.))
+    assert after_gap == first
+    assert resolver.raw_id_discontinuities == 0
+
+
+def test_v0582_small_offset_reversal_and_missing_rect_keep_identity():
+    from app.tracking import TrackContinuityResolver
+    resolver = TrackContinuityResolver()
+    first, _ = resolver.resolve(9, (300., 400.), 'motorcycle', 10, 1440, 811,
+                                rect=(270., 360., 330., 440.))
+    first_again, _ = resolver.resolve(9, (260., 370.), 'motorcycle', 11, 1440, 811,
+                                      rect=(230., 330., 290., 410.))
+    no_box, _ = resolver.resolve(9, (1300., 700.), 'motorcycle', 12, 1440, 811)
+    assert first == first_again == no_box
+    assert resolver.raw_id_discontinuities == 0
+
+
+def test_v0582_different_raw_stitching_and_same_frame_collision_unchanged():
+    from app.tracking import TrackContinuityResolver
+    r = TrackContinuityResolver()
+    first, _ = r.resolve(20, (500., 400.), 'motorcycle', 10, 1440, 811,
+                         rect=(475., 370., 525., 430.))
+    stitched, yes = r.resolve(21, (505., 405.), 'motorcycle', 11, 1440, 811,
+                              rect=(480., 375., 530., 435.))
+    assert stitched == first and yes
+    other, no = r.resolve(22, (900., 600.), 'motorcycle', 11, 1440, 811,
+                          {stitched}, rect=(875., 575., 925., 625.))
+    assert other != first and not no
+    assert r.raw_id_discontinuities == 0
+
+
+def test_v0582_four_wheel_detached_raw_cannot_rejoin_its_old_identity():
+    from app.tracking import TrackContinuityResolver
+    r = TrackContinuityResolver(heavy_max_distance_ratio=.18)
+    box1 = (100., 100., 150., 150.)
+    original, _ = r.resolve(70, (125., 125.), 'car', 10, 1440, 811, rect=box1)
+    r.resolve(70, (130., 125.), 'car', 11, 1440, 811, rect=box1)
+    # The moving family would be allowed a 0.225-normalized stitch if the
+    # just-detached owner were not explicitly excluded as a candidate.
+    new, was_stitched = r.resolve(70, (445., 125.), 'car', 12, 1440, 811,
+                                  rect=(420., 100., 470., 150.))
+    assert new != original and not was_stitched
+    assert r.raw_id_discontinuities == 1
+
+
+def test_v0582_operator_can_disable_raw_reuse_guard_without_affecting_stitches():
+    from app.tracking import TrackContinuityResolver
+    r = TrackContinuityResolver(raw_reuse_jump_ratio=0.0)
+    original, _ = r.resolve(70, (100., 100.), 'motorcycle', 10, 1440, 811,
+                            rect=(80., 80., 120., 120.))
+    same, _ = r.resolve(70, (900., 700.), 'motorcycle', 11, 1440, 811,
+                        rect=(880., 680., 920., 720.))
+    assert same == original and r.raw_id_discontinuities == 0

@@ -2364,6 +2364,11 @@ Invoke-Step "Replay audit unit tests (stdlib-only)" {
     python -m unittest discover -s scripts/tests -p test_replay_diff.py -v
 }
 
+Invoke-Step "Raw ID Continuity Guard V0.5.82 regression (stdlib-only)" {
+  docker run --rm -v "${root}:/src" -w /src python:3.14.7-slim `
+    python -m unittest discover -s scripts/tests -p test_raw_id_audit_v0582.py -v
+}
+
 Invoke-Step "Backend syntax check" {
   docker run --rm -v "${root}:/src" -w /src/backend python:3.14.7-slim python -m compileall -q app tests alembic
 }

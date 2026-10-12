@@ -67,6 +67,7 @@ class TrackContinuityResolver:
         max_distance_ratio: float = 0.14,
         heavy_max_gap_frames: int | None = None,
         heavy_max_distance_ratio: float | None = None,
+        raw_reuse_jump_ratio: float = 0.18,
     ) -> None:
         self.max_gap_frames = max(2, int(max_gap_frames))
         self.max_distance_ratio = max(0.01, float(max_distance_ratio))
@@ -78,6 +79,14 @@ class TrackContinuityResolver:
             self.max_distance_ratio,
             float(heavy_max_distance_ratio) if heavy_max_distance_ratio is not None else self.max_distance_ratio,
         )
+        # V0.5.82: isolate a ByteTrack token that abruptly reappears at an
+        # impossible location, rather than inheriting another vehicle's gate,
+        # cooldown, class and crossing history. The guard is deliberately very
+        # narrow: the same raw ID must jump in <=3 frames by >18% of the full
+        # frame diagonal AND by >3 previous/current bounding-box diagonals.
+        # A fast vehicle returning after a genuine longer gap is not split.
+        self.raw_reuse_jump_ratio = max(0.0, float(raw_reuse_jump_ratio))
+        self.raw_id_discontinuities = 0
         self._raw_to_canonical: dict[int, int] = {}
         self._states: dict[int, _IdentityState] = {}
         # V0.5.62: a raw tracker token can also be an occupied canonical ID.
@@ -125,16 +134,37 @@ class TrackContinuityResolver:
             self._reserved_negative_ids.add(raw_id)
         claimed = claimed_canonical_ids or set()
         canonical = self._raw_to_canonical.get(raw_id)
+        detached_canonical: int | None = None
         if canonical is not None and canonical not in claimed:
-            self._canonical_raw_ids.setdefault(canonical, set()).add(raw_id)
-            self._update_state(canonical, raw_id, point, label, frame_index, rect)
-            self._cleanup(frame_index)
-            return canonical, False
+            previous = self._states.get(canonical)
+            if (
+                previous is not None
+                and self._raw_reuse_is_discontinuous(
+                    previous, point, frame_index, frame_width, frame_height, rect
+                )
+            ):
+                # Do not merge a distant new object's observations with the old
+                # identity. Retire only the raw mapping; the previous canonical
+                # trajectory may still reappear under a different ByteTrack ID.
+                detached_canonical = canonical
+                self._raw_to_canonical.pop(raw_id, None)
+                self._canonical_raw_ids.get(canonical, set()).discard(raw_id)
+                self.raw_id_discontinuities += 1
+                canonical = None
+            else:
+                self._canonical_raw_ids.setdefault(canonical, set()).add(raw_id)
+                self._update_state(canonical, raw_id, point, label, frame_index, rect)
+                self._cleanup(frame_index)
+                return canonical, False
 
         diagonal = max(hypot(frame_width, frame_height), 1.0)
         family = _vehicle_family(label)
         best: tuple[float, int] | None = None
         for candidate_id, state in self._states.items():
+            # A just-retired raw ID cannot stitch straight back into the
+            # identity from which it was detached, even for heavy vehicles.
+            if candidate_id == detached_canonical:
+                continue
             gap = frame_index - state.frame_index
             state_family = _vehicle_family(state.label)
             gap_limit = self.heavy_max_gap_frames if family == "four-wheel" and state_family == "four-wheel" else self.max_gap_frames
@@ -208,6 +238,30 @@ class TrackContinuityResolver:
                 self.heavy_stitch_count += 1
         self._cleanup(frame_index)
         return canonical, stitched
+
+    def _raw_reuse_is_discontinuous(
+        self, previous: _IdentityState, point: Point, frame_index: int,
+        width: int, height: int, rect: Rect | None,
+    ) -> bool:
+        """Fail closed only on an *implausible* near-instant raw-ID teleport.
+
+        This check is deliberately independent of benchmark Ground Truth and
+        does not use a general travel-speed limit. It requires both a large
+        full-frame displacement and a large displacement relative to BOTH
+        bounding boxes; otherwise perspective changes and legitimate fast
+        vehicles would trigger identity churn and more false crossings.
+        """
+        gap = int(frame_index) - previous.frame_index
+        if not (0 < gap <= 3 and self.raw_reuse_jump_ratio > 0):
+            return False
+        if previous.rect is None or rect is None:
+            return False
+        distance = hypot(point[0] - previous.point[0], point[1] - previous.point[1])
+        if distance <= max(1.0, hypot(width, height)) * self.raw_reuse_jump_ratio:
+            return False
+        def box_diagonal(box: Rect) -> float:
+            return hypot(max(0.0, box[2] - box[0]), max(0.0, box[3] - box[1]))
+        return distance > 3.0 * max(box_diagonal(previous.rect), box_diagonal(rect), 1.0)
 
     def _fresh_canonical_id(self, raw_id: int, claimed: set[int]) -> int:
         """Choose a fresh identity without overwriting a visible alias owner.

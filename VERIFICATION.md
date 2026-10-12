@@ -1,3 +1,16 @@
+# V0.5.82 — Verification (Raw ID Reuse Guard)
+
+- Input: `traffic-ai-v0.5.81-full-source.zip` and user-provided `traffic-ai-benchmark-57-session-182.zip` (GT=149, saved AI=152, matched=139, missed=10, extra=13).
+- Actual code changes: `ai-service/app/tracking.py` adds a guarded fresh canonical for implausible short-gap same-raw-ID teleport; prevents immediate re-stitch with detached canonical; worker tracks telemetry. New `Raw ID reset` appears in state API, dashboard, and gate trace. Does NOT change GT, database crossing assignments, model weights or global Gate/rescue thresholds.
+- Diagnostic CLI `scripts/raw-id-audit.py` validates SHA-256 compressed trace against manifest, streams frame evidence, outputs read-only JSON/Markdown. On Benchmark #57 Session #182: 23,650 frames, 0 qualifying large same-Raw-ID jumps *in gate-visible sample stream*; this is **not evidence of improved accuracy**. Source benchmark metrics remain unchanged until V0.5.82 GPU replay is executed on Windows.
+- Automated test results: **AI Service 646/646**, **Backend 175/175**, **Backup Worker 4/4**, **Frontend (Node) 4/4**, **Offline/Version/Replay/Audit 39/39**. **Total 868/868**, in the available local test environment. `ai-service/tests/test_tracking.py`: 73 tests, including 6 new V0.5.82 regression cases. Each suite executed here, not inferred from prior releases.
+- `scripts/version-contract.py`: PASS, single Alembic head `0096_raw_id_reuse_v0582`, parent `0095_quiet_startup_v0581`. Frontend and runtime metadata are 0.5.82. Python `compileall`: PASS. CLI audit of original ZIP verified compressed trace and processed 23,650 frames.
+- **Frontend production Vite build not verified:** npm offline installation failed with `ENOTCACHED` for `@vitejs/plugin-react`. Frontend unit tests passed; Windows/Docker `test.ps1` still needs to build the release UI.
+- No native PowerShell, Docker/GPU replay, physical PostgreSQL or GitHub Release were executed in this environment. Run `scripts/test.ps1` and replay the camera on Windows before publishing.
+- Backend + AI tests use SQLite/in-memory and an ephemeral `httpx2` → `httpx` adapter outside packaged source. CI and user's `scripts/test.ps1` use normal pinned dependencies.
+
+---
+
 # V0.5.81 — Verification of quiet startup and pip warning policy
 
 - Input source: V0.5.80 full-source ZIP. Only startup console text, temporary pip test environment, release metadata and test contracts changed; counting/tracking/backend business logic stays identical.

@@ -70,7 +70,7 @@ jobs:
       - name: Offline GT forensic and replay audit tests
         run: |
           python -m unittest discover -s scripts/tests -p 'test_*.py' -v
-          python -m compileall -q scripts/benchmark-forensics.py scripts/benchmark-gate.py scripts/replay-diff.py scripts/evaluate-direct-shadow.py
+          python -m compileall -q scripts/benchmark-forensics.py scripts/benchmark-gate.py scripts/replay-diff.py scripts/evaluate-direct-shadow.py scripts/raw-id-audit.py
 
       - name: Frontend build
         working-directory: frontend

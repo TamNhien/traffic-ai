@@ -1,3 +1,37 @@
+# Traffic AI V0.5.82 — Raw ID Reuse Guard + Gate Trace Audit 10.1
+
+**Nâng cấp từ full source V0.5.81.** Tập trung ngăn ByteTrack tái sử dụng cùng Raw Track ID cho xe khác ngay gần vạch đếm, gây kế thừa nhầm quỹ đạo, class và trạng thái crossing. Không thay đổi các ngưỡng Gate, cooldown, rescue hoặc chống trùng đã có.
+
+- **Same-Raw Identity Discontinuity Guard:** Nếu cùng Raw Track ID bất ngờ nhảy rất xa trong tối đa 3 frame, đồng thời vượt 18% đường chéo toàn ảnh **và** hơn 3 lần đường chéo hai hộp detection, hệ thống tách danh tính mới. Chỉ tách khi có đủ hai hộp và tọa độ quan sát; không đoán danh tính bằng nhãn GT hay tổng đếm.
+- **Chống tái ghép sai:** Raw ID vừa được tách không thể lập tức stitch lại Canonical ID đã bị loại. Các canonical track còn tồn tại được giữ riêng để tiếp tục theo dõi nếu đối tượng thật xuất hiện trở lại.
+- **Telemetry:** Bổ sung số `Raw ID reset` trên dashboard, trạng thái phiên AI và benchmark trace để xác nhận bảo vệ có kích hoạt khi phát video. Mặc định 0 nếu không phát hiện lỗi.
+- **Audit độc lập:** `scripts/audit-raw-id.ps1` đọc ZIP **Tải hồ sơ benchmark** đã đóng, xác minh SHA-256 của trace và tạo `raw-id-audit.json` / `raw-id-audit.md` với các frame nghi ngờ, không sửa GT/event.
+- Có thể chỉnh `AI_STITCH_RAW_REUSE_JUMP_RATIO` trong `.env` (mặc định `0.18`; `0` tắt guard) nhưng không nên giảm ngưỡng khi thiếu bằng chứng, vì nguy cơ chặt đứt đường đi xe nhanh.
+- **Phân tích Benchmark #57 Session #182** (23.650 frame): GT 149 / AI 152 / khớp 139 / lọt 10 / dư 13. Audit mới cho **0 sự kiện nhảy Raw ID cực đoan gần vạch** theo ngưỡng trên. Điều này **không có nghĩa đã sửa 10 lọt / 13 dư**; cần phát lại để đo. Nhiều sự kiện gap/ID đổi đã có hướng di chuyển hợp lý nên không thể áp quy tắc loại theo khoảng cách chung.
+- Migration `0096_raw_id_reuse_v0582` chỉ cập nhật `schema_version` sang `0.5.82`. PostgreSQL, tài khoản, backup/restore, video/model và GT không bị sửa.
+
+## Lệnh PowerShell đầy đủ
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+
+.\scripts\test.ps1
+.\scripts\start.ps1
+```
+
+Audit sau khi tải ZIP từ giao diện Benchmark:
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+.\scripts\audit-raw-id.ps1 -ExportZip .\benchmark-182.zip -OutputDirectory .\raw-id-audit-report
+```
+
+Sau khi kiểm tra máy Windows/Docker và benchmark ổn định, phát hành GitHub bằng ` .\scripts\publish.ps1 `. **Không chạy `create-admin.ps1`** vì Admin đã tồn tại.
+
+---
+
 # Traffic AI V0.5.81 — Quiet Startup + Backup Worker pip Test Hygiene
 
 **Nâng cấp trực tiếp từ V0.5.80**, không thay đổi thuật toán đếm AI, model, mật khẩu, database hoặc hành vi Backup/Restore. Bản này sửa hiển thị khi chạy test và khởi động.
