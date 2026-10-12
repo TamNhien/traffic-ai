@@ -1,3 +1,27 @@
+# Traffic AI V0.5.80 — Incumbent Identity Protection (Cross-ID Anti-Swap)
+
+**Nâng cấp từ V0.5.79; giữ nguyên PostgreSQL, tài khoản, Backup/Restore và chính sách chống đếm trùng V0.5.78.**
+
+- Từ benchmark #56 / Session #180: 149 GT / 152 AI / khớp 139 / lọt 10 / dư 13. Cải thiện so với #179 là giảm 1 dư; số lượt lọt vẫn 10.
+- Trace quanh 606 giây thể hiện hai raw ByteTrack cùng hiện diện nhưng canonical identities đổi chỗ khi một raw ID mới được xét trước raw ID đã hiện diện. Chỉ dùng khoảng cách crossing để xóa một event có thể gộp nhầm hai xe thật.
+- **V0.5.80** thêm snapshot vị trí Raw Track ID của toàn frame trước khi ghép canonical: một canonical có incumbent vừa xuất hiện ở gần vị trí trước đó được bảo vệ khỏi các raw ID mới có điểm ở xa hơn rõ rệt. Không giữ chỗ cho incumbent đã biến mất, không thay ngưỡng vạch đếm/rescue. Có bài test cho chủ sở hữu quay lại, ID mới, ID cũ mất và trường hợp tracker nhảy quá xa.
+- Đường tracking hiện có giữ tương thích khi không cung cấp snapshot; snapshot chỉ thêm xác thực quyền ưu tiên chủ ID và không dựa trên nhãn GT để đếm.
+- **Kết quả cần kiểm chứng:** thay đổi danh tính có thể làm khác crossing. Chưa chạy GPU trên clip gốc; **không cam kết giảm từ 10 lọt / 13 dư** trước khi phát lại. Report của phiên #180 là baseline, không phải kết quả V0.5.80.
+- Migration `0094_incumbent_identity_v0580` chỉ cập nhật schema_version, không thay đổi bảng. Đồng bộ VERSION/frontend/backend/AI/backup và kiểm tra hợp đồng phát hành.
+
+## Lệnh chạy PowerShell (Admin đã tồn tại)
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+.\scripts\test.ps1
+.\scripts\start.ps1
+```
+
+Khi vận hành/benchmark được kiểm tra ổn định: ` .\scripts\publish.ps1 `.
+
+---
+
 # Traffic AI V0.5.79 — Release Version Consistency Hotfix
 
 **Sửa lỗi chặn `scripts/test.ps1` khi `VERSION=0.5.78` nhưng contract vẫn cố định 0.5.77.** Bản sửa tăng release lên V0.5.79, dựa hoàn toàn trên source V0.5.78.

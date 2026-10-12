@@ -1,3 +1,14 @@
+# V0.5.80 — Verification
+
+- Benchmark #56 Session #180 (dữ liệu đầu vào): GT 149, AI 152, matched 139, missed 10, extra 13.
+- Giữ 2 xe đang xuất hiện gần nhau tách biệt; không dùng GT để chọn ID runtime.
+- Phát lại đầy đủ 23.650 frame cần chạy trên máy có model/video/GPU của người dùng; không thể suy diễn chỉ số mới từ test unit.
+- Test thực thi trong môi trường hiện tại: AI 640/640; backend 175/175; scripts/offline 32/32; backup worker 4/4; frontend unit 4/4. **Tổng 855/855 đạt.**
+- Backend/AI được chạy với shim `httpx2` → `httpx` đặt NGOÀI source chỉ để kiểm thử, không đóng gói shim. PostgreSQL thực tế, PowerShell và Vite/Docker GPU replay chưa được xác minh trong môi trường này.
+- Test chi tiết và giới hạn xác minh được ghi dưới đây cùng thông tin các bản trước.
+
+---
+
 # V0.5.79 Verification — Release version mismatch hotfix
 
 - Observed user failure: `scripts/test.ps1:326`, `VERSION must be 0.5.77, current: 0.5.78`, before backend/AI/frontend tests.

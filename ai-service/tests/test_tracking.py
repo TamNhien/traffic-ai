@@ -821,3 +821,67 @@ def test_v0549_canonical_lineage_tracks_stitched_raw_ids() -> None:
     assert stitched_id == canonical
     assert resolver.lineage_size(canonical) == 2
     assert resolver.has_lineage_switch(canonical) is True
+
+
+def test_v0580_visible_incumbent_prevents_newcomer_stealing_identity():
+    resolver = TrackContinuityResolver(max_distance_ratio=0.08)
+    # The newcomer is near the right rider and far from the left. Without
+    # the full-frame incumbent preclaim it would steal the right canonical;
+    # the returning right raw tracker would then be forced into another ID.
+    a, _ = resolver.resolve(10, (950., 370.), 'motorcycle', 100, 1440, 811)
+    b, _ = resolver.resolve(20, (1180., 256.), 'motorcycle', 100, 1440, 811, {a})
+    visible = {30: (1110., 300.), 20: (1180., 255.)}
+    newcomer, _ = resolver.resolve(30, visible[30], 'motorcycle', 101, 1440, 811,
+                                   visible_raw_centers=visible)
+    incumbent, stitched = resolver.resolve(20, visible[20], 'motorcycle', 101, 1440, 811,
+                                          {newcomer}, visible_raw_centers=visible)
+    assert newcomer != b
+    assert incumbent == b and not stitched
+    assert resolver._states[b].point == visible[20]
+
+
+def test_v0580_missing_incumbent_does_not_lock_stitching():
+    resolver = TrackContinuityResolver(max_distance_ratio=0.20)
+    original, _ = resolver.resolve(20, (1180., 256.), 'motorcycle', 100, 1440, 811)
+    candidate, stitched = resolver.resolve(30, (1179., 258.), 'motorcycle', 101, 1440, 811,
+                                          visible_raw_centers={30: (1179., 258.)})
+    assert candidate == original and stitched
+
+
+def test_v0580_far_incumbent_does_not_reserve_stale_position():
+    resolver = TrackContinuityResolver(max_distance_ratio=0.20)
+    original, _ = resolver.resolve(20, (1180., 256.), 'motorcycle', 100, 1440, 811)
+    visible = {20: (600., 500.), 30: (1182., 255.)}
+    candidate, stitched = resolver.resolve(30, visible[30], 'motorcycle', 101, 1440, 811,
+                                          visible_raw_centers=visible)
+    assert candidate == original and stitched
+
+
+def test_v0580_existing_raw_mapping_wins_its_prior_identity():
+    resolver = TrackContinuityResolver(max_distance_ratio=0.20)
+    original, _ = resolver.resolve(20, (1180., 256.), 'motorcycle', 100, 1440, 811)
+    got, stitched = resolver.resolve(20, (1177., 259.), 'motorcycle', 101, 1440, 811,
+                                     visible_raw_centers={20: (1177., 259.), 30: (1185., 260.)})
+    assert got == original and not stitched
+
+
+def test_v0580_order_independent_incumbent_claim() -> None:
+    """Full-frame prior presence protects the original token in either order."""
+    results = []
+    for newcomers_first in (True, False):
+        resolver = TrackContinuityResolver(max_distance_ratio=0.08)
+        old, _ = resolver.resolve(20, (1180., 256.), 'motorcycle', 100, 1440, 811)
+        visible = {20: (1180., 255.), 30: (1110., 300.)}
+        claimed = set()
+        identities = {}
+        for raw in ((30, 20) if newcomers_first else (20, 30)):
+            canonical, _ = resolver.resolve(
+                raw, visible[raw], 'motorcycle', 101, 1440, 811, claimed,
+                visible_raw_centers=visible,
+            )
+            identities[raw] = canonical
+            claimed.add(canonical)
+        assert identities[20] == old
+        assert identities[30] != old
+        results.append(identities)
+    assert results[0] == results[1]

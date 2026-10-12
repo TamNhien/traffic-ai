@@ -115,6 +115,7 @@ class TrackContinuityResolver:
         claimed_canonical_ids: set[int] | None = None,
         *,
         rect: Rect | None = None,
+        visible_raw_centers: dict[int, Point] | None = None,
     ) -> tuple[int, bool]:
         # Expire the previous identity before an arriving raw ID can refresh it.
         # Otherwise a reused ID after a long silence revives stale motion state.
@@ -141,6 +142,30 @@ class TrackContinuityResolver:
                 continue
             if state_family != family:
                 continue
+
+            # V0.5.80: Before a newcomer can claim this identity, reserve it
+            # for an incumbent raw tracker that is visibly returning nearby
+            # IN THE SAME FRAME. A newcomer processed first must not steal an
+            # occupied identity and force the returning raw tracker to stitch
+            # onto a completely different vehicle (cross-ID identity swap).
+            # An absent/stale incumbent never reserves anything. The optional
+            # batch snapshot is independent of detection iteration order.
+            if visible_raw_centers and gap <= 3:
+                incumbent = int(state.last_raw_id)
+                incumbent_point = visible_raw_centers.get(incumbent)
+                if incumbent != raw_id and incumbent_point is not None:
+                    incumbent_distance = hypot(
+                        incumbent_point[0] - state.point[0],
+                        incumbent_point[1] - state.point[1],
+                    )
+                    newcomer_distance = hypot(
+                        point[0] - state.point[0], point[1] - state.point[1],
+                    )
+                    if (
+                        incumbent_distance <= max(15.0, diagonal * 0.055)
+                        and newcomer_distance > incumbent_distance + max(15.0, diagonal * 0.025)
+                    ):
+                        continue
 
             if self._opposite_two_wheel_stitch(state, point, rect, family, gap):
                 continue

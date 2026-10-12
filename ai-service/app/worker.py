@@ -1831,6 +1831,17 @@ class PipelineWorker(threading.Thread):
                     # transient raw CAR/TRUCK box pair.  The latter still appears in
                     # suppressed_class_duplicates_current_frame, while this cumulative
                     # number now answers how many persistent identities were truly fused.
+                    # V0.5.80: present incumbent raw centers to the identity
+                    # resolver before any candidate mutates canonical state.
+                    # This snapshot is readonly and does not depend on YOLO's
+                    # incidental detection order.
+                    visible_raw_centers = {
+                        int(ids[i]): (
+                            (float(xyxy[i][0]) + float(xyxy[i][2])) * 0.5 + offset_x,
+                            (float(xyxy[i][1]) + float(xyxy[i][3])) * 0.5 + offset_y,
+                        )
+                        for i in keep_indices
+                    }
                     claimed_canonical_ids: set[int] = set()
                     for item_index in keep_indices:
                         rect_roi = xyxy[item_index]
@@ -1854,6 +1865,7 @@ class PipelineWorker(threading.Thread):
                             height,
                             claimed_canonical_ids,
                             rect=rect,
+                            visible_raw_centers=visible_raw_centers,
                         )
                         claimed_canonical_ids.add(track_id)
                         for duplicate_index in duplicate_aliases.get(item_index, []):

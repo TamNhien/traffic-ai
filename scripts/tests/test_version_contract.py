@@ -45,7 +45,7 @@ class VersionMetadataTests(unittest.TestCase):
             root = Path(folder)
             self._isolated_release_fixture(root)
             package = root / 'frontend/package.json'
-            package.write_text(package.read_text('utf-8').replace('"version": "0.5.79"', '"version": "0.5.77"'), encoding='utf-8')
+            package.write_text(package.read_text('utf-8').replace('"version": "0.5.80"', '"version": "0.5.77"'), encoding='utf-8')
             self.assertTrue(any('frontend/package.json' in e for e in module.check(root)))
 
     def test_current_head_matches_release(self):
