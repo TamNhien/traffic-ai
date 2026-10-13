@@ -1097,3 +1097,76 @@ def test_v0585_short_gap_alias_guard_can_be_disabled_for_ab_comparison() -> None
                                        rect=(1148.2, 216.4, 1214.2, 295.9))
     assert alias == 235019 and stitched
     assert resolver.short_gap_alias_rejections == 0
+
+
+# V0.5.86: independently visible incumbent reserves canonical in 4-12 frame gap.
+def test_v0586_visible_incumbent_prevents_two_wheel_alias_swap_after_gap() -> None:
+    resolver = TrackContinuityResolver()
+    # Old motorcycle is briefly occluded. It returns in the very same frame
+    # that a different rider with a NEW raw token appears nearby. The newcomer
+    # is inside the broad diagonal stitch radius; the incumbent is much closer.
+    resolver.resolve(10, (400., 400.), 'motorcycle', 100, 1440, 811,
+                     rect=(360., 355., 440., 445.))
+    visible = {10: (405., 398.), 99: (470., 398.)}
+    new_id, stitched = resolver.resolve(
+        99, visible[99], 'motorcycle', 107, 1440, 811,
+        rect=(445., 365., 495., 430.), visible_raw_centers=visible,
+    )
+    assert (new_id, stitched) == (99, False)
+    incumbent, stitched = resolver.resolve(
+        10, visible[10], 'motorcycle', 107, 1440, 811,
+        rect=(365., 355., 445., 445.), visible_raw_centers=visible,
+    )
+    assert (incumbent, stitched) == (10, False)
+    assert resolver.lineage_size(10) == 1
+    assert resolver.lineage_size(99) == 1
+
+
+def test_v0586_incumbent_not_visible_allows_valid_two_wheel_recovery() -> None:
+    resolver = TrackContinuityResolver()
+    resolver.resolve(10, (400., 400.), 'motorcycle', 100, 1440, 811,
+                     rect=(360., 355., 440., 445.))
+    same_rider, stitched = resolver.resolve(
+        99, (430., 399.), 'motorcycle', 107, 1440, 811,
+        rect=(395., 355., 465., 445.),
+        visible_raw_centers={99: (430., 399.)},
+    )
+    assert (same_rider, stitched) == (10, True)
+
+
+def test_v0586_absent_or_distant_incumbent_not_reserved() -> None:
+    resolver = TrackContinuityResolver()
+    resolver.resolve(10, (400., 400.), 'motorcycle', 100, 1440, 811,
+                     rect=(360., 355., 440., 445.))
+    # The raw ID is visible but at a remote location: this is not proof that
+    # canonical 10 is occupied near its last valid trajectory.
+    new_id, stitched = resolver.resolve(
+        99, (430., 399.), 'motorcycle', 107, 1440, 811,
+        rect=(395., 355., 465., 445.),
+        visible_raw_centers={10: (900., 200.), 99: (430., 399.)},
+    )
+    assert (new_id, stitched) == (10, True)
+
+
+def test_v0586_incumbent_extended_window_can_be_rolled_back() -> None:
+    resolver = TrackContinuityResolver(short_gap_alias_guard=False)
+    resolver.resolve(10, (400., 400.), 'motorcycle', 100, 1440, 811,
+                     rect=(360., 355., 440., 445.))
+    new_id, stitched = resolver.resolve(
+        99, (470., 398.), 'motorcycle', 107, 1440, 811,
+        rect=(445., 365., 495., 430.),
+        visible_raw_centers={10: (405., 398.), 99: (470., 398.)},
+    )
+    assert (new_id, stitched) == (10, True)
+
+
+def test_v0586_four_wheel_incumbent_window_unchanged() -> None:
+    resolver = TrackContinuityResolver()
+    resolver.resolve(10, (400., 400.), 'truck', 100, 1440, 811,
+                     rect=(340., 340., 460., 460.))
+    new_id, stitched = resolver.resolve(
+        99, (470., 398.), 'truck', 107, 1440, 811,
+        rect=(410., 350., 530., 450.),
+        visible_raw_centers={10: (405., 398.), 99: (470., 398.)},
+    )
+    assert (new_id, stitched) == (10, True)

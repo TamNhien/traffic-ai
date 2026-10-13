@@ -1,3 +1,28 @@
+# Traffic AI V0.5.86 — Visible-Incumbent Reservation + Benchmark #61 Forensics
+
+Tiếp tục từ **V0.5.85**. Baseline thực tế Benchmark #61 / Session #187: GT **149**, AI **150**, khớp timecode **138**, lọt **11**, dư **12**, sai loại **2**, sai hướng **2** (Recall **92,6%**, Precision **92,0%**, F1 **92,3%**). Đây là kết quả **V0.5.85**, không phải replay V0.5.86.
+
+- **Visible-Incumbent Reservation (4–12 frame):** nếu xe hai bánh trước đó bị che trong 4–12 frame, raw tracker cũ và raw tracker mới **cùng hiện diện trong cùng một frame**, và raw cũ nằm gần hơn đáng kể vị trí canonical cuối, bảo lưu canonical cho raw cũ. Chặn raw mới chiếm sai danh tính do thứ tự xử lý; không tạo lượt đếm mới và không mở rộng Gate/Road Zone/cooldown.
+- Chỉ hoạt động khi có bằng chứng đủ từ `visible_raw_centers`, không ảnh hưởng trường hợp xe thật trở lại bằng raw mới nhưng raw cũ không hiện diện. Xe 4 bánh vẫn giữ ngưỡng 3 frame. Có thể A/B rollback bằng `AI_SHORT_GAP_ALIAS_GUARD=0` rồi khởi động lại dịch vụ.
+- **Vehicle Count dễ đọc:** tổng lượt DB/IN/OUT và số lượng theo từng loại xe được giữ trên cùng. Các chỉ số worker, bộ lọc, refiner chuyển vào mục mở rộng **Thông số kỹ thuật**; nhắc rõ những giá trị Trực tiếp/Nội suy/Rescue là đề xuất worker, có thể cao hơn tổng đã lưu ở backend do dedup/Human Guard.
+- **Session #187 forensics:** kiểm tra SHA256 trace và hồ sơ benchmark, đọc ảnh camera xuất kèm tại frame 7243 (người dắt xe đạp và xe máy cùng khu vực), frame 16050/22059 (van chở hàng). Tại 641,931s GT hiện gán Ô tô nhưng AI gán Xe tải; phải kiểm tra quy ước GT, không tự sửa GT. Khác biệt khớp timecode không chứng minh AI đã nhận đúng đối tượng.
+- Thêm **5 test** cho khả năng giữ raw incumbent, xe quay lại thật, incumbent ở xa, rollback và xe 4 bánh. Migration `0100` metadata-only, không chạm events/GT, giữ cơ chế backup/restore.
+
+**Giới hạn:** không có môi trường Docker/GPU và trọng số model để chạy lại 23.650 frame. Chưa thể khẳng định F1/Recall mới đã tăng hoặc lọt/dư mới đã giảm. Sau khi chạy lại clip, xuất ZIP benchmark mới để đánh giá đối chứng.
+
+## Lệnh PowerShell
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+.\scripts\test.ps1
+.\scripts\start.ps1
+```
+
+Sau khi xác nhận chạy ổn và các kiểm tra đạt, dùng ` .\scripts\publish.ps1 ` để test → commit/push → tag → GitHub Release. Tài khoản Admin đã có, không cần tạo lại.
+
+---
+
 # Traffic AI V0.5.85 — Short-Gap Alias Handoff Evidence Guard
 
 Nâng cấp từ **V0.5.84**. Benchmark #60 / Session #186 cho thấy GT 149 / AI 151 / khớp timecode 138 / lọt 11 / dư 13. Thay đổi bộ ghép danh tính dựa trên quỹ đạo, không đọc GT lúc chạy.

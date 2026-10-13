@@ -150,7 +150,7 @@ def inspect_zip(path: Path, limit: float = DEFAULT_LIMIT) -> dict:
                 and abs(e['source_time_seconds'] - timecode) <= 1.0
             ]
         return {
-            'schema_version': 2, 'version': '0.5.85',
+            'schema_version': 2, 'version': '0.5.86',
             'session_id': manifest.get('session_id'),
             'benchmark_id': manifest.get('benchmark_id'),
             'scope': 'gate_tracks visible in trace only (not all detections)',

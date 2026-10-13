@@ -200,14 +200,24 @@ class TrackContinuityResolver:
             if state_family != family:
                 continue
 
-            # V0.5.80: Before a newcomer can claim this identity, reserve it
-            # for an incumbent raw tracker that is visibly returning nearby
-            # IN THE SAME FRAME. A newcomer processed first must not steal an
-            # occupied identity and force the returning raw tracker to stitch
-            # onto a completely different vehicle (cross-ID identity swap).
-            # An absent/stale incumbent never reserves anything. The optional
-            # batch snapshot is independent of detection iteration order.
-            if visible_raw_centers and gap <= 3:
+            # V0.5.86: reserve the identity for a visibly returning incumbent
+            # for up to twelve frames of two-wheel occlusion. V0.5.80 only
+            # checked <=3 frames, leaving a 4-12-frame window where the batch
+            # could stitch an unrelated newcomer first, then force the actual
+            # returning raw ID onto a different canonical identity. Both raw
+            # tokens must be visible in THIS frame; the incumbent must still
+            # be spatially close and strictly closer than the newcomer.
+            # Keep the old <=3-frame rule for four-wheel vehicles. This is
+            # order-independent and can be rolled back with the existing
+            # AI_SHORT_GAP_ALIAS_GUARD switch (for the extended window only).
+            incumbent_window = (
+                gap <= 3 or (
+                    self.short_gap_alias_guard
+                    and family == 'two-wheel'
+                    and 4 <= gap <= 12
+                )
+            )
+            if visible_raw_centers and incumbent_window:
                 incumbent = int(state.last_raw_id)
                 incumbent_point = visible_raw_centers.get(incumbent)
                 if incumbent != raw_id and incumbent_point is not None:

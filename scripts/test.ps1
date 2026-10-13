@@ -2394,6 +2394,21 @@ Invoke-Step "V0.5.85 short-gap alias evidence contract" {
   ) { throw "Short-gap alias guard evidence, fast-motion regression tests or telemetry missing." }
 }
 
+Invoke-Step "V0.5.86 visible incumbent and compact vehicle dashboard contract" {
+  $tracking = Get-Content (Join-Path $root "ai-service/app/tracking.py") -Raw -Encoding UTF8
+  $tests = Get-Content (Join-Path $root "ai-service/tests/test_tracking.py") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend/src/main.jsx") -Raw -Encoding UTF8
+  $style = Get-Content (Join-Path $root "frontend/src/styles.css") -Raw -Encoding UTF8
+  if (
+    $tracking -notmatch 'incumbent_window' -or
+    $tracking -notmatch '4 <= gap <= 12' -or
+    $tests -notmatch 'test_v0586_visible_incumbent_prevents_two_wheel_alias_swap_after_gap' -or
+    $tests -notmatch 'test_v0586_incumbent_extended_window_can_be_rolled_back' -or
+    $frontend -notmatch '<details className="count-diagnostics">' -or
+    $style -notmatch '\.count-diagnostics\[open\]'
+  ) { throw "V0.5.86 incumbent reservation regression tests/dashboard details missing." }
+}
+
 Invoke-Step "Backend syntax check" {
   docker run --rm -v "${root}:/src" -w /src/backend python:3.14.7-slim python -m compileall -q app tests alembic
 }
