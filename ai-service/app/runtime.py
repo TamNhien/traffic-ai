@@ -116,6 +116,7 @@ class PipelineState:
     delivery_failures: int = 0
     stitch_recoveries: int = 0
     raw_id_discontinuities: int = 0
+    short_gap_alias_rejections: int = 0
     direct_crossings: int = 0
     interpolated_crossings: int = 0
     rescued_crossings: int = 0

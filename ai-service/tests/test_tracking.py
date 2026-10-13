@@ -1042,3 +1042,58 @@ def test_v0584_raw_observations_cleanup_with_mapping_expiry():
               rect=(880.,580.,920.,620.))
     assert 31 not in r._raw_observations
     assert 31 not in r._raw_to_canonical
+
+
+# V0.5.85: evidence-driven short-gap token handoff check, independent of GT.
+def test_v0585_recorded_606s_far_alias_does_not_hijack_incumbent() -> None:
+    resolver = TrackContinuityResolver()
+    # A measured trace from Benchmark #60 (session 186); old token last
+    # appeared at frame 15143, before a new unrelated token at 15152.
+    old_rect = (1014.6, 458.6, 1098.0, 545.5)
+    resolver.resolve(235019, (1060.0, 524.0), 'motorcycle', 15142, 1440, 811, rect=old_rect)
+    resolver.resolve(235019, (1056.3, 502.0), 'motorcycle', 15143, 1440, 811, rect=old_rect)
+    new_rect = (1148.2, 216.4, 1214.2, 295.9)
+    newcomer, stitched = resolver.resolve(
+        235659, (1181.2, 256.2), 'motorcycle', 15152, 1440, 811, rect=new_rect,
+    )
+    assert newcomer == 235659 and not stitched
+    assert resolver.short_gap_alias_rejections >= 1
+    incumbent, stitched = resolver.resolve(
+        235019, (963., 372.), 'motorcycle', 15154, 1440, 811,
+        rect=(909.3, 313.7, 1016.6, 429.9),
+    )
+    assert incumbent == 235019 and not stitched
+    assert resolver.lineage_size(235019) == 1
+
+
+def test_v0585_fast_two_wheel_motion_with_coherent_prediction_still_stitches() -> None:
+    resolver = TrackContinuityResolver()
+    rect = (80., 80., 125., 155.)
+    resolver.resolve(5, (100., 110.), 'motorcycle', 1, 1440, 811, rect=rect)
+    resolver.resolve(5, (110., 100.), 'motorcycle', 2, 1440, 811, rect=(90., 70., 135., 145.))
+    # Cross-ID continuation moved 90px in both axes over nine frames;
+    # it is far from the last bounding box, but near motion prediction.
+    found, stitched = resolver.resolve(6, (200., 10.), 'motorcycle', 11, 1440, 811,
+                                       rect=(180., 0., 225., 75.))
+    assert found == 5 and stitched
+    assert resolver.short_gap_alias_rejections == 0
+
+
+def test_v0585_four_wheel_extended_stitch_contract_unchanged() -> None:
+    resolver = TrackContinuityResolver(heavy_max_gap_frames=40)
+    resolver.resolve(5, (400., 400.), 'truck', 1, 1440, 811,
+                     rect=(350., 340., 450., 460.))
+    found, stitched = resolver.resolve(6, (520., 180.), 'truck', 10, 1440, 811,
+                                       rect=(470., 120., 570., 240.))
+    assert found == 5 and stitched
+
+
+def test_v0585_short_gap_alias_guard_can_be_disabled_for_ab_comparison() -> None:
+    resolver = TrackContinuityResolver(short_gap_alias_guard=False)
+    rect = (1014.6, 458.6, 1098.0, 545.5)
+    resolver.resolve(235019, (1060.0, 524.0), 'motorcycle', 15142, 1440, 811, rect=rect)
+    resolver.resolve(235019, (1056.3, 502.0), 'motorcycle', 15143, 1440, 811, rect=rect)
+    alias, stitched = resolver.resolve(235659, (1181.2, 256.2), 'motorcycle', 15152, 1440, 811,
+                                       rect=(1148.2, 216.4, 1214.2, 295.9))
+    assert alias == 235019 and stitched
+    assert resolver.short_gap_alias_rejections == 0

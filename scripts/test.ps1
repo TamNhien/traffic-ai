@@ -2379,6 +2379,21 @@ Invoke-Step "V0.5.84 raw-provenance diagnostics contract (stdlib-only)" {
     python -m unittest discover -s scripts/tests -p test_raw_provenance_v0584.py -v
 }
 
+Invoke-Step "V0.5.85 short-gap alias evidence contract" {
+  $tracking = Get-Content (Join-Path $root "ai-service/app/tracking.py") -Raw -Encoding UTF8
+  $worker = Get-Content (Join-Path $root "ai-service/app/worker.py") -Raw -Encoding UTF8
+  $trackingTests = Get-Content (Join-Path $root "ai-service/tests/test_tracking.py") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend/src/main.jsx") -Raw -Encoding UTF8
+  if (
+    $tracking -notmatch 'short_gap_alias_rejections' -or
+    $tracking -notmatch 'predicted_jump > 1.50 \* footprint' -or
+    $worker -notmatch 'AI_SHORT_GAP_ALIAS_GUARD' -or
+    $trackingTests -notmatch 'test_v0585_recorded_606s_far_alias_does_not_hijack_incumbent' -or
+    $trackingTests -notmatch 'test_v0585_fast_two_wheel_motion_with_coherent_prediction_still_stitches' -or
+    $frontend -notmatch 'short_gap_alias_rejections'
+  ) { throw "Short-gap alias guard evidence, fast-motion regression tests or telemetry missing." }
+}
+
 Invoke-Step "Backend syntax check" {
   docker run --rm -v "${root}:/src" -w /src/backend python:3.14.7-slim python -m compileall -q app tests alembic
 }

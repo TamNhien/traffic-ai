@@ -68,6 +68,7 @@ class TrackContinuityResolver:
         heavy_max_gap_frames: int | None = None,
         heavy_max_distance_ratio: float | None = None,
         raw_reuse_jump_ratio: float = 0.18,
+        short_gap_alias_guard: bool = True,
     ) -> None:
         self.max_gap_frames = max(2, int(max_gap_frames))
         self.max_distance_ratio = max(0.01, float(max_distance_ratio))
@@ -87,6 +88,8 @@ class TrackContinuityResolver:
         # A fast vehicle returning after a genuine longer gap is not split.
         self.raw_reuse_jump_ratio = max(0.0, float(raw_reuse_jump_ratio))
         self.raw_id_discontinuities = 0
+        self.short_gap_alias_rejections = 0
+        self.short_gap_alias_guard = bool(short_gap_alias_guard)
         self._raw_to_canonical: dict[int, int] = {}
         # V0.5.84: raw-token observations are NOT interchangeable with the
         # canonical identity's latest position. A canonical may be updated by
@@ -223,6 +226,40 @@ class TrackContinuityResolver:
 
             if self._opposite_two_wheel_stitch(state, point, rect, family, gap):
                 continue
+
+            # V0.5.85: when a new ByteTrack token appears after a short
+            # occlusion, do not let it steal a different two-wheel identity
+            # whose old measured trajectory AND bounding-box footprint both
+            # contradict this arrival. Session #186, frames 15143 -> 15152,
+            # shows a motorcycle at (1056, 502) being offered a raw token at
+            # (1181, 256), while the incumbent raw returns two frames later.
+            # The previous global frame-diagonal tolerance accepts that jump.
+            # Keep fast riders: a long displacement alone is NEVER enough;
+            # the velocity-predicted position must also be far away.
+            if (
+                self.short_gap_alias_guard
+                and family == 'two-wheel'
+                and 4 <= gap <= 12
+                and state.last_raw_id != raw_id
+                and state.rect is not None and rect is not None
+            ):
+                old_box = hypot(
+                    max(0.0, state.rect[2] - state.rect[0]),
+                    max(0.0, state.rect[3] - state.rect[1]),
+                )
+                new_box = hypot(
+                    max(0.0, rect[2] - rect[0]),
+                    max(0.0, rect[3] - rect[1]),
+                )
+                footprint = max(20.0, old_box, new_box)
+                direct_jump = hypot(point[0] - state.point[0], point[1] - state.point[1])
+                predicted_jump = hypot(
+                    point[0] - state.point[0] - state.velocity[0] * gap,
+                    point[1] - state.point[1] - state.velocity[1] * gap,
+                )
+                if direct_jump > 1.75 * footprint and predicted_jump > 1.50 * footprint:
+                    self.short_gap_alias_rejections += 1
+                    continue
 
             predicted = (
                 state.point[0] + state.velocity[0] * gap,

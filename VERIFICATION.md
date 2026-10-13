@@ -1,3 +1,30 @@
+# V0.5.85 — Verification and limitations
+
+## Những phần đã kiểm chứng trong môi trường hiện tại
+
+- AI Service: **655/655 pytest PASS**, bao gồm 4 test mới về alias bất thường, tiếp tục xe nhanh, xe 4 bánh và chế độ rollback.
+- Backend: **178/178 pytest PASS** trong SQLite memory, với test token riêng cho CI.
+- Backup Worker: **4/4 pytest PASS**.
+- Frontend: **4/4 node --test PASS**.
+- Công cụ: **47/47 unittest PASS**. Dòng `[FAIL]` của negative test replay là output kỳ vọng; unittest tổng kết OK.
+- Tổng cộng **888/888 test đạt**. `scripts/version-contract.py` kiểm tra version và migration chain PASS.
+- Lớp tương thích `httpx2` trong lúc test ở đường dẫn ngoài source; **không có trong ZIP**.
+
+## Giới hạn quan trọng
+
+- **Chưa chạy lại GPU/video nguồn** cho V0.5.85. Không có bằng chứng đã giảm 11 lượt lọt / 13 lượt dư ở Benchmark #60.
+- **Chưa chạy Docker, PowerShell và Vite production build** trong môi trường này. `test.ps1` trên Windows sẽ kiểm tra chúng trước khi phát hành.
+- Guard mới có thể tắt tạm bằng `AI_SHORT_GAP_ALIAS_GUARD=0` để so sánh, sau khi khởi động lại AI Service. Không thay đổi GT hoặc dữ liệu lịch sử.
+- Không đóng gói video, trace camera, RAR, `.env` hoặc database người dùng.
+
+## Phân tích nguồn
+
+Xem `docs/session-186-alias-handoff-v0585.md`. Nhóm sự kiện tại 606 giây mới là giả thuyết có bằng chứng quỹ đạo; kết quả cuối phải được xác nhận bằng phiên replay mới.
+
+---
+
+## Xác minh V0.5.84 trước đó
+
 # Traffic AI V0.5.84 - Verification
 
 ## Baseline: GT benchmark #59 / Session #185 (V0.5.83)

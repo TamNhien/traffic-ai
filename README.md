@@ -1,3 +1,31 @@
+# Traffic AI V0.5.85 — Short-Gap Alias Handoff Evidence Guard
+
+Nâng cấp từ **V0.5.84**. Benchmark #60 / Session #186 cho thấy GT 149 / AI 151 / khớp timecode 138 / lọt 11 / dư 13. Thay đổi bộ ghép danh tính dựa trên quỹ đạo, không đọc GT lúc chạy.
+
+- **Short-Gap Alias Evidence Guard:** chặn ByteTrack token mới chiếm nhầm danh tính xe máy/xe đạp cũ sau mất 4–12 frame nếu cả khoảng cách thực tế (>1,75 lần đường chéo hộp xe) và lệch dự đoán vận tốc (>1,50 lần) đều lớn.
+- **Fast motion preservation:** xe chạy nhanh vẫn được nối nếu phù hợp hướng chuyển động, không chặn chỉ vì quãng đường lớn; không thay guard cho xe 4 bánh.
+- Có thể đặt `AI_SHORT_GAP_ALIAS_GUARD=0` trong `.env` để A/B so sánh nếu có hồi quy, nhưng cần khởi động lại AI Service.
+- Dashboard/trace có chỉ số `short_gap_alias_rejections`, tách khỏi `raw_id_discontinuities`.
+- Bài test tái hiện frame 15143→15152 từ Session #186, xe chạy nhanh và xe bốn bánh.
+- Migration 0099 chỉ cập nhật schema_version; không đổi cấu trúc PostgreSQL. Giữ Backup/Restore, phân quyền và model.
+
+**Chưa chạy GPU replay.** Không thể kết luận đã giảm 11 lượt lọt / 13 dư trước khi chạy lại video. Nếu benchmark hồi quy, giữ source/backup trước và gửi ZIP benchmark mới.
+
+## Lệnh PowerShell
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+.\scripts\test.ps1
+.\scripts\start.ps1
+```
+
+Sau khi chạy và kiểm thử ổn: `.\scripts\publish.ps1`. Không tạo lại tài khoản Admin.
+
+---
+
+## Lịch sử nâng cấp trước
+
 # Traffic AI V0.5.84 — Per-Raw Provenance for ByteTrack Aliases
 
 Nâng cấp từ full source V0.5.83. V0.5.84 xử lý trường hợp **Raw ID
