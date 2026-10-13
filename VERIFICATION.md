@@ -1,3 +1,37 @@
+# V0.5.88 — Verification and limitations
+
+- Root cause: V0.5.67 PowerShell contract pinned obsolete literal `Tổng GT = AI`,
+  but V0.5.87 frontend correctly supports competition review when totals differ.
+- Refactored presentation predicate into JS module covered by four focused tests.
+- Contract now checks the predicate integration, both audit fields, backend regression,
+  and explicit equal/unequal count frontend regression cases.
+- No AI inference, crossing thresholds, GT marks or benchmark event data modified;
+  no measured F1 improvement claimed.
+- **Local automated verification:** AI 660/660 (pytest), backend 178/178 (SQLite-memory
+  pytest), scripts 55/55 (Python unittest), backup worker 4/4 (pytest), frontend 8/8
+  (Node built-in test runner): **905/905**. All Python `compileall` and
+  `scripts/version-contract.py` passed.
+- The Alembic revision name initially exceeded the historical 32-character limit;
+  it was shortened to `0102_temporal_review_v0588` (26 chars). Version checker now
+  fails on future oversized migration IDs and has a regression test.
+- Backend/AI test runs used a temporary **test-only** `httpx2` import shim outside
+  the ZIP because `httpx2` is not installed here; this is not validation of the
+  production dependency. Linux Node 22 executed the JS test runner; Vite production
+  build requires the project's configured Node 26 environment.
+- **Not run:** Windows PowerShell `scripts/test.ps1` as a whole, Docker image builds,
+  Windows startup, PostgreSQL integration, Vite production build and GPU inference.
+  Rerun the full official test script on the user's Windows host before publishing.
+
+---
+
+# V0.5.87 — Verification and limitations
+
+- Validated completed Benchmark #61 and #62 source archive hashes, compared GT/event crossing signatures, reviewed trace and selected camera JPEGs. The before/after GT 149 / AI 150 / matched 138 / missed 11 / extra 12 is **unchanged**.
+- New script `compare-benchmark-exports.py` is read-only; never relabels GT or emits new AI events. New frontend temporal audit block fixes hidden review when GT 149 differs from AI 150.
+- Full inference replay with GPU/model/MP4, Windows Docker stack and real PowerShell tests must be performed on the user's machine. No new precision/recall claims.
+
+---
+
 # V0.5.86 — Verification and limitations
 
 - Benchmark #61 / Session #187 ZIP fully validated by the bundled read-only forensic tool (trace compressed/uncompressed SHA256, metadata, delivery drain). Baseline: GT149 AI150 matching138 missed11 extra12, direction2 and class2 mismatches; **these are V0.5.85 values**.

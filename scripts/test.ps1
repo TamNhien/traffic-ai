@@ -2010,8 +2010,18 @@ function Assert-TemporalAssignmentV0567Contract {
   if ($benchmark -notmatch 'def _attach_temporal_assignment_evidence' -or $benchmark -notmatch '"scoring_unchanged": True' -or $benchmark -notmatch '"identity_proven": False') {
     throw "V0.5.67 thiếu audit phân biệt timecode và định danh vật lý."
   }
-  if ($frontend -notmatch 'temporal_assignment_audit' -or $frontend -notmatch 'Tổng GT = AI' -or $tests -notmatch 'def test_v0567_equal_totals') {
-    throw "V0.5.67 thiếu UI hoặc regression cho GT=AI nhưng lọt/dư."
+  # Contract is tied to observable behavior, not old UI copy. V0.5.87
+  # intentionally supports temporal review even when GT != AI (149 vs 150).
+  $review = Get-Content (Join-Path $root "frontend\src\benchmark-review.js") -Raw -Encoding UTF8
+  $reviewTests = Get-Content (Join-Path $root "frontend\tests\benchmark-review.test.js") -Raw -Encoding UTF8
+  if ($frontend -notmatch 'shouldShowTemporalCompetitionReview\(report, reportScoringAvailable\)' -or
+      $frontend -notmatch 'benchmark-temporal-review' -or
+      $review -notmatch 'missed_with_claimed_persisted_event' -or
+      $review -notmatch 'false_positives_near_assigned_ground_truth' -or
+      $tests -notmatch 'def test_v0567_equal_totals' -or
+      $reviewTests -notmatch 'GT != AI when there is temporal competition' -or
+      $reviewTests -notmatch 'GT = AI when there is temporal competition') {
+    throw "V0.5.67/V0.5.88 thiếu UI hoặc regression cho đối chiếu thời gian GT=AI và GT khác AI."
   }
   Write-Host "[OK] Temporal Assignment Evidence V0.5.67" -ForegroundColor Green
 }
@@ -2359,6 +2369,12 @@ Invoke-Step "GT case forensics unit tests (stdlib-only)" {
     python -m unittest discover -s scripts/tests -p test_benchmark_forensics.py -v
 }
 
+Invoke-Step "V0.5.87 verified two-benchmark comparison tests (stdlib-only)" {
+  docker run --rm -v "${root}:/src" -w /src python:3.14.7-slim `
+    python -m unittest discover -s scripts/tests -p test_compare_benchmark_exports_v0587.py -v
+  if ($LASTEXITCODE -ne 0) { throw "V0.5.87 benchmark comparison tests failed." }
+}
+
 Invoke-Step "Replay audit unit tests (stdlib-only)" {
   docker run --rm -v "${root}:/src" -w /src python:3.14.7-slim `
     python -m unittest discover -s scripts/tests -p test_replay_diff.py -v
@@ -2392,6 +2408,21 @@ Invoke-Step "V0.5.85 short-gap alias evidence contract" {
     $trackingTests -notmatch 'test_v0585_fast_two_wheel_motion_with_coherent_prediction_still_stitches' -or
     $frontend -notmatch 'short_gap_alias_rejections'
   ) { throw "Short-gap alias guard evidence, fast-motion regression tests or telemetry missing." }
+}
+
+Invoke-Step "V0.5.87 verified benchmark comparison and temporal-review contract" {
+  $compare = Get-Content (Join-Path $root "scripts/compare-benchmark-exports.py") -Raw -Encoding UTF8
+  $tests = Get-Content (Join-Path $root "scripts/tests/test_compare_benchmark_exports_v0587.py") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend/src/main.jsx") -Raw -Encoding UTF8
+  $power = Get-Content (Join-Path $root "scripts/compare-benchmark-exports.ps1") -Raw -Encoding UTF8
+  if (
+    $compare -notmatch 'same_recorded_ai_crossing_signatures' -or
+    $compare -notmatch 'source_fingerprint' -or
+    $tests -notmatch 'test_archive_payload_tampering_rejected' -or
+    $frontend -notmatch 'benchmark-temporal-review' -or
+    $frontend -notmatch 'false_positives_near_assigned_ground_truth' -or
+    $power -notmatch 'compare-benchmark-exports.py'
+  ) { throw "V0.5.87 verified comparison or temporal-review UI missing." }
 }
 
 Invoke-Step "V0.5.86 visible incumbent and compact vehicle dashboard contract" {

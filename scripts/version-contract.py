@@ -39,6 +39,8 @@ def check(root: Path) -> list[str]:
         revision = re.search(r'^revision(?:\s*:\s*str)?\s*=\s*[\"\']([^\"\']+)[\"\']', source, re.M)
         parent = re.search(r'^down_revision(?:\s*:\s*[^=]+)?\s*=\s*[\"\']([^\"\']+)[\"\']', source, re.M)
         if revision:
+            if len(revision[1]) > 32:
+                errors.append(f'Alembic revision too long ({len(revision[1])} > 32): {revision[1]}')
             if revision[1] in migrations:
                 errors.append(f'Duplicate migration revision {revision[1]}')
             migrations[revision[1]] = source

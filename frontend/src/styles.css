@@ -219,3 +219,10 @@
 .count-diagnostics summary small{display:block;color:#8fa0b5;font-weight:400;margin:4px 0 0 18px}
 .count-diagnostics[open] .crossing-quality{margin:10px;padding:0 0 2px}
 @media(max-width:640px){.crossing-overview{grid-template-columns:1fr}}
+
+/* V0.5.87: show ambiguous temporal assignment even if GT count differs from AI. */
+.benchmark-temporal-review{margin:9px 0 13px;border:1px solid rgba(96,165,250,.35);border-radius:9px;background:rgba(30,64,175,.10);overflow:hidden}
+.benchmark-temporal-review summary{padding:10px 12px;color:#bfdbfe;cursor:pointer;font-size:.81rem;font-weight:700;line-height:1.42;overflow-wrap:anywhere}
+.benchmark-temporal-review summary small{display:block;margin:3px 0 0 15px;color:#93c5fd;font-weight:400}
+.benchmark-temporal-review summary:focus-visible{outline:2px solid #5eead4;outline-offset:-2px}
+.benchmark-temporal-review>div{padding:3px 12px 12px;color:#c9dcee;font-size:.79rem;line-height:1.5;overflow-wrap:anywhere}

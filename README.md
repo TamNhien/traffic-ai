@@ -1,3 +1,66 @@
+# Traffic AI V0.5.88 — Temporal Review Contract Compatibility Fix
+
+**Sửa lỗi thực tế từ Windows `scripts/test.ps1` tại V0.5.67:** test trước đó phụ thuộc nguyên văn
+`Tổng GT = AI`, trong khi V0.5.87 đã thay UI để luôn cho review các trường hợp cạnh tranh
+timecode **kể cả khi 149 GT khác 150 AI**. Đây là lỗi kiểm thử hồi quy lỗi thời, không phải
+lỗi tính toán benchmark.
+
+- Tách chính sách hiện cảnh báo `shouldShowTemporalCompetitionReview()` vào
+  `frontend/src/benchmark-review.js`, có thể kiểm thử độc lập bằng Node.
+- UI vẫn hiện cạnh tranh thời gian khi audit có bằng chứng, bất kể GT = AI hay GT != AI;
+  vẫn ẩn khi không có bằng chứng hoặc GT chưa đủ để chấm điểm. Không chạm logic ghép
+  timecode, nhãn GT, điểm số, DB events hay thuật toán AI.
+- `scripts/test.ps1` kiểm tra sự hiện diện của chính sách và test cả hai trường hợp,
+  không phụ thuộc câu chữ giao diện. Bổ sung 4 unit tests frontend.
+- Tăng phiên bản đồng bộ lên `0.5.88` và Alembic migration `0102` chỉ cập nhật
+  `schema_version`; không đổi dữ liệu nghiệp vụ.
+
+## Chạy trên Windows
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+.\scripts\test.ps1
+.\scripts\start.ps1
+```
+
+Sau khi test và chạy thực tế ổn định mới phát hành bằng ` .\scripts\publish.ps1 `.
+Không chạy lại tạo tài khoản Admin. Khi cập nhật nguồn, giữ nguyên `.env`, volumes
+PostgreSQL, video, trọng số mô hình. Không thay đổi số liệu Benchmark #62:
+GT 149 / AI 150 / khớp 138 / lọt 11 / dư 12 (F1 92,3%).
+
+---
+
+# Traffic AI V0.5.87 — Verified Cross-Benchmark Regression + Temporal Competition Review
+
+Tiếp tục từ **V0.5.86**. Benchmark #62 / Session #188: GT **149**, AI **150**, khớp **138**, lọt **11**, dư **12**, sai hướng **2**, sai loại **2** (F1 **92,3%**). Công cụ so sánh bằng chứng đã xác nhận 150 chữ ký crossing và 149 mốc GT trong #61 và #62 giống nhau (ngoại trừ các ID/metadata phiên chạy). **V0.5.86 chưa cải thiện F1 trên clip kiểm chứng này.**
+
+- **Verified Cross-Benchmark Regression** (`scripts/compare-benchmark-exports.py`): so sánh trực tiếp hai ZIP `Tải hồ sơ benchmark` mà không cần đăng nhập hay kết nối DB; kiểm tra SHA-256 JSON/trace, session, cùng video/vạch/FPS/GT/cửa sổ ghép, so sánh chữ ký sự kiện AI độc lập với ID tracker và DB. Từ chối so sánh khi dữ liệu nguồn/GT không tương thích.
+- **Báo cáo JSON + Markdown tiếng Việt**: thể hiện tất cả delta Recall/Precision/F1/lọt/dư, số event thêm/bớt và GT lỗi xuất hiện/hết; chỉ coi ghép timecode là bằng chứng thời gian, không chứng minh danh tính vật lý hay tự sửa GT. Có lệnh PowerShell `scripts/compare-benchmark-exports.ps1` để kiểm tra các phiên trong tương lai.
+- **Sửa lỗi hiển thị review benchmark:** trước đây khối cạnh tranh thời gian chỉ hiện khi tổng GT = tổng AI (`count_totals_equal`). Ở #62 (149 ≠ 150), khối bị ẩn dù có 4 mốc lọt bị event DB khác nhận và 2 AI dư sát GT đã ghép. V0.5.87 luôn cho phép mở `Đối chiếu GT/AI có trường hợp cạnh tranh thời gian` khi có chứng cứ, bất kể tổng GT/AI khác nhau, nhưng mặc định thu gọn để tránh kéo dài giao diện.
+- **7 unit tests** mới và contract PowerShell cho so sánh 2 ZIP, từ chối GT khác, phát hiện sửa file sau khi xuất, cùng hiệu ứng GUI. Thêm migration `0101` chỉ cập nhật `schema_version`, không sửa data DB, GT hoặc thuật toán counting.
+
+**Không tinh chỉnh Gate/Tracker theo những cặp chỉ gần thời gian:** trong ảnh camera 519–520s có nhiều xe gần vạch, 638s có nhiều sự kiện cạnh nhau. Việc xóa event mà chưa chứng minh cùng xe có thể tăng lọt. Để nâng độ chính xác AI thực tế cần chạy inference toàn bộ clip cùng trọng số và kiểm chứng từng instance. Phiên bản này cải thiện quy trình chẩn đoán và tính minh bạch, không cam kết giảm lọt/dư.
+
+## Chạy sau giải nén trên Windows
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+.\scripts\test.ps1
+.\scripts\start.ps1
+```
+
+## So sánh 2 hồ sơ benchmark
+
+```powershell
+.\scripts\compare-benchmark-exports.ps1 -Prior ".\traffic-ai-benchmark-61-session-187.zip" -Current ".\traffic-ai-benchmark-62-session-188.zip" -OutputDirectory ".\benchmark-comparison"
+```
+
+Khi test và chạy AI ổn định, phát hành một lệnh: `.\scripts\publish.ps1`. Tài khoản Admin đã tồn tại, không chạy tạo lại.
+
+---
+
 # Traffic AI V0.5.86 — Visible-Incumbent Reservation + Benchmark #61 Forensics
 
 Tiếp tục từ **V0.5.85**. Baseline thực tế Benchmark #61 / Session #187: GT **149**, AI **150**, khớp timecode **138**, lọt **11**, dư **12**, sai loại **2**, sai hướng **2** (Recall **92,6%**, Precision **92,0%**, F1 **92,3%**). Đây là kết quả **V0.5.85**, không phải replay V0.5.86.
