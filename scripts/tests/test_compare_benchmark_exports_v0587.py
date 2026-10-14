@@ -48,6 +48,34 @@ def make_benchmark(path, session_id, *, gt_time=1.0, ai_time=1.0, method='direct
         for k,v in blobs.items():archive.writestr(k,v)
 
 
+def change_export(path, change):
+    with zipfile.ZipFile(path) as archive:
+        blobs = {entry.filename: archive.read(entry.filename) for entry in archive.infolist()}
+    data = {name: json.loads(blobs[name]) for name in ('report.json', 'ground-truth.json', 'events.json')}
+    change(data)
+    manifest = json.loads(blobs['manifest.json'])
+    for name, obj in data.items():
+        blobs[name] = json.dumps(obj, sort_keys=True).encode('utf-8')
+        manifest['files'][name] = {'bytes':len(blobs[name]),'sha256':hashlib.sha256(blobs[name]).hexdigest()}
+    blobs['manifest.json'] = json.dumps(manifest).encode('utf-8')
+    with zipfile.ZipFile(path,'w',compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, body in blobs.items():
+            archive.writestr(name, body)
+
+
+def mark_unscored(path):
+    def change(data):
+        report = data['report.json']
+        data['ground-truth.json'] = []
+        report['ground_truth_total'] = 0
+        report['report_readiness'] = {'scoring_available':False, 'reason':'no_ground_truth'}
+        for k in ('matched','missed','false_positives','counting_precision','counting_recall','counting_f1'):
+            report[k] = None
+        report['matched_items'] = []
+        report['missed_items'] = []
+        report['false_positive_items'] = []
+    change_export(path, change)
+
 class BenchmarkComparisonTests(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
@@ -105,6 +133,58 @@ class BenchmarkComparisonTests(unittest.TestCase):
         with zipfile.ZipFile(self.a,'w') as archive:
             for k,v in blobs.items():archive.writestr(k,v)
         with self.assertRaises(module.ComparisonError):module._read_evidence(self.a)
+
+    def test_before_gt_copy_can_compare_ai_only_without_claimed_f1(self):
+        make_benchmark(self.a, 1);make_benchmark(self.b,2)
+        mark_unscored(self.b)
+        result = self.compare()
+        self.assertEqual(result['comparison_mode'],'ai_events_only')
+        self.assertFalse(result['scoring_comparable'])
+        self.assertTrue(result['same_recorded_ai_crossing_signatures'])
+        self.assertIsNone(result['deltas']['counting_f1'])
+        self.assertIsNone(result['deltas']['missed'])
+        self.assertIsNone(result['missed_cases_removed'])
+        self.assertIn('KHÔNG CHẤM ĐIỂM',module.to_markdown(result))
+        self.assertIn('tải lại ZIP',module.to_markdown(result))
+
+    def test_newly_scored_export_still_cannot_compare_accuracy_to_unscored_prior(self):
+        make_benchmark(self.a,1);make_benchmark(self.b,2)
+        mark_unscored(self.a)
+        result=self.compare()
+        self.assertEqual(result['comparison_mode'],'ai_events_only')
+        self.assertIsNone(result['deltas']['counting_recall'])
+
+    def test_both_unscored_can_detect_real_crossing_signature_change(self):
+        make_benchmark(self.a,1);make_benchmark(self.b,2, method='rescued')
+        mark_unscored(self.a);mark_unscored(self.b)
+        result=self.compare()
+        self.assertEqual((result['ai_signatures_removed_count'],result['ai_signatures_added_count']),(1,1))
+        self.assertIsNone(result['deltas']['ai_total'])
+
+    def test_unscored_export_cannot_smuggle_scoring_fields(self):
+        make_benchmark(self.a,1)
+        mark_unscored(self.a)
+        change_export(self.a,lambda data: data['report.json'].update({'counting_f1':1.0}))
+        with self.assertRaisesRegex(module.ComparisonError,'ambiguous unscored'):
+            module._read_evidence(self.a)
+
+    def test_unscored_evidence_hash_tamper_fails_closed(self):
+        make_benchmark(self.a,1)
+        mark_unscored(self.a)
+        with zipfile.ZipFile(self.a) as archive:
+            blobs={entry.filename:archive.read(entry.filename) for entry in archive.infolist()}
+        blobs['events.json']=b'[]'
+        with zipfile.ZipFile(self.a,'w') as archive:
+            for name,body in blobs.items():archive.writestr(name,body)
+        with self.assertRaisesRegex(module.ComparisonError,'hash mismatch'):
+            module._read_evidence(self.a)
+
+    def test_unscored_source_fingerprint_still_required(self):
+        make_benchmark(self.a,1);make_benchmark(self.b,2)
+        mark_unscored(self.b)
+        change_export(self.b,lambda data: data['report.json']['benchmark'].update({'source_fps':30.0}))
+        with self.assertRaisesRegex(module.ComparisonError,'geometry/FPS differs'):
+            self.compare()
 
 
 if __name__=='__main__':unittest.main()

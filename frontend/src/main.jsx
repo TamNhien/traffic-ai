@@ -5,7 +5,7 @@ import { AuthShell, AccountPanel, AdminPanel, secureFetch } from './security.jsx
 import { BackupPanel } from './backup-panel.jsx'
 import { shouldShowTemporalCompetitionReview } from './benchmark-review.js'
 
-const APP_VERSION = '0.5.89'
+const APP_VERSION = '0.5.90'
 const vehicleLabels = {
   motorcycle: 'Xe máy', bicycle: 'Xe đạp', car: 'Ô tô', bus: 'Xe buýt', truck: 'Xe tải', other: 'Khác'
 }
@@ -763,7 +763,7 @@ function GroundTruthBenchmark({ selectedCameraId, sessions }) {
       const body = await readBody(response)
       if (!response.ok) throw new Error(body.detail || 'Không sao chép được Ground Truth')
       if (!isCurrent()) return
-      setMessage(`Đã sao chép ${body.cloned_marks} GT từ Benchmark #${body.source_benchmark_id} sang Benchmark #${benchmarkId}. Không cần đánh lại clip.`)
+      setMessage(`Đã sao chép ${body.cloned_marks} GT từ Benchmark #${body.source_benchmark_id} sang Benchmark #${benchmarkId}. Không cần đánh lại clip. Nếu đã xuất ZIP Benchmark trước khi sao chép GT, hãy bấm Tải hồ sơ benchmark lần nữa để xuất trạng thái đã chấm điểm.`)
       await loadDetail(benchmarkId)
       if (!isCurrent()) return
       await loadBenchmarks()
@@ -787,7 +787,7 @@ function GroundTruthBenchmark({ selectedCameraId, sessions }) {
       await loadBenchmarks()
       setSelectedBenchmarkId(body.id)
       setMessage(body.cloned_marks
-        ? `Đã tạo Benchmark #${body.id} và sao chép ${body.cloned_marks} Ground Truth. Bây giờ chỉ cần đối chiếu session AI mới.`
+        ? `Đã tạo Benchmark #${body.id} và sao chép ${body.cloned_marks} Ground Truth. Bây giờ chỉ cần đối chiếu session AI mới. Sau khi có kết quả, hãy tải hồ sơ benchmark mới để lưu GT và điểm số.`
         : `Đã tạo Benchmark #${body.id}. Mở video và đánh dấu từng xe thật sự cắt vạch.`)
     } catch (err) { setError(err.message) } finally { setBusy(false) }
   }
@@ -871,7 +871,7 @@ function GroundTruthBenchmark({ selectedCameraId, sessions }) {
       link.click()
       link.remove()
       setTimeout(() => URL.revokeObjectURL(url), 60000)
-      setMessage(`Đã tải hồ sơ Benchmark #${benchmarkId}. manifest.json ghi rõ trace có sẵn hay bị thiếu.`)
+      setMessage(`Đã tải hồ sơ Benchmark #${benchmarkId}. manifest.json ghi rõ trace có sẵn hay bị thiếu. ZIP phản ánh trạng thái GT và kết quả chấm điểm tại thời điểm tải.`)
     } catch (err) { setError(err.message) } finally { setExporting(false) }
   }
 

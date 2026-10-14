@@ -1,3 +1,18 @@
+# Traffic AI V0.5.90 — Verified AI-only Replay Comparison + GT Export Freshness
+
+- **Sửa quy trình đối chiếu khi ZIP được xuất trước lúc chép Ground Truth:** vẫn xác thực checksum JSON/trace, session, geometry và so sánh chính xác sự kiện AI đã lưu; KHÔNG tính hoặc suy ra F1/lọt/dư nếu một trong hai ZIP chưa có GT.
+- **Sau khi sao chép GT trên web**, thông báo hướng dẫn xuất hồ sơ ZIP mới; ZIP đã tải trước đó không tự cập nhật.
+- **Benchmark #63 / Session #190:** ảnh mới cho thấy 149 GT / 150 AI / khớp 138 / lọt 11 / dư 12 / F1 92.3%, nhưng ZIP #63 cũ vẫn có GT 0. So sánh AI-only với ZIP #62 đã xác minh 150 chữ ký sự kiện giống nhau, không có lượt crossing được thêm hoặc xóa.
+- Thêm công cụ `scripts/review-benchmark-errors.ps1` xuất `review-queue.csv`, `.md`, `.json` để duyệt tất cả **11 lượt lọt / 12 lượt dư** của benchmark #62 theo timecode, kèm dấu hiệu cạnh tranh; không tự gộp xe hay thay GT.
+- Thêm **11 hồi quy** cho GT-free comparison, từ chối hash/nguồn/điểm số không nhất quán. Migration metadata `0104_ai_export_v0590`; giữ các chức năng, quản trị, bảo mật và script cũ.
+- Thuật toán AI không thay đổi, chưa có bằng chứng nâng Precision / Recall. Muốn so sánh hiệu quả sau khi đủ GT, xuất lại ZIP #63.
+
+**Lấy danh sách review:** `.\scripts\review-benchmark-errors.ps1 -Export ".\traffic-ai-benchmark-62-session-188.zip" -OutputDirectory ".\benchmark-review"`.
+
+**Chạy:** `cd D:\LienThongDH\DoAn\traffic-ai` → `Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File` → `.\scripts\test.ps1` → `.\scripts\start.ps1`. Sau khi kiểm tra ổn: `.\scripts\publish.ps1` (tag mới `v0.5.90`, không ghi đè tag cũ).
+
+---
+
 # Traffic AI V0.5.89 — Release EOL Preflight + Immutable Tag Diagnostics
 
 **Sửa quy trình phát hành từ log Windows V0.5.88:** `scripts/test.ps1` và

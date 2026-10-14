@@ -1,3 +1,14 @@
+# V0.5.90 — Verified AI-only comparison for unscored benchmark exports
+
+- Input: integrity-verified `traffic-ai-benchmark-62-session-188.zip` (GT 149) and `traffic-ai-benchmark-63-session-190.zip` (GT 0, exported before copy).
+- Confirmed identical 150 persisted event signatures, 0 added/removed; reports **no GT metric comparison** because the second ZIP has no GT.
+- Later screenshot shows GT 149 / AI 150 / matched 138 / missed 11 / extra 12 / F1 92.3%; those results are NOT in the attached older ZIP.
+- Comparison tool validates all six manifest-tracked JSON documents, trace digest, session ID, conservation of AI event count, persistence integrity, video/gate/FPS geometry. For scored pairs it retains existing GT fingerprint/tolerance check and benchmark-gate conservation tests.
+- Eleven new tests (including five verified error-queue tests) cover unscored-to-scored, scored-to-unscored, changed AI signatures, forged score, tampered hash, incompatible FPS.
+- No inference algorithm change, no measured F1 improvement. Windows/Docker/GPU testing still required by the user.
+
+---
+
 # V0.5.89 — Release packaging, immutable tag safety
 
 - Source from V0.5.88 ZIP; new metadata-only migration `0103_release_eol_v0589`.

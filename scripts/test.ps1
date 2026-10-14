@@ -2374,10 +2374,16 @@ Invoke-Step "GT case forensics unit tests (stdlib-only)" {
     python -m unittest discover -s scripts/tests -p test_benchmark_forensics.py -v
 }
 
-Invoke-Step "V0.5.87 verified two-benchmark comparison tests (stdlib-only)" {
+Invoke-Step "V0.5.90 verified unmatched-crossing review queue (stdlib-only)" {
+  docker run --rm -v "${root}:/src" -w /src python:3.14.7-slim `
+    python -m unittest discover -s scripts/tests -p test_review_benchmark_errors_v0590.py -v
+  if ($LASTEXITCODE -ne 0) { throw "V0.5.90 review queue tests failed." }
+}
+
+Invoke-Step "V0.5.90 verified benchmark comparison with GT-free mode (stdlib-only)" {
   docker run --rm -v "${root}:/src" -w /src python:3.14.7-slim `
     python -m unittest discover -s scripts/tests -p test_compare_benchmark_exports_v0587.py -v
-  if ($LASTEXITCODE -ne 0) { throw "V0.5.87 benchmark comparison tests failed." }
+  if ($LASTEXITCODE -ne 0) { throw "V0.5.90 benchmark comparison tests failed." }
 }
 
 Invoke-Step "Replay audit unit tests (stdlib-only)" {
