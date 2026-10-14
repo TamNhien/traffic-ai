@@ -32,3 +32,8 @@ frontend/package-lock.json
 .idea/
 .DS_Store
 Thumbs.db
+
+# Downloaded benchmark exports and camera archives in project root
+/traffic-ai-benchmark-*.zip
+/benchmark-comparison/
+/camera_*.rar

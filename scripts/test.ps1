@@ -2359,6 +2359,11 @@ Invoke-Step "Release version drift regression (stdlib-only)" {
     python -m unittest discover -s scripts/tests -p test_version_contract.py -v
 }
 
+Invoke-Step "Release packaging line endings and tag safety V0.5.89 (stdlib-only)" {
+  docker run --rm -v "${root}:/src" -w /src python:3.14.7-slim `
+    python -m unittest discover -s scripts/tests -p test_release_eol_v0589.py -v
+}
+
 Invoke-Step "Direct Shadow offline counterfactual tests (stdlib-only)" {
   docker run --rm -v "${root}:/src" -w /src python:3.14.7-slim `
     python -m unittest discover -s scripts/tests -p test_direct_shadow_578.py -v

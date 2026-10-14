@@ -5,7 +5,7 @@ import { AuthShell, AccountPanel, AdminPanel, secureFetch } from './security.jsx
 import { BackupPanel } from './backup-panel.jsx'
 import { shouldShowTemporalCompetitionReview } from './benchmark-review.js'
 
-const APP_VERSION = '0.5.88'
+const APP_VERSION = '0.5.89'
 const vehicleLabels = {
   motorcycle: 'Xe máy', bicycle: 'Xe đạp', car: 'Ô tô', bus: 'Xe buýt', truck: 'Xe tải', other: 'Khác'
 }

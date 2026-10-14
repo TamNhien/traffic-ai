@@ -53,9 +53,9 @@ class VersionMetadataTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             self._isolated_release_fixture(root)
-            head = root / 'backend/alembic/versions/0102_temporal_review_v0588.py'
-            old = '0102_temporal_review_v0588'
-            oversized = '0102_temporal_review_contract_v0588'
+            head = root / 'backend/alembic/versions/0103_release_eol_v0589.py'
+            old = '0103_release_eol_v0589'
+            oversized = '0103_release_eol_contract_long_v0589'
             head.write_text(head.read_text('utf-8').replace(old, oversized), encoding='utf-8')
             self.assertTrue(any('Alembic revision too long' in e for e in module.check(root)))
 

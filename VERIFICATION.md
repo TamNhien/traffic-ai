@@ -1,3 +1,27 @@
+# V0.5.89 — Release packaging, immutable tag safety
+
+- Source from V0.5.88 ZIP; new metadata-only migration `0103_release_eol_v0589`.
+- Packaged PowerShell file line endings are CRLF (before any Windows publish run).
+- `.gitignore` now excludes downloaded root-level benchmark ZIPs, camera RARs
+  and benchmark comparison output (previously eligible for git add -A).
+  A publish guard rejects those artifacts if they were already staged.
+- `publish.ps1` still refuses to move an existing local/remote Git tag; logs only
+  names and statuses of changed files, not file contents.
+- Windows V0.5.88 user's supplied log independently verifies existing official
+  `test.ps1`, Docker image build/start, GPU service readiness and local HTTPS.
+- Local checks after V0.5.89 changes: 660 AI pytest, 178 backend pytest,
+  4 backup worker pytest, 60 scripts unittest, 8 frontend node tests:
+  **910/910 tests passed**. Backend test environment used a temporary test-only
+  `httpx2` shim outside the packaged ZIP; not a substitute for Docker testing.
+- Existing-tag error occurred before source push; v0.5.89 publish on Windows
+  and GitHub Actions has NOT been executed here.
+- No changes to inference or benchmark comparison outcomes; the baseline of
+  GT 149 / AI 150 / missed 11 / extra 12 is not claimed to improve.
+- Git status in user's repository cannot be inspected from this ZIP; existing
+  tag + pending changes may have causes besides CRLF normalization.
+
+---
+
 # V0.5.88 — Verification and limitations
 
 - Root cause: V0.5.67 PowerShell contract pinned obsolete literal `Tổng GT = AI`,

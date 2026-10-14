@@ -1,3 +1,47 @@
+# Traffic AI V0.5.89 — Release EOL Preflight + Immutable Tag Diagnostics
+
+**Sửa quy trình phát hành từ log Windows V0.5.88:** `scripts/test.ps1` và
+`start.ps1` thành công, nhưng `publish.ps1` dừng ở bước 4 vì tag `v0.5.88` đã tồn
+tại trong khi working tree còn thay đổi. Đây là bảo vệ cần giữ nguyên: tuyệt đối
+không tự ghi đè hay dời tag cũ.
+
+- **Full-source chuẩn hóa CRLF ngay khi đóng gói** cho toàn bộ `*.ps1`; các file
+  code/config khác giữ LF theo `.gitattributes`. `normalize-line-endings.ps1`
+  sẽ không tạo biến đổi file khi chạy trên bản ZIP này, nếu không có chỉnh sửa mới.
+- **Kiểm thử hồi quy trên package** (`scripts/tests/test_release_eol_v0589.py`):
+  kiểm CRLF mọi PowerShell, Git EOL policy, cảnh báo tag có chẩn đoán,
+  và LF ở source/config. `scripts/test.ps1` chạy bộ test này trước bước build.
+- **Publish diagnostics**: khi tag đã có và Git còn thay đổi, in `git status --short`
+  và `git diff --cached --name-status`, không lộ nội dung file; vẫn dừng an toàn.
+- **Git ignore an toàn:** bỏ qua ZIP benchmark, RAR camera và thư mục kết quả so sánh
+  trong thư mục dự án; không tự đưa dữ liệu lớn vào `git add -A`. Nếu các tệp
+  đã bị stage từ lần publish trước, script dừng và hướng dẫn bỏ stage an toàn.
+- **Phiên bản mới `0.5.89`**, migration `0103_release_eol_v0589` chỉ đồng bộ
+  `schema_version`. Không sửa thuật toán AI, benchmark hay dữ liệu phương tiện.
+
+**Lưu ý quan trọng:** log cho biết 9 file `.ps1` đã được chuyển line endings,
+nhưng không cung cấp `git diff` nên chưa thể khẳng định *chỉ* các file đó làm
+Git dirty; `.gitattributes` có thể chuẩn hóa nội dung khi stage. Nếu có thay đổi
+khác trên máy Windows, nên rà soát trước khi phát hành. Bản mới dùng tag
+`v0.5.89`, không ghi đè `v0.5.88`.
+
+## Kiểm thử, khởi chạy và phát hành
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+.\scripts\test.ps1
+.\scripts\start.ps1
+# Khi đã kiểm tra chạy ổn định:
+.\scripts\publish.ps1
+```
+
+Giữ nguyên `.git`, `.env`, PostgreSQL volumes, `models/`, `videos/` và dữ liệu
+runtime khi cập nhật source. Nếu Git báo có file chỉnh sửa, sử dụng
+`git status --short` để kiểm tra; không force tag, không hard reset dữ liệu.
+
+---
+
 # Traffic AI V0.5.88 — Temporal Review Contract Compatibility Fix
 
 **Sửa lỗi thực tế từ Windows `scripts/test.ps1` tại V0.5.67:** test trước đó phụ thuộc nguyên văn

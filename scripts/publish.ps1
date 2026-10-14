@@ -66,6 +66,20 @@ function Assert-NoTrackedSecrets {
   }
 }
 
+function Assert-NoStagedBenchmarkArtifacts {
+  # Git ignore cannot unstage artifacts added by an earlier failed release attempt.
+  $staged = @(git diff --cached --name-only --diff-filter=ACMR)
+  if ($LASTEXITCODE -ne 0) { throw "Không đọc được danh sách staged artifacts." }
+  $artifacts = @($staged | Where-Object {
+    $_ -match '^traffic-ai-benchmark-[^/]+\.zip$' -or
+    $_ -match '^camera_[^/]+\.rar$' -or
+    $_ -match '^benchmark-comparison/'
+  })
+  if ($artifacts.Count -gt 0) {
+    throw "Đang stage hồ sơ benchmark/camera ngoài source: $($artifacts -join ', '). Dùng git restore --staged -- <duong-dan> để bỏ stage (không xóa file), rồi chạy lại publish."
+  }
+}
+
 function New-DirectGitHubRelease([string]$Tag) {
   Write-Host "[Traffic AI] Chuyển sang tạo Release trực tiếp bằng GitHub CLI..." -ForegroundColor Yellow
   # Chỉ thay các artifact của release này; giữ các bản phát hành khác.
@@ -185,9 +199,19 @@ $localTagExists = ($tagStatus -eq 0)
 Write-Host "`n[BƯỚC 4/6] Commit source và tạo/kiểm tra tag $tag..." -ForegroundColor Cyan
 Invoke-Checked { git add -A } "git add thất bại."
 Assert-NoTrackedSecrets
+Assert-NoStagedBenchmarkArtifacts
 $pending = @(git status --porcelain)
 if ($LASTEXITCODE -ne 0) { throw "Không đọc được Git status." }
 if (($localTagExists -or $remoteTagSha) -and $pending.Count -gt 0) {
+  # Chỉ in TÊN file để chẩn đoán, không in nội dung hoặc secrets.
+  Write-Host "[DIAG] Có $($pending.Count) mục Git thay đổi khi tag $tag đã tồn tại:" -ForegroundColor Yellow
+  git status --short | Out-Host
+  if ($LASTEXITCODE -ne 0) { throw "Không đọc được danh sách file thay đổi." }
+  Write-Host "[DIAG] Thay đổi đã stage (name-status):" -ForegroundColor Yellow
+  git diff --cached --name-status | Out-Host
+  if ($LASTEXITCODE -ne 0) { throw "Không kiểm tra được staged diff." }
+  Write-Host "[HINT] So sánh thay đổi với tag: git diff --stat $tag --" -ForegroundColor Yellow
+  Write-Host "[HINT] Nếu đây là source mới, tăng VERSION và dùng tag mới; nếu không, rà soát thay đổi trước khi xử lý." -ForegroundColor Yellow
   throw "Tag $tag đã tồn tại nhưng source còn thay đổi. Tăng VERSION cho thay đổi mới; không di chuyển tag đã phát hành."
 }
 if ($pending.Count -gt 0) {
