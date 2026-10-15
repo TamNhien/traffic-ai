@@ -1,3 +1,13 @@
+# V0.5.91 verification
+
+- Verified ZIP benchmark #64 report, 149 GT / 150 persisted AI / 138 matched / 11 missed / 12 extra.
+- Comparator vs #62: identical GT and 150 persisted crossing signatures, no measured performance change.
+- New read-only frontend case navigator: 7 Node.js tests and a PowerShell contract.
+- Executed: 660 AI tests, 178 backend tests, 71 script tests, 15 frontend Node tests, 4 backup worker tests.
+- AI/backend used a temporary `httpx2 -> httpx` import shim outside the source, and backend tests used an in-memory SQLite URL. This does NOT validate the production httpx2 and PostgreSQL stack.
+- JSX parsed/transpiled without error using TypeScript 5.x. Vite production build unavailable (Node 22 versus required >=26, package registry DNS blocked).
+- No real GPU/video replay performed; no new F1 result can be claimed.
+
 # V0.5.90 — Verified AI-only comparison for unscored benchmark exports
 
 - Input: integrity-verified `traffic-ai-benchmark-62-session-188.zip` (GT 149) and `traffic-ai-benchmark-63-session-190.zip` (GT 0, exported before copy).

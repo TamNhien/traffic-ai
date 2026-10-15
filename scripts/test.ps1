@@ -2374,6 +2374,19 @@ Invoke-Step "GT case forensics unit tests (stdlib-only)" {
     python -m unittest discover -s scripts/tests -p test_benchmark_forensics.py -v
 }
 
+Invoke-Step "V0.5.91 benchmark review navigation UI contract" {
+  $ui = Get-Content (Join-Path $root 'frontend/src/main.jsx') -Raw -Encoding UTF8
+  $helper = Get-Content (Join-Path $root 'frontend/src/benchmark-review-navigator.js') -Raw -Encoding UTF8
+  $uiTests = Get-Content (Join-Path $root 'frontend/tests/benchmark-review-navigator.test.js') -Raw -Encoding UTF8
+  if (-not $ui.Contains('buildReviewQueue(report, reportScoringAvailable)') -or
+      -not $ui.Contains('openReviewCase(shownCase)') -or
+      -not $ui.Contains('reviewSeekStart(item.time)') -or
+      -not $helper.Contains('if (!scoringAvailable') -or
+      -not $uiTests.Contains('GT-free benchmark never fabricates')) {
+    throw 'V0.5.91: missing verified read-only case review navigation or regression tests.'
+  }
+}
+
 Invoke-Step "V0.5.90 verified unmatched-crossing review queue (stdlib-only)" {
   docker run --rm -v "${root}:/src" -w /src python:3.14.7-slim `
     python -m unittest discover -s scripts/tests -p test_review_benchmark_errors_v0590.py -v

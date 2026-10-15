@@ -1,3 +1,15 @@
+# Traffic AI V0.5.91 — Benchmark Timecode Review Navigator
+
+- **Rà soát 23 mốc lỗi ngay trên web:** sau khi benchmark đã có GT, phần Benchmark Report có bộ lọc `Tất cả / Lọt / Dư / Gần-cạnh tranh timecode` và điều hướng `← Trước / Sau →`. Chọn mốc sẽ **tạm dừng clip** và đưa video đến **0,4 giây trước** timecode; có thể bấm frame-by-frame bằng các nút cũ.
+- **Tách trình xem với thuật toán đếm:** không thay đổi Ground Truth, sự kiện AI đã lưu, threshold, Gate, dedup, tracker hay kết quả F1. Điều hướng chỉ dùng report được backend trả về; khi GT = 0 thì không giả tạo danh sách lỗi.
+- **Benchmark #64 / Session #191** (ZIP đã xác thực): GT 149, AI 150, khớp 138, lọt 11, dư 12, F1 92,3%. Đối chiếu benchmark #62: cùng 150 crossing, không có lượt AI được sửa hoặc khôi phục. Xem `docs/benchmark-64-review-v0591.md`.
+- **7 test frontend mới** cho thứ tự mốc, lọc, timecode không hợp lệ, trường hợp GT trống và không thay đổi báo cáo. Bổ sung PowerShell UI contract và metadata migration `0105_review_nav_v0591`.
+- **Không khẳng định cải thiện AI** trước khi chạy lại clip bằng model thật và xác minh từng trường hợp với GT đã duyệt. Nếu không có cảnh video đủ sát, chỉ ghi `cần xem clip`, không tự xóa event.
+
+**Cài và chạy:** `cd D:\LienThongDH\DoAn\traffic-ai` → `Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File` → `.\scripts\test.ps1` → `.\scripts\start.ps1`. Khi chạy ổn và rà soát Git: `.\scripts\publish.ps1` (tag `v0.5.91`, không ghi đè tag cũ).
+
+---
+
 # Traffic AI V0.5.90 — Verified AI-only Replay Comparison + GT Export Freshness
 
 - **Sửa quy trình đối chiếu khi ZIP được xuất trước lúc chép Ground Truth:** vẫn xác thực checksum JSON/trace, session, geometry và so sánh chính xác sự kiện AI đã lưu; KHÔNG tính hoặc suy ra F1/lọt/dư nếu một trong hai ZIP chưa có GT.

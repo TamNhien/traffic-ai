@@ -226,3 +226,17 @@
 .benchmark-temporal-review summary small{display:block;margin:3px 0 0 15px;color:#93c5fd;font-weight:400}
 .benchmark-temporal-review summary:focus-visible{outline:2px solid #5eead4;outline-offset:-2px}
 .benchmark-temporal-review>div{padding:3px 12px 12px;color:#c9dcee;font-size:.79rem;line-height:1.5;overflow-wrap:anywhere}
+
+/* V0.5.91: concise, accessible GT/AI review navigation. */
+.benchmark-review-nav{margin:12px 0;border:1px solid #345b85;border-radius:10px;background:rgba(16,43,71,.65);padding:12px;display:grid;gap:10px;min-width:0}
+.benchmark-review-nav-heading{display:grid;gap:3px;color:#e0eeff;font-size:.86rem}
+.benchmark-review-nav-heading small{font-size:.76rem;color:#9cbad5;font-weight:400}
+.benchmark-review-nav-tools{display:flex;align-items:end;gap:8px;flex-wrap:wrap}
+.benchmark-review-nav-tools label{display:grid;gap:4px;flex:1 1 160px;font-size:.76rem;color:#a9bfda}
+.benchmark-review-nav-tools select{min-width:0;width:100%;background:#07182b;color:#edf5ff;border:1px solid #365777;border-radius:7px;padding:8px}
+.benchmark-review-nav-tools button{min-height:37px;flex:0 0 auto}
+.benchmark-review-nav-current{display:flex;gap:8px 12px;flex-wrap:wrap;align-items:center;border-top:1px solid #2d4a68;padding-top:9px;min-width:0}
+.benchmark-review-nav-current span{color:#e9f3ff;font-size:.81rem}
+.benchmark-review-nav-current small{color:#a0b9d6;font-size:.76rem;flex-basis:100%;overflow-wrap:anywhere}
+.benchmark-review-nav-empty{color:#a9bfd7;margin:0;font-size:.8rem}
+@media(max-width:530px){.benchmark-review-nav-tools button{flex:1 1 80px}.benchmark-review-nav-tools label{flex-basis:100%}}
