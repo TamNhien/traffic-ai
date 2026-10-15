@@ -5,8 +5,9 @@ import { AuthShell, AccountPanel, AdminPanel, secureFetch } from './security.jsx
 import { BackupPanel } from './backup-panel.jsx'
 import { shouldShowTemporalCompetitionReview } from './benchmark-review.js'
 import { buildReviewQueue, filterReviewQueue, reviewSeekStart } from './benchmark-review-navigator.js'
+import { buildPassageCycleReview } from './benchmark-passage-cycles.js'
 
-const APP_VERSION = '0.5.91'
+const APP_VERSION = '0.5.92'
 const vehicleLabels = {
   motorcycle: 'Xe máy', bicycle: 'Xe đạp', car: 'Ô tô', bus: 'Xe buýt', truck: 'Xe tải', other: 'Khác'
 }
@@ -750,6 +751,7 @@ function GroundTruthBenchmark({ selectedCameraId, sessions }) {
   const reportScoringAvailable = reportIsScorable(report)
   const hasGroundTruth = (detail?.marks?.length || 0) > 0
   const reviewCases = useMemo(() => buildReviewQueue(report, reportScoringAvailable), [report, reportScoringAvailable])
+  const passageCyclePairs = useMemo(() => reportScoringAvailable ? buildPassageCycleReview(report) : [], [report, reportScoringAvailable])
   const filteredCases = useMemo(() => filterReviewQueue(reviewCases, caseFilter), [reviewCases, caseFilter])
   const activeCaseIndex = filteredCases.findIndex(item => item.key === activeReviewCase)
   const shownCaseIndex = activeCaseIndex >= 0 ? activeCaseIndex : 0
@@ -1009,6 +1011,15 @@ function GroundTruthBenchmark({ selectedCameraId, sessions }) {
             <small>{shownCase.reason} · {shownCase.near.length ? `${shownCase.near.length} mốc đối diện gần timecode (chưa xác nhận cùng xe)` : 'Không có mốc đối diện trong cửa sổ ghép'}</small>
           </div> : <p className="benchmark-review-nav-empty">Không có trường hợp phù hợp bộ lọc.</p>}
         </section>}
+        {reportScoringAvailable && passageCyclePairs.length > 0 && <details className="benchmark-temporal-review benchmark-cycle-review">
+          <summary>Các lượt dùng chung tracking ID — cần đối chiếu video <small>{passageCyclePairs.length} cặp · {passageCyclePairs.filter(pair => pair.hasExtra).length} cặp liên quan AI dư</small></summary>
+          <p>Cùng canonical ID KHÔNG chứng minh cùng một phương tiện. Xe quay lại cắt vạch vẫn phải đếm thêm lượt. Dùng bản xuất ZIP và lệnh audit-crossing-cycles.ps1 để kiểm tra raw ID thực tế.</p>
+          {passageCyclePairs.map(pair => <div className="benchmark-cycle-pair" key={pair.key}>
+            <span>Track {pair.track} · {pair.gap.toFixed(2)}s · {String(pair.earlier.direction).toUpperCase()} → {String(pair.later.direction).toUpperCase()} {pair.hasExtra ? '· Có AI dư' : ''}</span>
+            <div><button type="button" className="secondary compact" onClick={() => seekTo(pair.earlier.time)}>Trước {formatVideoTime(pair.earlier.time)}</button>
+              <button type="button" className="secondary compact" onClick={() => seekTo(pair.later.time)}>Sau {formatVideoTime(pair.later.time)}</button></div>
+          </div>)}
+        </details>}
         {shouldShowTemporalCompetitionReview(report, reportScoringAvailable) && <details className="benchmark-temporal-review"><summary>Đối chiếu GT/AI có trường hợp cạnh tranh thời gian — cần xem clip <small>{Number(report.temporal_assignment_audit?.missed_with_claimed_persisted_event || 0)} mốc GT · {Number(report.temporal_assignment_audit?.false_positives_near_assigned_ground_truth || 0)} AI gần GT</small></summary><div>{report.missed} mốc GT và {report.false_positives} event AI chưa được ghép trong cửa sổ ±{Number(report.tolerance_seconds || 0.75).toFixed(2)}s. Có <strong>{Number(report.temporal_assignment_audit?.missed_with_claimed_persisted_event || 0)} mốc GT</strong> gần event DB đã ghép với GT khác và <strong>{Number(report.temporal_assignment_audit?.false_positives_near_assigned_ground_truth || 0)} event AI dư</strong> ở gần GT đã được ghép. Tổng GT/AI không cần bằng nhau mới có cạnh tranh thời gian. Đây KHÔNG phải bằng chứng hai sự kiện là cùng một xe; không tự sửa GT hoặc điểm số.</div></details>}
         {report.integrity && <div className={`source-status ${report.integrity.ok ? 'ok' : 'warn'}`}><strong>{report.integrity.ok ? '✓ Benchmark Integrity OK' : '⚠ Benchmark Integrity cần chú ý'}</strong><span>Worker đề xuất {report.integrity.worker_total} · DB lưu {report.integrity.persisted_events} · event có timecode {report.integrity.timed_events} · backend gộp {report.integrity.dedup_suppressed_events} · Human Guard loại {report.integrity.human_guard_rejections}{report.integrity.missing_timecode ? ` · thiếu timecode ${report.integrity.missing_timecode}` : ''}.</span></div>}
         {reportScoringAvailable && report.dominant_miss_reason && <div className="source-status bad"><strong>Dấu hiệu quanh thời điểm lọt nổi bật: {missReasonLabels[report.dominant_miss_reason] || report.dominant_miss_reason}</strong><span>{Object.entries(report.miss_reason_counts || {}).map(([reason,count])=>`${missReasonLabels[reason] || reason}: ${count}`).join(' · ')}</span></div>}

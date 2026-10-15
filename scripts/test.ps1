@@ -2374,6 +2374,18 @@ Invoke-Step "GT case forensics unit tests (stdlib-only)" {
     python -m unittest discover -s scripts/tests -p test_benchmark_forensics.py -v
 }
 
+Invoke-Step "V0.5.92 verified crossing-cycle witness audit (stdlib-only)" {
+  docker run --rm -v "${root}:/src" -w /src python:3.14.7-slim `
+    python -m unittest discover -s scripts/tests -p test_audit_crossing_cycles_v0592.py -v
+  if ($LASTEXITCODE -ne 0) { throw "V0.5.92 crossing-cycle witness tests failed." }
+  $helper = Get-Content (Join-Path $root 'frontend/src/benchmark-passage-cycles.js') -Raw -Encoding UTF8
+  $ui = Get-Content (Join-Path $root 'frontend/src/main.jsx') -Raw -Encoding UTF8
+  if (-not $helper.Contains('identityProven:false') -or -not $ui.Contains('buildPassageCycleReview(report)') -or
+      -not (Test-Path (Join-Path $root 'scripts/audit-crossing-cycles.ps1'))) {
+    throw 'V0.5.92 crossing-cycle read-only UI/CLI contract missing.'
+  }
+}
+
 Invoke-Step "V0.5.91 benchmark review navigation UI contract" {
   $ui = Get-Content (Join-Path $root 'frontend/src/main.jsx') -Raw -Encoding UTF8
   $helper = Get-Content (Join-Path $root 'frontend/src/benchmark-review-navigator.js') -Raw -Encoding UTF8

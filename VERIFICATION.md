@@ -1,3 +1,12 @@
+# V0.5.92 verification
+
+- Source based on V0.5.91 full source ZIP, benchmark #65 Session #192 and 190 uploaded camera snapshots.
+- Verification pipeline: signed ZIP/manifest hash, closed trace, raw source SHA-256 + byte count; 150 AI events, 149 GT, 138 matched, 11 missed, 12 extra, 92.3% F1 unchanged.
+- New cycle audit: 5 pairs within 12 seconds; 2 pairs involve unmatched AI; raw-ID evidence changed for 3 pairs. No automatic event suppression, GT edits or claims of improved F1.
+- Node frontend test coverage now 19 tests; scripts Python regression suite 79 tests; AI pytest 660, backend pytest 178, backup worker pytest 4. Backend and AI tests use `httpx2` alias to installed `httpx` **only in test interpreter, not in production source**; backend SQLite in-memory; production Docker must be tested on Windows.
+- Packaging verified: version-contract, Alembic head <=32 chars, PowerShell CRLF, Python compileall; new script powershell contract and JS UI navigation module.
+- Node 22 locally, project requires Node >=26.10; Vite production bundle and Docker/GPU replay not verified in this environment.
+
 # V0.5.91 verification
 
 - Verified ZIP benchmark #64 report, 149 GT / 150 persisted AI / 138 matched / 11 missed / 12 extra.

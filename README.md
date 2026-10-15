@@ -1,3 +1,18 @@
+# Traffic AI V0.5.92 — Verified Crossing-Cycle and Raw-ID Evidence Audit
+
+- **Phân tích chu kỳ cắt vạch trên cùng canonical tracking ID** với cửa sổ tối đa 30 giây (mặc định 12 giây). Đối chiếu cả `matched_items` và `false_positive_items`, kèm bằng chứng raw ByteTrack ID từ trace JSONL đã xác thực manifest/hash.
+- **Web Benchmark Report:** phần mở rộng "Các lượt dùng chung tracking ID" cho phép bấm vào cả hai timecode; phân biệt cặp có AI dư. Không tự xem các lượt IN→OUT là đếm trùng, vì một xe quay lại là một lượt hợp lệ.
+- **Lệnh CLI/PowerShell `scripts/audit-crossing-cycles.ps1`** xuất `crossing-cycles.json`, `crossing-cycles.csv` (UTF-8 BOM) và Markdown để xem từng cặp; kiểm tra trace nguồn đóng, checksum và uncompressed size, không cần chạy inference.
+- **Benchmark #65 / Session #192**: GT 149, AI 150, khớp 138, lọt 11, dư 12, F1 92,3%. Phát hiện 5 cặp cùng canonical trong 12 giây, 2 cặp liên quan AI dư, 3 cặp raw ID khác nhau gần event. **Không tự xóa lượt AI hoặc thay GT.** Xem `docs/benchmark-65-cycle-audit-v0592.md`.
+- **Tăng phiên bản `0.5.92`**, migration metadata `0106_cycle_witness_v0592`; kiểm thử hồi quy CLI và JavaScript, PowerShell contract; giữ toàn bộ security, PostgreSQL, dashboard, benchmark, GitHub publication của các bản trước.
+- **Giới hạn:** chỉ nâng cấp truy vết và trình duyệt lỗi, thuật toán đếm không đổi; chưa chạy lại GPU/video với V0.5.92 nên không có cơ sở nói F1 tăng. Source ZIP không bao gồm dữ liệu camera/video, model weights hoặc `.env` thật.
+
+**Chạy trên Windows:** `cd D:\LienThongDH\DoAn\traffic-ai` → `Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File` → `.\scripts\test.ps1` → `.\scripts\start.ps1`. Khi kiểm thử thành công, dùng `.\scripts\publish.ps1` với tag mới `v0.5.92` (không ghi đè tag cũ).
+
+**Xuất báo cáo chu kỳ:** `.\scripts\audit-crossing-cycles.ps1 -Export '.\traffic-ai-benchmark-65-session-192.zip' -OutputDirectory '.\crossing-cycle-audit'`.
+
+---
+
 # Traffic AI V0.5.91 — Benchmark Timecode Review Navigator
 
 - **Rà soát 23 mốc lỗi ngay trên web:** sau khi benchmark đã có GT, phần Benchmark Report có bộ lọc `Tất cả / Lọt / Dư / Gần-cạnh tranh timecode` và điều hướng `← Trước / Sau →`. Chọn mốc sẽ **tạm dừng clip** và đưa video đến **0,4 giây trước** timecode; có thể bấm frame-by-frame bằng các nút cũ.

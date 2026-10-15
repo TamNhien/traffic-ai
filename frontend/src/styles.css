@@ -240,3 +240,9 @@
 .benchmark-review-nav-current small{color:#a0b9d6;font-size:.76rem;flex-basis:100%;overflow-wrap:anywhere}
 .benchmark-review-nav-empty{color:#a9bfd7;margin:0;font-size:.8rem}
 @media(max-width:530px){.benchmark-review-nav-tools button{flex:1 1 80px}.benchmark-review-nav-tools label{flex-basis:100%}}
+
+/* V0.5.92 evidence-only crossing cycle review */
+.benchmark-cycle-review p{font-size:12px;color:#a8c2df;line-height:1.5}
+.benchmark-cycle-pair{display:grid;gap:6px;padding:9px 0;border-top:1px solid #274566;font-size:12px}
+.benchmark-cycle-pair>div{display:flex;gap:8px;flex-wrap:wrap}
+.benchmark-cycle-pair button{font-size:12px}
