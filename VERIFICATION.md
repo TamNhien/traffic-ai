@@ -1,3 +1,104 @@
+# V0.5.93 — Kiểm chứng source, báo cáo và sửa nối ID
+
+## Kết quả hiện tại
+
+| Phạm vi | Đã thực thi |
+|---|---:|
+| AI algorithms/worker helpers offline | 663 đạt |
+| Backend pure algorithms/helpers offline | 129 đạt |
+| Scripts unittest | 79 đạt |
+| Benchmark gate standalone functions | 5 đạt |
+| Backup worker standalone functions | 4 đạt |
+| Frontend Node tests | 30 đạt |
+| **Tổng kiểm tra thực thi** | **910 đạt, 0 lỗi** |
+| HTTP/ORM integration chưa chạy | **63**, gồm 62 cũ và 1 SQLite report test mới |
+| Supplementary report UI checks | 7/7 Babel/Node VM có kiểm soát; không cộng vào 910 |
+| Local release checks | 38: 17 executed, 14 static, 4 simulation, 3 Bash syntax; không cộng vào 910 |
+
+Đây **không phải full pytest**. Runtime hiện tại Python 3.12.14 / Node 24.19.0 / npm 11.9.0, có NumPy/Pydantic/ReportLab/openpyxl/pypdf nhưng thiếu pytest/FastAPI/SQLAlchemy/Alembic/httpx/httpx2/cv2/Torch/pwsh/Docker. Một lần thử cài dependency có timeout ngắn không lấy được gói, không tiếp tục lặp cài hay gọi các kiểm tra bị loại là đã chạy.
+
+Các Python test function thực tế chạy bằng harness với fixture tối thiểu approx/raises/tmp_path/monkeypatch; worker/backend helpers trích AST để tránh import HTTP/ORM chưa có. Dispatcher dùng queue/thread với HTTP được kiểm soát. Scripts unittest và frontend node --test chạy bằng runtime thực.
+
+Giữ đủ **926 Python test identity cũ**, thêm 17 (6 tracking + 11 report), tổng 943 definition. Giữ đủ 19 Node test cũ, thêm 11 thành 30. Không sửa assertion/body của test cũ. 63 integration exclusion gồm 3 AI + 59 backend cũ và 1 report SQLite mới; tổng 880 Python function thực thi + 63 chưa chạy = 943 definition, cộng 30 Node = 910 kiểm tra đạt.
+
+## Rà soát full source
+
+Baseline đúng ZIP .92 người dùng gửi: **641.978 byte / 290 path**, SHA256 `a85220e42e266261f45642d43d43dfeb6c3890ffb86602d6f3950cd34b1c8ed9`. Source .93 giữ đủ 290 path, thêm 10, tổng 300 file. Không đóng gói .env thật, runtime volumes, camera RAR, video, model weights, trace/raw input hoặc caches.
+
+- 203 Python file parse/compile hợp lệ; 107 migration, head `0107_reports_guard_v0593`, parent `0106_cycle_witness_v0592`, revision dưới 32 ký tự. Migration chỉ cập nhật schema_version 0.5.93, downgrade 0.5.92.
+- 29 PowerShell script UTF-8 không BOM / CRLF; các text source/config khác giữ LF. Historical contract và các lệnh cũ được giữ lại.
+- 1.071 source predicate PowerShell, 774 internal Python import symbol, 121 frontend runtime-field pair được rà soát, không còn finding. Đây là kiểm tra tĩnh, không phải PowerShell runtime.
+- Babel parse 16 JS/JSX file và 43 local import/export symbol đạt, không phải Vite build hoặc React DOM/browser.
+- 298 code/config SHA256 đã đóng băng sau các kiểm tra cuối; README/VERIFICATION review và pin riêng trước đóng gói.
+- Legacy counting/Gate/worker/classification/Human Guard / backend dedup / matching giữ nguyên byte của .92. Tracking chỉ thay lower bound của đúng một guard 4→1; khôi phục lower bound thì toàn bộ AST algorithm trở về baseline. CSS cũ giữ nguyên byte; report CSS dùng selectors riêng.
+- API report router được đăng ký trong backend main; global authentication/RBAC middleware không đổi. Viewer chỉ xem, Admin/Operator export; đường dẫn /export tiếp tục bị viewer từ chối theo policy hiện có.
+
+## Dữ liệu benchmark và trace đã đối chiếu
+
+Benchmark #66/session 193 ZIP có 5 data JSON cùng manifest: kiểm SHA256 và byte lengths đủ 5 file. Dùng hàm match_crossings thực tế của source hiện tại tái tính, tất cả base fields/matching rows khớp report:
+
+| Chỉ số input .92 | Giá trị |
+|---|---:|
+| GT / AI | 149 / 150 |
+| Khớp / Lọt / Dư | 138 / 11 / 12 |
+| Recall / Precision / F1 | 92,6174% / 92,0000% / 92,3077% |
+| Đúng class / đúng hướng | 136/138 / 136/138 |
+| Khớp đủ time/class/direction | 134 |
+| AI IN / OUT | 69 / 81 |
+
+RAR 158.592.235 byte, SHA256 `4f433ae6bb9e38d8a2556a1030c962f51830c2995a959e51e8b6918d42591a0f`, có 380 member có đường dẫn an toàn, không trùng, gồm **cả session 192 và 193**. Không nhầm trace 192 thành 193. Trace 193: 196.117.028 byte, SHA256 `4417cbfc80e8401615c7a8a04174bed92b9f2fb09c1fe7e101b8c16aa07726e8`; trace 192: 197.559.471 byte, SHA256 `7ff2972c2f808b3bf556bdb0f97ea588bda8ae60e5d6ba6b4489ca266674daae`.
+
+Mỗi run có 23.650 frame liên tục, 271.208 Gate-track observation, 191 proposal = 191 terminal receipt, 150 created + 41 dedup. Mọi receipt khớp 11 source field của proposal; 150 created khớp đủ 150 DB event. Drain complete/pending 0 / dropped 0; không có bằng chứng rơi event khi gửi backend.
+
+Hai run 192/193 giữ frame/time/hướng/loại/điểm cắt/tracking/outcome/dedup reason; một confidence khác nhẹ tại 86667 IN 250.5291 s. Cùng 150 AI và cùng 11 lọt / 12 dư; .92 thêm audit không giải quyết các lỗi này. Crossing-cycles người dùng gửi là benchmark 65 / session 192; năm cặp được crosswalk duy nhất sang 193 bằng chữ ký chính xác, không gán raw witness 192 cho 193.
+
+GT đang có 0 truck / 1 car / 4 bicycle, AI 2 truck / 0 car / 1 bicycle. Sai loại OUT 641.981 GT car → AI truck và IN 289.449941 GT bicycle → AI motorcycle được xác nhận bằng report. Van IN 882.2898 không có GT trong ±0,75 s; không dùng điều đó để tự xóa AI hoặc đổi van về CAR. Người dùng cần review GT theo clip và quy ước van chở hàng là Xe tải.
+
+## Sửa nối ID và phạm vi hiệu quả
+
+Canonical 251681 bị raw 255061 chiếm đúng một quan sát ở frame 15954, tạo event IN 638.12. Ảnh mục tiêu cho thấy box người đi bộ kế thừa identity/rider của track xe. Proposal 251681 IN 639.7107 gần GT 9635 IN 640.1409 sau đó bị backend same-track-repeat-jitter gộp vào event sớm.
+
+Giữ guard .85 hiện có nhưng mở window gap 4–12 thành 1–12 frame, chỉ cho candidate hai bánh khác raw ID, đủ hai rect và đồng thời direct_jump >1.75 × footprint / predicted_jump >1.50 × footprint. Switch AI_SHORT_GAP_ALIAS_GUARD vẫn là rollback; không thay global distance, prediction threshold, Gate/tolerance/cooldown/dedup/HumanGuard/heading/class.
+
+93 tracking test thực thi, gồm 87 cũ và 6 mới; là subset của 663 AI. Có controls gap 1/2/3, xe nhanh khớp prediction, flag off, bốn bánh/gap > 12/missing rect / known raw.
+
+Reproducer có kiểm soát dùng 158 dòng đo thật của target, resolver thực từ ZIP baseline/current và primary counter/defaults trích từ worker. .92 ghép raw 255061 vào 251681 và phát crossing 15954. .93 để raw 255061 giữ identity riêng, giữ 251681 ở 15957/15997 và primary counter phát IN 639.7106917 s tại observed frame 15996. Trace từ pipeline worker đầy đủ trước đó chọn cùng source clock nhưng gửi ở frame 15997; khác biệt observed frame được ghi rõ. Tắt flag khôi phục kết quả baseline của reproducer.
+
+Đây là replay chọn lọc observations, không chạy detector/tracker/model/HumanGuard/dispatcher/backend dedup toàn pipeline và **không phải F1 mới**. Case 345897 còn anchor dao động theo cạnh box trong lúc center ổn định; không sửa heading thiếu kiểm chứng. Human Guard 143399 dùng cùng raw ID trước crossing, trace thiếu person/rider opinions nên không có căn cứ giảm ngưỡng/TTL/bypass. Không tự thay GT hoặc hứa đã hết 11 lọt / 12 dư.
+
+## Báo cáo nâng cao và exports
+
+Pure aggregation kiểm tra ngày UTC+7 `[start,end)`, giới hạn 366 ngày / 31 ngày theo giờ, zero-fill hour/day/month, tổng IN/OUT/unknown, camera/class/session filters, 5 peak-hour bucket, tie-order, dữ liệu rỗng và giới hạn 100.000 nhóm không âm thầm cắt tổng. SQL query chỉ đọc detected_at/events; video source_time_seconds không bị cộng vào ngày hiện tại hay suy diễn thành ngày quay.
+
+10 pure test báo cáo thực thi; một SQLAlchemy/SQLite integration test chưa chạy và được giữ trong source. XLSX mở lại bằng openpyxl, 5 sheet, numeric cell thật, Unicode và không có formula; CSV UTF-8 BOM xử lý ô có khả năng bị hiểu là formula. PDF có font DejaVuSans nhúng cùng giấy phép, ToUnicode, phân trang + header lặp; pypdf đọc 4 trang và tiếng Việt, Poppler render/xem đủ 4 trang. Tiêu đề section dùng keepWithNext tránh mồ côi bảng. ReportLab thực tế 4.4.9; production/test dependency pin 5.0.1 chưa cài được trong runtime này.
+
+11 Node test mới kiểm tra whole-day/UTC+7/query/export whitelist/totals/NaN chart. 7 kiểm tra Babel/VM có kiểm soát thực thi handler/render với schema backend thực, pending/stale selection, viewer permission, blob download/revoke, HTTP 403 / wrong MIME / unmount; không gọi đây là browser test.
+
+Đối chiếu 150 event thực session 193 qua report helper: 150 / IN 69 / OUT 81 / MC 147 / bike 1 / truck 2, đúng dữ liệu gốc. Đồng hồ detected_at của chúng nằm **15/10/2026, 21h UTC+7** dù file đính kèm 16/10; UI điền ngày theo phiên. Chart/peak thể hiện thời điểm hệ thống ghi nhận, không khẳng định giờ giao thông thực ngoài đời của video replay. Chọn một phiên tránh cộng nhiều lần chạy lại cùng clip.
+
+## Giới hạn và chạy trên Windows
+
+Chưa chạy native PowerShell / Docker / PostgreSQL / HTTP ORM / migration live, pytest với dependency đã pin, npm audit/Vite production build, React DOM/browser, GPU/full video/model replay. Không publish GitHub hoặc tạo Release thật; 38 release check chỉ Git/artifact cục bộ và static/simulation/syntax.
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+
+# Test
+.\scripts\test.ps1
+
+# Khởi động
+.\scripts\start.ps1
+
+# Tự test, commit, push GitHub, tạo tag v0.5.93 và Release
+.\scripts\publish.ps1
+```
+
+Mở https://traffic-ai.test:8443, Ctrl+F5. Trong Báo cáo, chọn camera/phiên và Xem báo cáo trước khi xuất. Để đánh giá bản sửa đếm, chạy lại cùng clip/vạch/model, benchmark mới dùng GT đã review, đối chiếu và xuất ZIP sau khi có GT. Bản này giữ đủ lịch sử source .92; những kết quả các bản cũ ở phần dưới là lịch sử, không phải phép chạy của môi trường hiện tại.
+
+---
+
 # V0.5.92 verification
 
 - Source based on V0.5.91 full source ZIP, benchmark #65 Session #192 and 190 uploaded camera snapshots.

@@ -1,0 +1,38 @@
+.traffic-reports { margin-top: 24px; min-width: 0; scroll-margin-top: 20px; }
+.traffic-reports * { box-sizing: border-box; }
+.traffic-reports .tr-subtitle { color: #8da3bc; line-height: 1.65; margin: 8px 0 18px; }
+.traffic-reports .tr-filters { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 12px; padding: 16px; border: 1px solid #263b55; border-radius: 12px; background: #0c1828; }
+.traffic-reports .tr-filters label { display: flex; flex-direction: column; gap: 7px; color: #b6c6d9; font-size: 13px; min-width: 0; }
+.traffic-reports .tr-filters select,.traffic-reports .tr-filters input { width: 100%; min-width: 0; padding: 10px; border-radius: 8px; border: 1px solid #334961; background: #101e31; color: #e3edf9; }
+.traffic-reports .tr-wide { grid-column: span 2; }
+.traffic-reports .tr-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 14px 0; }
+.traffic-reports .tr-actions small { color: #96adc6; }
+.traffic-reports .tr-notice { padding: 12px 14px; border: 1px solid #35516c; border-radius: 8px; background: #112238; color: #bed2eb; line-height: 1.6; margin: 12px 0; overflow-wrap: anywhere; }
+.traffic-reports .tr-stats { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 12px; margin: 20px 0; }
+.traffic-reports .tr-stat { border: 1px solid #284059; border-radius: 12px; padding: 16px; background: #0e1b2c; min-width: 0; }
+.traffic-reports .tr-stat span,.traffic-reports .tr-stat small { display: block; color: #9eb1c9; }
+.traffic-reports .tr-stat strong { display: block; margin: 8px 0; font-size: 30px; color: #edf5ff; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.traffic-reports .tr-chart-panel { padding: 16px; border: 1px solid #284059; border-radius: 12px; min-width: 0; }
+.traffic-reports .tr-chart-panel h3 { margin: 0 0 8px; }
+.traffic-reports .tr-chart { width: 100%; height: auto; display: block; overflow: visible; }
+.traffic-reports .tr-chart text { fill: #9cb3cd; font-size: 11px; }
+.traffic-reports .tr-grid-line { stroke: #253a52; stroke-width: 1; }
+.traffic-reports .tr-total { stroke: #60a5fa; fill: none; }
+.traffic-reports .tr-in { stroke: #34d399; fill: none; }
+.traffic-reports .tr-out { stroke: #fbbf24; fill: none; }
+.traffic-reports .tr-legend { display: flex; flex-wrap: wrap; gap: 18px; font-size: 13px; margin-top: 6px; }
+.traffic-reports .tr-legend span::before { content: ''; display: inline-block; width: 16px; height: 3px; margin-right: 6px; vertical-align: middle; background: #60a5fa; }
+.traffic-reports .tr-legend .tr-legend-in::before { background: #34d399; }
+.traffic-reports .tr-legend .tr-legend-out::before { background: #fbbf24; }
+.traffic-reports .tr-tables { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px; margin-top: 18px; }
+.traffic-reports .tr-table-wrap { overflow: auto; max-height: 420px; min-width: 0; border: 1px solid #284059; border-radius: 9px; }
+.traffic-reports table { width: 100%; border-collapse: collapse; font-size: 13px; text-align: left; }
+.traffic-reports th,.traffic-reports td { padding: 11px 12px; border-bottom: 1px solid #263b55; white-space: nowrap; }
+.traffic-reports thead th { position: sticky; top: 0; background: #14253b; color: #c8d8ea; }
+.traffic-reports tbody th { color: #c8d8ea; font-weight: 500; }
+.traffic-reports td:not(:first-child),.traffic-reports th:not(:first-child) { text-align: right; font-variant-numeric: tabular-nums; }
+.traffic-reports caption { text-align: left; padding: 12px; color: #c8d8ea; font-weight: 700; }
+.traffic-reports .tr-empty { padding: 24px; text-align: center; color: #a6bad1; }
+.traffic-reports .tr-footnote { color: #96adc6; font-size: 13px; line-height: 1.65; margin-top: 16px; }
+@media (max-width: 1100px) { .traffic-reports .tr-filters { grid-template-columns: repeat(2,minmax(0,1fr)); } }
+@media (max-width: 680px) { .traffic-reports .tr-filters,.traffic-reports .tr-stats,.traffic-reports .tr-tables { grid-template-columns: minmax(0,1fr); } .traffic-reports .tr-wide { grid-column: auto; } .traffic-reports .tr-stat strong { font-size: 25px; } }

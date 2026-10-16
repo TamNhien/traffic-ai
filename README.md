@@ -1,3 +1,55 @@
+# Traffic AI V0.5.93 — Báo cáo thống kê và sửa nối ID cự ly ngắn
+
+Bản này tiếp tục từ đúng full source V0.5.92 được cung cấp. Giữ toàn bộ chức năng đăng nhập/phân quyền, backup, huấn luyện, dashboard 50/50, benchmark và công cụ audit cũ.
+
+## Báo cáo thống kê nâng cao
+
+Mở **Báo cáo** trên thanh điều hướng. Chọn camera, một phiên đếm, khoảng ngày và loại xe; nhóm theo **giờ / ngày / tháng** rồi bấm **Xem báo cáo**. Có tổng lượt, IN/OUT/chưa rõ hướng, biểu đồ lưu lượng, bảng theo camera/loại xe và các giờ cao điểm. Phiên mặc định là phiên gần nhất của camera; ngày được điền từ thời điểm bắt đầu/kết thúc phiên.
+
+Báo cáo tính trên **event đã lưu trong PostgreSQL**, không phải số đề xuất worker. Đồng hồ dùng thời điểm hệ thống ghi nhận event theo **UTC+7**, không suy diễn ngày quay video từ hình overlay. Chạy lại cùng video tạo phiên mới; chọn một phiên để tránh cộng nhiều lần replay. Giờ cao điểm là từng khoảng một giờ có lưu lượng cao nhất trong khoảng ngày, không phải trung bình giờ trong ngày.
+
+- Xuất **Excel .xlsx thật**, CSV UTF-8 BOM và PDF tiếng Việt có font nhúng, phân trang. Export có cùng bộ lọc với báo cáo đang xem; đổi bộ lọc phải xem lại trước khi tải.
+- Viewer được đọc; Admin/Operator được tải. API mới vẫn qua authentication/RBAC hiện có.
+- Giao diện chọn ngày cuối bao gồm cả ngày; API chuyển thành khoảng `[start, end)` theo UTC+7. Tối đa 366 ngày, báo cáo theo giờ tối đa 31 ngày. Query SQL tổng hợp có giới hạn 100.000 nhóm và báo lỗi khi vượt, không trả tổng thiếu.
+- API: `GET /api/reports/traffic`, `GET /api/reports/traffic/export?format=xlsx|csv|pdf`, `GET /api/reports/sessions`.
+
+## Sửa một nguyên nhân đếm dư và che mất lượt thật
+
+Trace session 193 cho thấy raw 255061 được ghép vào canonical 251681 chỉ một frame 15954. Ảnh tại cửa sổ này cho thấy box người đi bộ nhận lịch sử track xe; event IN 638.12 s được lưu trước, còn proposal của track 251681 tại 639.7107 s bị backend gộp. GT 9635 nằm 640.1409 s. Không nới cửa sổ dedup để giữ thêm cả event sớm lẫn event sau.
+
+V0.5.93 mở điều kiện kiểm tra mâu thuẫn nối ID hai bánh có sẵn từ gap 4–12 xuống gap 1–12 frame. Chỉ chặn khi đủ hai bounding box và đồng thời khoảng cách trực tiếp lẫn vị trí dự đoán đều vượt ngưỡng footprint hiện có. Xe nhanh khớp dự đoán, bốn bánh, gap > 12, raw ID đã có mapping và chế độ tắt guard giữ đường xử lý cũ. Gate, heading, Human Guard, backend dedup, class/taxonomy và matching/tolerance không đổi.
+
+Reproducer dùng resolver và primary counter thật trên 158 dòng đo mục tiêu: .92 ghép raw 255061 vào 251681 và tạo crossing sớm; .93 giữ identity riêng và track 251681 tạo IN tại 639.7106917 s. Đây là tái lập có kiểm soát trên đoạn đo, chưa phải detector/tracker/HumanGuard/dispatcher replay toàn clip.
+
+**Chưa có F1 mới của .93.** Benchmark #66/session 193 hiện tại vẫn 149 GT / 150 AI / 138 khớp / 11 lọt / 12 dư / F1 92,3%. Session 192 và 193 có cùng crossing signatures và kết quả dedup; bản .92 chủ yếu thêm audit nên không giải quyết hết các lỗi này. Case anchor dao động quanh 815–817 s và Human Guard ở 397 s vẫn cần thêm bằng chứng; không tự thay ngưỡng để ép điểm.
+
+GT đang có 0 Xe tải, 1 Ô tô; van OUT 641.981 s vẫn được gán GT Ô tô trong khi AI là Xe tải. Van IN 882.2898 s chưa có GT gần trong cửa sổ ±0,75 s. Giữ quy ước van chở hàng là Xe tải và review nhãn/thời điểm trên clip; source không tự sửa GT.
+
+## Kiểm thử, chạy và phát hành
+
+Chép source vào dự án hiện tại, giữ `.env`, `.git`, volumes, models và video của bạn. Không cần tạo lại tài khoản Admin.
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+
+# Test
+.\scripts\test.ps1
+
+# Khởi động
+.\scripts\start.ps1
+
+# Tự test, commit, push GitHub, tạo tag v0.5.93 và Release
+.\scripts\publish.ps1
+```
+
+Mở https://traffic-ai.test:8443, Ctrl+F5. Chạy lại cùng clip/vạch/model để đo kết quả bản mới; benchmark mới sao chép GT đã review rồi **Tải hồ sơ benchmark** sau khi có GT. Báo cáo thống kê có thể dùng phiên 193 hiện có để kiểm tra 150 lượt theo thời điểm ghi nhận thực tế. Trong dữ liệu được gửi, các event thuộc 15/10 theo UTC+7 dù file được gửi 16/10; chọn phiên sẽ điền ngày tương ứng.
+
+Migration `0107_reports_guard_v0593`, parent `0106_cycle_witness_v0592`, chỉ đồng bộ schema_version 0.5.93; không sửa dữ liệu GT/events. ReportLab 5.0.1 được thêm vào dependencies cho PDF; font DejaVuSans và giấy phép được đóng gói. Kết quả kiểm tra cụ thể/giới hạn môi trường xem VERIFICATION.md.
+
+---
+
 # Traffic AI V0.5.92 — Verified Crossing-Cycle and Raw-ID Evidence Audit
 
 - **Phân tích chu kỳ cắt vạch trên cùng canonical tracking ID** với cửa sổ tối đa 30 giây (mặc định 12 giây). Đối chiếu cả `matched_items` và `false_positive_items`, kèm bằng chứng raw ByteTrack ID từ trace JSONL đã xác thực manifest/hash.

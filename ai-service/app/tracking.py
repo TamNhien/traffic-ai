@@ -237,6 +237,12 @@ class TrackContinuityResolver:
             if self._opposite_two_wheel_stitch(state, point, rect, family, gap):
                 continue
 
+            # V0.5.93: include one-to-three-frame token handoffs in the
+            # existing footprint-and-prediction contradiction check. Session
+            # #193 shows a one-frame foreground token jumping about 250 pixels into
+            # a rider's identity, fabricating an early passage and suppressing
+            # the rider's later real passage through the ordinary dedup guard.
+            # A far jump alone still cannot reject coherent fast motion.
             # V0.5.85: when a new ByteTrack token appears after a short
             # occlusion, do not let it steal a different two-wheel identity
             # whose old measured trajectory AND bounding-box footprint both
@@ -249,7 +255,7 @@ class TrackContinuityResolver:
             if (
                 self.short_gap_alias_guard
                 and family == 'two-wheel'
-                and 4 <= gap <= 12
+                and 1 <= gap <= 12
                 and state.last_raw_id != raw_id
                 and state.rect is not None and rect is not None
             ):

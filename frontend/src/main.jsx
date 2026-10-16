@@ -3,11 +3,12 @@ import { createRoot } from 'react-dom/client'
 import './styles.css'
 import { AuthShell, AccountPanel, AdminPanel, secureFetch } from './security.jsx'
 import { BackupPanel } from './backup-panel.jsx'
+import { TrafficReports } from './traffic-reports.jsx'
 import { shouldShowTemporalCompetitionReview } from './benchmark-review.js'
 import { buildReviewQueue, filterReviewQueue, reviewSeekStart } from './benchmark-review-navigator.js'
 import { buildPassageCycleReview } from './benchmark-passage-cycles.js'
 
-const APP_VERSION = '0.5.92'
+const APP_VERSION = '0.5.93'
 const vehicleLabels = {
   motorcycle: 'Xe máy', bicycle: 'Xe đạp', car: 'Ô tô', bus: 'Xe buýt', truck: 'Xe tải', other: 'Khác'
 }
@@ -1378,7 +1379,7 @@ const activateTraining = async run => {
   return <div className="app-shell">
     <aside className="sidebar">
       <div className="brand"><img className="brand-logo" src={`/logo.svg?v=${APP_VERSION}`} alt="Traffic AI" /><div><strong>Traffic AI</strong><span>YOLO26s + ByteTrack</span></div></div>
-      <nav><a className="active" href="#overview">Tổng quan</a><a href="#live">Giám sát</a><a href="#benchmark">Benchmark</a><a href="#cameras">Camera</a><a href="#training">Dữ liệu & huấn luyện</a><a href="#annotation">Gán nhãn</a><a href="#events">Sự kiện</a><a href="#account">Tài khoản</a>{authUser.role==='admin'&&<><a href="#users">Người dùng</a><a href="#backups">Backup / Restore</a></>}</nav>
+      <nav><a className="active" href="#overview">Tổng quan</a><a href="#live">Giám sát</a><a href="#benchmark">Benchmark</a><a href="#reports">Báo cáo</a><a href="#cameras">Camera</a><a href="#training">Dữ liệu & huấn luyện</a><a href="#annotation">Gán nhãn</a><a href="#events">Sự kiện</a><a href="#account">Tài khoản</a>{authUser.role==='admin'&&<><a href="#users">Người dùng</a><a href="#backups">Backup / Restore</a></>}</nav>
       <div className="sidebar-footer">V{APP_VERSION} · Strict Gate</div>
     </aside>
     <main>
@@ -1445,6 +1446,8 @@ const activateTraining = async run => {
           <div className="camera-actions"><button disabled={busy || !!activePipeline}>{editingId ? 'Cập nhật camera' : 'Tạo camera'}</button>{editingId && <span className={form.source_type === 'video' && !videoPathSet.has(form.source_url) ? 'bad-text' : 'ok-text'}>{form.source_type === 'video' ? (videoPathSet.has(form.source_url) ? 'File video đang tồn tại.' : 'Hãy chọn lại file video rồi cập nhật camera.') : 'Nguồn sẽ được kiểm tra trước khi chạy AI.'}</span>}</div>
         </form><p className="hint">Khi AI đang chạy, hệ thống khóa nguồn và vạch đếm để bảo đảm một phiên dùng đúng một cấu hình. Bấm <strong>Dừng AI</strong> trước khi chỉnh.</p></article>
       </section>
+
+      <TrafficReports cameras={cameras} sessions={sessions} selectedCameraId={selectedId} canExport={['admin','operator'].includes(authUser.role)} />
 
       <section className="training-layout" id="training">
         <article className="panel training-panel"><div className="panel-head"><div><span className="panel-kicker">DATASET STUDIO · CLEAN RETRAIN</span><h2>Dataset giao thông Việt Nam</h2></div><span className="lock-state">V{APP_VERSION}</span></div>

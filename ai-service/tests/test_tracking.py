@@ -1170,3 +1170,97 @@ def test_v0586_four_wheel_incumbent_window_unchanged() -> None:
         visible_raw_centers={10: (405., 398.), 99: (470., 398.)},
     )
     assert (new_id, stitched) == (10, True)
+
+
+def _v0593_recorded_638s_handoff(resolver):
+    # Measured source centers and boxes from session 193, not GT or inference.
+    for frame, center, rect in (
+        (15948, (613.824, 190.318), (590.479, 146.308, 637.169, 234.328)),
+        (15951, (614.900, 197.145), (591.443, 152.592, 638.356, 241.698)),
+        (15952, (614.526, 197.150), (590.263, 150.865, 638.790, 243.435)),
+        (15953, (613.909, 197.037), (589.098, 149.178, 638.721, 244.896)),
+    ):
+        resolver.resolve(251681, center, 'motorcycle', frame, 1440, 811, rect=rect)
+    return resolver.resolve(
+        255061, (655.950, 443.100), 'motorcycle', 15954, 1440, 811,
+        rect=(622.312, 409.500, 689.588, 476.700),
+    )
+
+
+def test_v0593_recorded_one_frame_foreground_handoff_preserves_returning_rider() -> None:
+    resolver = TrackContinuityResolver()
+    assert _v0593_recorded_638s_handoff(resolver) == (255061, False)
+    assert resolver.short_gap_alias_rejections == 1
+    # The foreground token cannot rewrite the rider's velocity or lineage.
+    assert resolver.velocity_for(251681)[1] < 1.0
+    assert resolver.lineage_size(251681) == 1
+    for frame, center, rect in (
+        (15957, (612.593, 210.559), (590.188, 167.108, 634.999, 254.009)),
+        (15997, (564.551, 351.134), (537.299, 297.237, 591.803, 405.031)),
+    ):
+        assert resolver.resolve(
+            251681, center, 'motorcycle', frame, 1440, 811, rect=rect,
+        ) == (251681, False)
+
+
+def test_v0593_contradictory_new_two_wheel_tokens_are_separate_at_gaps_one_to_three() -> None:
+    for label in ('motorcycle', 'bicycle'):
+        for gap in (1, 2, 3):
+            resolver = TrackContinuityResolver()
+            resolver.resolve(1, (100., 100.), label, 10, 1440, 811,
+                             rect=(80., 80., 120., 120.))
+            assert resolver.resolve(
+                2, (100., 300.), label, 10 + gap, 1440, 811,
+                rect=(80., 280., 120., 320.),
+            ) == (2, False)
+            assert resolver.short_gap_alias_rejections == 1
+
+
+def test_v0593_fast_predicted_two_wheel_handoffs_remain_valid_at_short_gaps() -> None:
+    for gap in (1, 2, 3):
+        resolver = TrackContinuityResolver()
+        for frame in range(1, 13):
+            x = 100. + 50. * frame
+            resolver.resolve(1, (x, 300.), 'motorcycle', frame, 1440, 811,
+                             rect=(x - 10., 290., x + 10., 310.))
+        x = 700. + 50. * gap
+        assert resolver.resolve(
+            2, (x, 300.), 'motorcycle', 12 + gap, 1440, 811,
+            rect=(x - 10., 290., x + 10., 310.),
+        ) == (1, True)
+        assert resolver.short_gap_alias_rejections == 0
+
+
+def test_v0593_existing_alias_switch_restores_recorded_baseline_for_comparison() -> None:
+    resolver = TrackContinuityResolver(short_gap_alias_guard=False)
+    assert _v0593_recorded_638s_handoff(resolver) == (251681, True)
+    assert resolver.lineage_size(251681) == 2
+    assert resolver.velocity_for(251681)[1] > 100.
+    assert resolver.short_gap_alias_rejections == 0
+
+
+def test_v0593_four_wheel_long_gap_and_missing_boxes_keep_existing_handoff_contract() -> None:
+    for label, gap, provide_boxes in (
+        ('truck', 1, True), ('car', 2, True), ('bus', 3, True),
+        ('motorcycle', 13, True), ('motorcycle', 1, False),
+    ):
+        resolver = TrackContinuityResolver()
+        old_box = (80., 80., 120., 120.) if provide_boxes else None
+        new_box = (80., 280., 120., 320.) if provide_boxes else None
+        resolver.resolve(1, (100., 100.), label, 10, 1440, 811, rect=old_box)
+        assert resolver.resolve(
+            2, (100., 300.), label, 10 + gap, 1440, 811, rect=new_box,
+        ) == (1, True)
+        assert resolver.short_gap_alias_rejections == 0
+
+
+def test_v0593_known_raw_token_is_outside_newcomer_handoff_guard() -> None:
+    resolver = TrackContinuityResolver()
+    resolver.resolve(1, (100., 100.), 'motorcycle', 10, 1440, 811,
+                     rect=(80., 80., 120., 120.))
+    assert resolver.resolve(
+        1, (100., 300.), 'motorcycle', 11, 1440, 811,
+        rect=(80., 280., 120., 320.),
+    ) == (1, False)
+    assert resolver.short_gap_alias_rejections == 0
+    assert resolver.raw_id_discontinuities == 0

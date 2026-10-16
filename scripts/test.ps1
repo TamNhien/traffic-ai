@@ -2476,6 +2476,28 @@ Invoke-Step "V0.5.86 visible incumbent and compact vehicle dashboard contract" {
   ) { throw "V0.5.86 incumbent reservation regression tests/dashboard details missing." }
 }
 
+Invoke-Step "V0.5.93 traffic reports and short-gap identity guard contract" {
+  $tracking = Get-Content (Join-Path $root "ai-service/app/tracking.py") -Raw -Encoding UTF8
+  $trackingTests = Get-Content (Join-Path $root "ai-service/tests/test_tracking.py") -Raw -Encoding UTF8
+  $reports = Get-Content (Join-Path $root "backend/app/traffic_reports.py") -Raw -Encoding UTF8
+  $routes = Get-Content (Join-Path $root "backend/app/traffic_report_routes.py") -Raw -Encoding UTF8
+  $main = Get-Content (Join-Path $root "backend/app/main.py") -Raw -Encoding UTF8
+  $ui = Get-Content (Join-Path $root "frontend/src/traffic-reports.jsx") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend/src/main.jsx") -Raw -Encoding UTF8
+  if ($tracking -notmatch '1 <= gap <= 12' -or $trackingTests -notmatch 'def test_v0593_') {
+    throw 'V0.5.93 thiếu regression cho alias hai bánh mâu thuẫn ở gap 1–3 frame.'
+  }
+  if ($reports -notmatch 'def export_xlsx' -or $reports -notmatch 'def export_csv' -or $reports -notmatch 'def export_pdf' -or $reports -notmatch 'MAX_AGGREGATE_ROWS') {
+    throw 'V0.5.93 thiếu xuất báo cáo thật hoặc giới hạn dữ liệu.'
+  }
+  if ($routes -notmatch '/api/reports' -or $routes -notmatch '/traffic/export' -or $main -notmatch 'app.include_router\(traffic_report_router\)') {
+    throw 'V0.5.93 thiếu đăng ký API báo cáo.'
+  }
+  if ($ui -notmatch 'TrafficReports' -or $frontend -notmatch '<TrafficReports' -or $frontend -notmatch 'href="#reports"') {
+    throw 'V0.5.93 thiếu màn hình báo cáo hoặc điều hướng.'
+  }
+}
+
 Invoke-Step "Backend syntax check" {
   docker run --rm -v "${root}:/src" -w /src/backend python:3.14.7-slim python -m compileall -q app tests alembic
 }
