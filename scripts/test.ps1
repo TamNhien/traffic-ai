@@ -2498,6 +2498,26 @@ Invoke-Step "V0.5.93 traffic reports and short-gap identity guard contract" {
   }
 }
 
+Invoke-Step "V0.5.94 anchor stability and HumanGuard decision audit contract" {
+  $tracking = Get-Content (Join-Path $root "ai-service/app/tracking.py") -Raw -Encoding UTF8
+  $trackingTests = Get-Content (Join-Path $root "ai-service/tests/test_tracking.py") -Raw -Encoding UTF8
+  $guard = Get-Content (Join-Path $root "ai-service/app/human_guard.py") -Raw -Encoding UTF8
+  $worker = Get-Content (Join-Path $root "ai-service/app/worker.py") -Raw -Encoding UTF8
+  $trace = Get-Content (Join-Path $root "ai-service/app/benchmark_trace.py") -Raw -Encoding UTF8
+  $guardTests = Get-Content (Join-Path $root "ai-service/tests/test_v0594_human_guard_audit.py") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend/src/main.jsx") -Raw -Encoding UTF8
+  $view = Get-Content (Join-Path $root "frontend/src/human-guard-audit.js") -Raw -Encoding UTF8
+  if ($tracking -notmatch 'two_wheel_heading_inertia' -or $tracking -notmatch 'def _set_anchor_heading' -or $trackingTests -notmatch 'def test_v0594_') {
+    throw 'V0.5.94 missing anchor stability or regression controls.'
+  }
+  if ($worker -notmatch 'AI_TWO_WHEEL_HEADING_INERTIA' -or $worker -notmatch 'human_guard_decision_audit' -or $guard -notmatch 'decision_frame_index') {
+    throw 'V0.5.94 missing heading rollback or source-clock guard evidence.'
+  }
+  if ($trace -notmatch 'human_guard_audit' -or $guardTests -notmatch 'def test_v0594_' -or $frontend -notmatch 'buildHumanGuardAuditView' -or $view -notmatch 'nearby_time_window') {
+    throw 'V0.5.94 missing bounded guard diagnosis, tests or review UI.'
+  }
+}
+
 Invoke-Step "Backend syntax check" {
   docker run --rm -v "${root}:/src" -w /src/backend python:3.14.7-slim python -m compileall -q app tests alembic
 }

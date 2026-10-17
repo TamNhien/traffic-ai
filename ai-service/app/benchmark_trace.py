@@ -10,6 +10,7 @@ from hashlib import sha256
 from math import inf, isfinite, nextafter
 
 from app.counting import segment_crossing_point, signed_distance
+from app.human_guard import HUMAN_GUARD_AUDIT_ACTIONS, HUMAN_GUARD_AUDIT_CONTEXTS
 from pathlib import Path
 from typing import Iterable
 from uuid import uuid4
@@ -288,6 +289,67 @@ def _diagnosis_scope(reason: str, gate_audit: dict, tracking_id: int | None) -> 
 
 TRACE_GEOMETRY_MAX_GAP_FRAMES = 45
 TRACE_EVENT_AUDIT_RECORDS_LIMIT = 8
+
+
+def _human_guard_audit_record(value, track_id, frame_index) -> dict | None:
+    """Whitelist one recorded guard snapshot; never infer an opinion from status."""
+    if not isinstance(value, dict) or type(value.get("schema_version")) is not int or value["schema_version"] != 1:
+        return None
+    integer = lambda number: type(number) is int and abs(number) <= 2**53 - 1
+    if (not integer(track_id) or not integer(frame_index) or frame_index < 0
+            or type(value.get("track_id")) is not int or value["track_id"] != track_id
+            or type(value.get("frame_index")) is not int or value["frame_index"] != frame_index
+            or type(value.get("context")) is not str or value["context"] not in HUMAN_GUARD_AUDIT_CONTEXTS
+            or type(value.get("forced")) is not bool
+            or type(value.get("policy_status")) is not str
+            or value["policy_status"] not in HUMAN_GUARD_AUDIT_ACTIONS - {"released"}
+            or value.get("policy_action") is not None and (
+                type(value["policy_action"]) is not str or value["policy_action"] not in HUMAN_GUARD_AUDIT_ACTIONS)):
+        return None
+    clock_keys = ("last_check_frame_index", "decision_frame_index", "decision_age_frames", "last_strike_frame_index")
+    if any(value.get(key) is not None and (not integer(value[key]) or value[key] < 0) for key in clock_keys):
+        return None
+    if (any(not integer(value.get(key)) or value[key] < 0 for key in ("strikes", "required_strikes"))
+            or value["required_strikes"] < 1):
+        return None
+    result = {key: value.get(key) for key in (
+        "schema_version", "track_id", "frame_index", "context", "forced", *clock_keys,
+        "policy_status", "policy_action", "strikes", "required_strikes",
+    )}
+    decision = value.get("decision")
+    if decision is None:
+        if value.get("decision_frame_index") is not None or value.get("decision_age_frames") is not None:
+            return None
+        result["decision"] = None
+        return result
+    checked, decision_frame = value.get("last_check_frame_index"), value.get("decision_frame_index")
+    age = frame_index - decision_frame if decision_frame is not None and frame_index >= decision_frame else None
+    if (not isinstance(decision, dict) or decision_frame is None or checked != decision_frame
+            or value.get("decision_age_frames") != age
+            or type(decision.get("reason")) is not str
+            or decision["reason"] not in {"neutral", "person_dominates_two_wheel", "rider_evidence"}
+            or any(type(decision.get(key)) is not bool for key in ("reject", "rider_supported", "hard_reject"))):
+        return None
+    projected = {key: decision[key] for key in ("reason", "reject", "rider_supported", "hard_reject")}
+    for key in ("person_confidence", "vehicle_confidence", "nearby_vehicle_confidence", "overlap_iou", "target_coverage", "speed_ratio"):
+        number = decision.get(key)
+        try:
+            if number is not None and (type(number) not in (int, float) or not isfinite(number) or number < 0
+                                       or key != "speed_ratio" and number > 1):
+                return None
+        except (OverflowError, TypeError):
+            return None
+        projected[key] = number
+    for key in ("person_detected", "target_person_like", "geometry_computed"):
+        if decision.get(key) is not None and type(decision[key]) is not bool:
+            return None
+        projected[key] = decision.get(key)
+    if projected["geometry_computed"] is False and any(projected[key] is not None for key in ("overlap_iou", "target_coverage")):
+        return None
+    result["decision"] = projected
+    return result
+
+
 _TRACE_DEDUP_REASONS = frozenset({
     "same-track-delivery-retry", "startup-crossing-signature", "heavy-semantic-signature",
     "crossing-signature", "two-wheel-rescue-signature", "two-wheel-spatial-signature",
@@ -445,6 +507,8 @@ class _TraceWindow:
         self.proposals_truncated = False
         self.deliveries_truncated = False
         self.delivery_summary = None
+        self.human_guard_records = {}
+        self.human_guard_truncated = False
 
     def observe_event_audit(self, record, *, delivery):
         if self.track is not None and record["tracking_id"] != self.track:
@@ -479,6 +543,19 @@ class _TraceWindow:
             else:
                 self.legacy.append(audit)
         for item in row.get('gate_tracks', []) or []:
+            if not isinstance(item, dict):
+                continue
+            if self.track is None or item.get("track_id") == self.track:
+                guard = _human_guard_audit_record(
+                    item.get("human_guard_decision_audit"), item.get("track_id"), row.get("frame_index"),
+                )
+                if guard is not None:
+                    key = guard["track_id"], guard["frame_index"]
+                    self.human_guard_records.pop(key, None)
+                    self.human_guard_records[key] = guard
+                    if len(self.human_guard_records) > TRACE_EVENT_AUDIT_RECORDS_LIMIT:
+                        self.human_guard_records.pop(next(iter(self.human_guard_records)))
+                        self.human_guard_truncated = True
             try:
                 tid = int(item.get('track_id'))
                 anchor = float(item.get('anchor_signed'))
@@ -561,6 +638,13 @@ class _TraceWindow:
         output = {'time': self.target, 'gate_span_audit': gate,
                   'bicycle_xframe_audit': gate['bicycle_xframe_audit'],
                   'bicycle_context_audit': gate['bicycle_context_audit']}
+        if self.human_guard_records:
+            output["human_guard_audit"] = {
+                "scope": "matched_track" if self.track is not None else "nearby_time_window",
+                "records": list(self.human_guard_records.values()),
+                "records_limit": TRACE_EVENT_AUDIT_RECORDS_LIMIT,
+                "truncated": self.human_guard_truncated,
+            }
         if not self.count:
             reason = 'no_trace_window'
             output.update(max_det=0, max_track=0, max_road=0)

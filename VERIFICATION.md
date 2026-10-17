@@ -1,3 +1,94 @@
+# V0.5.94 — Kiểm chứng ổn định điểm neo và Human Guard audit
+
+Bản này tiếp tục đúng ZIP full source .93 có SHA256 `a682bac12333683a5c8dec2f563c27c3989e73b0abee19c52a7ae4945d6b0f36`, 300 file. Đã thực thi **934 kiểm thử sản phẩm, 0 lỗi**, bằng harness offline/hàm thực tế và Node; không gọi đây là một lần chạy pytest/Docker/PowerShell đầy đủ.
+
+## Kiểm tra source và hồi quy
+
+| Nhóm thực thi | Đạt |
+|---|---:|
+| AI offline: module và worker helpers thực tế | 684 |
+| Backend offline: pure functions/helpers thực tế | 129 |
+| Scripts stdlib unittest | 79 |
+| Benchmark-gate standalone | 5 |
+| Backup-worker standalone | 4 |
+| Node built-in tests | 33 |
+| Tổng | 934 |
+
+Giữ nguyên danh tính và thân AST của **943 Python test cũ**, cùng cả 5 file Node test cũ (30 tests) byte-exact. Thêm 7 tracking test, 14 HumanGuard test và 3 Node test. Tổng Python test definitions là 964; 63 test HTTP/ORM chưa thực thi vẫn đúng danh sách cũ (3 AI, 60 backend), không thêm trường hợp bỏ qua. Không dùng kết quả pytest lịch sử ở phần dưới làm kết quả môi trường này.
+
+305 source file, 205 Python parse/compile hợp lệ; 29 PowerShell UTF-8 không BOM/CRLF, text còn lại LF. 786 internal-import symbols, 1081 literal PowerShell source predicates, 79 thân hàm Assert lịch sử giữ nguyên, 121 cặp trường UI/runtime được đối chiếu. Babel parse 18 JS/JSX và xác minh 45 import/export symbols. 303 code/config/data-fixture hashes đã đóng băng; README và tài liệu này được review riêng trước khi audit ZIP.
+
+38 kiểm tra release: 17 thực thi Git/artifact cục bộ, 14 static, 4 mô phỏng lựa chọn và 3 Bash syntax; không push GitHub hay tạo Release thật. Thêm 4 kiểm tra render component HumanGuard bằng Babel/VM: trace cũ, identity đã ghép, tuổi cache/hình học chưa biết, scope lân cận/truncation và thiếu ý kiến model. Các kiểm tra bổ sung này không cộng vào 934.
+
+## Bằng chứng input #67 / session 194
+
+ZIP mới: CRC, đường dẫn và toàn bộ payload SHA/byte lengths hợp lệ; gzip đọc hết EOF, dữ liệu giải nén giống tuyệt đối trace trong RAR. Trace 197.761.000 byte, SHA256 `c20b45db45090dd34a42988747971154334e38f8246a9ce07a77c96e4faa6e8a`; 23.650 frame liên tục, 271.208 Gate-track observations. RAR 191 member an toàn: 190 ảnh và đúng một trace session 194.
+
+191 proposal = 191 terminal receipt, đối chiếu đủ các source fields. 151 created khớp 151 DB events; 40 deduplicated, drain hoàn tất, pending/dropped bằng 0. Không có bằng chứng event bị mất ở bước gửi backend.
+
+Matcher thực tế tái tạo đúng mọi base/matched/missed/false-positive field của cả hai báo cáo:
+
+| Chỉ số | #66 / 193 | #67 / 194 |
+|---|---:|---:|
+| GT / AI | 149 / 150 | 149 / 151 |
+| Khớp / Lọt / Dư | 138 / 11 / 12 | 140 / 9 / 11 |
+| Recall | 92,6174% | 93,9597% |
+| Precision | 92,0000% | 92,7152% |
+| F1 | 92,3077% | 93,3333% |
+| Đúng class / đúng hướng | 136 / 136 | 137 / 138 |
+| Đúng cả time/class/direction | 134 | 135 |
+
+149 GT semantic và thứ tự giống nhau, có hai cặp trùng semantic vẫn giữ đủ multiplicity; không tự xóa vì có thể hai xe cùng frame. Config byte-exact. Khớp thêm GT 534.086505 s (AI motorcycle 533.9503 s, GT bicycle) và 640.140782 s (AI 639.7107 s); hết FP 638.12 s, không có miss/FP signature mới. Class mismatch từ 2 lên 3 vì xe đạp vừa được khớp còn sai loại; không phải một xe trước đúng bị đổi sai. Chưa chứng minh weights/model availability và toàn bộ môi trường inference giống nhau nên không suy ra quan hệ nhân quả đầy đủ từ config/path.
+
+Đính chính ghi chú .93: ảnh mới frame 15954/15968 cho thấy track 255061 là bbox thân trên người đi xe máy. Sau khi tách identity, OUT 638.6037 s khớp GT OUT 639.119033 s; canonical 251681 IN 639.7107 s khớp GT IN 640.140782 s. Không lặp lại suy diễn đây là người đi bộ. Nội dung .93 bên dưới được giữ nguyên như lịch sử, không phải nhận định cập nhật.
+
+## Thay đổi heading và phạm vi tái lập
+
+Chỉ thêm inertia cho hướng điểm neo hai bánh: bán kính là nửa đường chéo lớn hơn của hai box, sàn 1.5 px. Bước tâm nhỏ hơn bán kính giới hạn góc quay ngắn nhất ở `travel/radius` radian; góc nhỏ được cập nhật ngay khi có đủ chuyển động hỗ trợ. Bước lớn từ một bán kính trở lên dùng hướng vận tốc mới ngay. Dùng góc atan2 tránh vector 0 ở trường hợp đối hướng. Không thay measured/prediction velocity, resolver association, ngưỡng cắt vạch, vùng đường hay dedup.
+
+Flag `AI_TWO_WHEEL_HEADING_INERTIA=0` nối từ worker/Compose env_file và khôi phục đường heading .93. Xe bốn bánh, thiếu rect, heading chưa thiết lập hoặc gap quá cửa sổ dùng cách xử lý cũ. Policy/quy ước class, bao gồm van chở hàng là truck, không đổi. Counting.py và mọi rescuer giữ nguyên byte.
+
+100 tracking test = 93 cũ + 7 mới: quay đầu thật, box nhỏ/xe nhanh, góc đối hướng, rollback/vận tốc đo, source clock/gap và fixture số liệu 677 hàng từ trace thật. Fixture 42.229 byte được đóng gói cùng source; không chứa ảnh, video, GT hoặc đường dẫn riêng. Reproducer dùng đầy đủ lịch sử target từ frame 19343, không khởi tạo lạnh ngay sát lỗi.
+
+Track 345897: primary counter .93/flag-off tạo 5 crossing dao động; .94 còn OUT khoảng 811.925 s và IN 816.922 s. Tái lập mở rộng dùng primary + thứ tự gọi anchor-span/heavy-center/two-wheel-center rescuer thật cũng loại chu kỳ quanh 815 s. OUT sớm chưa có GT tương ứng nên không coi là nhãn sai và không khẳng định hết FP. Không thực thi lại model, HumanGuard/deferred rollback, lost-finalization, dispatcher/backend transaction hoặc association toàn clip.
+
+Kiểm tra hình học mở rộng trên 271.208 recorded observations: 195 → 168 proposals, 142 → 143 GT khớp thời gian, giữ toàn bộ 142 GT từng khớp, proposal chưa khớp 53 → 25. Flag-off khôi phục chính xác 195 event cũ. Đây là **bộ kiểm tra có kiểm soát**, không phải 151 event DB hay F1 mới của ứng dụng. Track 354713 IN 793.828 s vẫn có rescuer tại observed frame 19841, source 793.4923 s, trong ±0.75 s; không nới counter để cứu test.
+
+Ba assignment hướng trong phép kiểm tra tốt hơn, một assignment kém hơn quanh GT 606.18197 s. Event OUT đúng của 235019 tại 606.0992026189118 vẫn giữ nguyên time/route/geometry/frame. Proposal IN cạnh tranh của 234512 đã có từ trước, đổi 606.0901768847625 → 606.0994639160751 (khoảng 9.287 ms), trở nên gần GT hơn event OUT khoảng 0.261 ms nên matcher theo thời gian chọn khác. Các OUT 234512 tại 606.0/606.267 vẫn giữ nguyên. Ghi nhận rõ hạn chế này; không đổi matcher, GT hay tuyên bố không có trade-off. **Chưa có benchmark full pipeline .94.**
+
+## Human Guard decision audit
+
+Hàm `human_dominates_two_wheel_candidate` và toàn bộ `HumanGuardTrackPolicy` AST giống .93. Thêm field metadata tùy chọn và helper audit; không tăng lần inference, đổi threshold hoặc tính strike. Cache cùng frame giữ nguồn cũ, interval/out-of-order không được gọi là quan sát mới. Không có decision ghi null; hình học chưa tính ghi `geometry_computed=false` và IoU/coverage null. Lỗi metadata không làm mất decision đã suy luận thành công hoặc ngắt đếm.
+
+14 test mới gọi worker methods/NumPy verifier thực với model double có kiểm soát; kiểm fresh/same-frame/interval/out-of-order/unavailable, rider release, strike không đếm đôi, lỗi audit, finite whitelist, bỏ path/private fields, giới hạn và parser trace cũ. 3 Node test kiểm scope đúng identity, scores/frame sai kiểu và giới hạn 8. UI hiện rõ khi chỉ có track gần timecode, chưa biết identity GT.
+
+Bookkeeping tối đa 256 track/frame, không ghi model response/ảnh crop/path; mỗi cửa sổ chẩn đoán giữ 8 bản ghi. Bỏ audit cho bốn bánh không có guardcache/context, giữ lịch sử guard nếu class đổi. Ước lượng synthetic trên 264.972 quan sát hai bánh của input: thêm khoảng 88,8–169,3 MB JSON chưa nén tùy độ đầy đủ của decision; đây không phải đo gzip/inference mới. Giới hạn export nén 128 MiB và cơ chế trace warning giữ nguyên. HumanGuard 143399 ở 397 s chưa có crop opinions trong trace cũ: không giảm threshold/TTL/bypass chỉ từ confidence primary/periodic khác nguồn.
+
+## Môi trường và chạy trên Windows
+
+Runtime Python 3.12.14, Node 24.19.0, NumPy/Pydantic/ReportLab/openpyxl/pypdf có sẵn. Không có pytest, FastAPI/SQLAlchemy/Alembic/httpx/httpx2, cv2/Torch, PowerShell hoặc Docker. Chưa thực thi HTTP/ORM/PostgreSQL/migration live, npm install/audit/Vite build với phiên bản pin, browser/React DOM hay GPU/full-video replay. Các module report/PDF/font/license và kiểm tra cũ được giữ byte-exact; không chạy lại PDF render không liên quan. Hướng dẫn Windows dưới đây chạy bộ kiểm tra Docker chính thức và vẫn cần môi trường/model của bạn.
+
+Migration `0108_guard_audit_v0594` → parent `0107_reports_guard_v0593`, chỉ đổi schema_version .94, downgrade .93; không cập nhật GT/events. Không push GitHub hay tạo Release thật trong lượt này.
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+
+# Test
+.\scripts\test.ps1
+
+# Khởi động
+.\scripts\start.ps1
+
+# Tự test, commit, push GitHub, tạo tag v0.5.94 và Release
+.\scripts\publish.ps1
+```
+
+Mở https://traffic-ai.test:8443, Ctrl+F5. Chạy lại cùng clip/vạch/model, sao chép GT đã review và xuất benchmark ZIP sau khi có GT để đo bản .94. Không tạo lại Admin. Các phần sau là lịch sử kiểm chứng được giữ nguyên.
+
+---
+
 # V0.5.93 — Kiểm chứng source, báo cáo và sửa nối ID
 
 ## Kết quả hiện tại

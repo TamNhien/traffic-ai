@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import hypot
+from math import hypot, isfinite
 
 Rect = tuple[float, float, float, float]
 
@@ -105,6 +105,79 @@ class HumanGuardDecision:
     target_coverage: float = 0.0
     rider_supported: bool = False
     hard_reject: bool = False
+    # Trace-only opinions from the same crop. Policy never reads this field;
+    # neutral early returns otherwise discard evidence needed for review.
+    audit_evidence: dict | None = None
+
+
+HUMAN_GUARD_AUDIT_CONTEXTS = frozenset({
+    "fresh", "same_frame_cache", "interval_cache", "out_of_order",
+    "not_requested", "guard_unavailable", "no_decision",
+})
+HUMAN_GUARD_AUDIT_ACTIONS = frozenset({"keep", "pending", "rejected", "rider", "released"})
+
+
+def _audit_frame(value) -> int | None:
+    return value if type(value) is int and 0 <= value <= 2**53 - 1 else None
+
+
+def _audit_score(value, *, unit: bool = True) -> float | None:
+    if type(value) not in (int, float):
+        return None
+    try:
+        if not isfinite(value) or value < 0 or (unit and value > 1):
+            return None
+        return round(float(value), 6)
+    except (OverflowError, ValueError):
+        return None
+
+
+def human_guard_decision_audit(
+    track_id: int, frame_index: int, policy: HumanGuardTrackPolicy,
+    cached, context: str, *, forced: bool = False,
+) -> dict:
+    """Small source-clock snapshot; no inference, images, paths, or policy writes."""
+    tid, frame = _audit_frame(track_id), _audit_frame(frame_index)
+    # Synthetic/signed IDs remain valid canonical identities in the pipeline.
+    if type(track_id) is int and abs(track_id) <= 2**53 - 1:
+        tid = track_id
+    checked = _audit_frame(cached[0]) if cached is not None else None
+    decision = cached[2] if cached is not None else None
+    decision_frame = checked if decision is not None else None
+    result = {
+        "schema_version": 1, "track_id": tid, "frame_index": frame,
+        "context": context if context in HUMAN_GUARD_AUDIT_CONTEXTS else "not_requested",
+        "forced": bool(forced), "last_check_frame_index": checked,
+        "decision_frame_index": decision_frame,
+        "decision_age_frames": frame - decision_frame
+        if frame is not None and decision_frame is not None and frame >= decision_frame else None,
+        "policy_status": policy.status(track_id),
+        "policy_action": cached[1] if cached is not None and cached[1] in HUMAN_GUARD_AUDIT_ACTIONS else None,
+        "strikes": _audit_frame(policy.strikes.get(track_id, 0)),
+        "required_strikes": _audit_frame(policy.required_strikes),
+        "last_strike_frame_index": _audit_frame(policy.last_strike_frame.get(track_id)),
+        "decision": None,
+    }
+    if decision is not None:
+        evidence = decision.audit_evidence if isinstance(decision.audit_evidence, dict) else {}
+        reason = decision.reason if decision.reason in {"person_dominates_two_wheel", "rider_evidence"} else "neutral"
+        geometry_computed = (evidence["person_detected"] and evidence["target_person_like"]
+                             if type(evidence.get("person_detected")) is bool
+                             and type(evidence.get("target_person_like")) is bool else None)
+        result["decision"] = {
+            "reason": reason, "reject": bool(decision.reject),
+            "rider_supported": bool(decision.rider_supported), "hard_reject": bool(decision.hard_reject),
+            **{key: _audit_score(evidence.get(key, getattr(decision, key))) for key in (
+                "person_confidence", "vehicle_confidence", "nearby_vehicle_confidence",
+            )},
+            "geometry_computed": geometry_computed,
+            "overlap_iou": _audit_score(decision.overlap_iou) if geometry_computed is not False else None,
+            "target_coverage": _audit_score(decision.target_coverage) if geometry_computed is not False else None,
+            "speed_ratio": _audit_score(evidence.get("speed_ratio"), unit=False),
+            "person_detected": evidence.get("person_detected") if type(evidence.get("person_detected")) is bool else None,
+            "target_person_like": evidence.get("target_person_like") if type(evidence.get("target_person_like")) is bool else None,
+        }
+    return result
 
 
 def human_dominates_two_wheel_candidate(

@@ -45,6 +45,7 @@ from app.human_guard import (
     box_iou,
     coverage_of_target,
     human_dominates_two_wheel_candidate,
+    human_guard_decision_audit,
     is_person_like_two_wheel_box,
     nearby_two_wheel_support,
 )
@@ -146,6 +147,7 @@ class PipelineWorker(threading.Thread):
             per_track_points=int(os.getenv("AI_FLOW_CALIBRATION_POINTS_PER_TRACK", "180")),
         )
         self._continuity = TrackContinuityResolver(
+            two_wheel_heading_inertia=os.getenv("AI_TWO_WHEEL_HEADING_INERTIA", "1").strip().lower() not in {"0", "false", "no"},
             max_gap_frames=int(os.getenv("AI_STITCH_MAX_GAP", "30")),
             max_distance_ratio=float(os.getenv("AI_STITCH_DISTANCE_RATIO", "0.14")),
             heavy_max_gap_frames=int(os.getenv("AI_STITCH_HEAVY_MAX_GAP", "90")),
@@ -457,12 +459,60 @@ class PipelineWorker(threading.Thread):
             self.state.human_guard_checks += 1
             diagonal = max(hypot(w, h), 1.0)
             speed_ratio = hypot(float(velocity[0]), float(velocity[1])) / diagonal
-            return human_dominates_two_wheel_candidate(
+            decision = human_dominates_two_wheel_candidate(
                 target_crop, target_label, float(target_confidence), best_person, best_person_conf,
                 best_vehicle_conf, best_nearby_vehicle_conf, speed_ratio,
             )
+            try:
+                decision.audit_evidence = {
+                    "person_detected": best_person is not None,
+                    "target_person_like": is_person_like_two_wheel_box(target_crop),
+                    "person_confidence": best_person_conf,
+                    "vehicle_confidence": best_vehicle_conf,
+                    "nearby_vehicle_confidence": best_nearby_vehicle_conf,
+                    "speed_ratio": speed_ratio,
+                }
+            except Exception:
+                pass
+            return decision
         except Exception:
             return None
+
+    def _record_human_guard_audit_context(self, track_id, frame_index, context, force=False) -> None:
+        """Diagnostic bookkeeping is bounded per source frame and cannot block counting."""
+        try:
+            rows = getattr(self, "_human_guard_audit_context_this_frame", None)
+            if not isinstance(rows, dict) or getattr(self, "_human_guard_audit_frame", None) != frame_index:
+                rows = self._human_guard_audit_context_this_frame = {}
+                self._human_guard_audit_frame = frame_index
+            if track_id in rows or len(rows) < 256:
+                rows[track_id] = (context, bool(force))
+        except Exception:
+            pass
+
+    def _human_guard_trace_tracks(self, tracks, frame_index):
+        """Attach snapshots only when writing a trace, including early-continue tracks."""
+        try:
+            contexts = getattr(self, "_human_guard_audit_context_this_frame", {})
+            if getattr(self, "_human_guard_audit_frame", None) != frame_index:
+                contexts = {}
+            for item in tracks[:256]:
+                try:
+                    tid = item["track_id"]
+                    if (item.get("label") not in TWO_WHEEL_LABELS
+                            and tid not in self._human_guard_last_observation and tid not in contexts):
+                        continue
+                    context, forced = contexts.get(tid, ("not_requested", False))
+                    item["human_guard_decision_audit"] = human_guard_decision_audit(
+                        tid, frame_index, self._human_guard_policy,
+                        self._human_guard_last_observation.get(tid), context, forced=forced,
+                    )
+                except Exception:
+                    # Audit failure does not change guard/cache/commit ownership.
+                    continue
+        except Exception:
+            pass
+        return tracks
 
     def _observe_human_guard(
         self,
@@ -489,14 +539,17 @@ class PipelineWorker(threading.Thread):
         frame_idx = int(frame_index)
         cached = self._human_guard_last_observation.get(tid)
         if cached is not None and cached[0] == frame_idx:
+            self._record_human_guard_audit_context(tid, frame_idx, "same_frame_cache", force)
             return cached[1], cached[2]
         if cached is not None and cached[0] > frame_idx:
             # A delayed caller must not turn older pixels into a fresh strike
             # or replace the newest semantic observation.
+            self._record_human_guard_audit_context(tid, frame_idx, "out_of_order", force)
             return self._human_guard_policy.status(tid), None
 
         last_guard = self._human_guard_last_check.get(tid, -10_000)
         if not force and frame_idx - last_guard < self.human_guard_check_interval:
+            self._record_human_guard_audit_context(tid, frame_idx, "interval_cache", force)
             return self._human_guard_policy.status(tid), None
 
         self._human_guard_last_check[tid] = frame_idx
@@ -506,6 +559,10 @@ class PipelineWorker(threading.Thread):
         )
         action = self._human_guard_policy.observe(tid, decision, frame_index=frame_idx)
         self._human_guard_last_observation[tid] = (frame_idx, action, decision)
+        context = "fresh" if decision is not None else "no_decision"
+        if decision is None and (getattr(self, "_human_guard_model", None) is None or not getattr(self, "_human_guard_ids", [])):
+            context = "guard_unavailable"
+        self._record_human_guard_audit_context(tid, frame_idx, context, force)
 
         if action in {"rider", "released"} and tid not in self._human_rider_tracks_seen:
             self.state.rider_guard_rescues += 1
@@ -2511,7 +2568,7 @@ class PipelineWorker(threading.Thread):
                         "anchor_span_lost_finalizations": self.state.anchor_span_lost_finalizations,
                         "anchor_span_immediate_overrides": self.state.anchor_span_immediate_overrides,
                         "anchor_span_clock_reconciliations": self.state.anchor_span_clock_reconciliations,
-                        "gate_tracks": gate_trace_tracks,
+                        "gate_tracks": self._human_guard_trace_tracks(gate_trace_tracks, frame_index),
                         "truck_class_rescues": self.state.truck_class_rescues,
                         "truck_lock_demotion_rescues": self.state.truck_lock_demotion_rescues,
                         "bicycle_tracks_seen": self.state.bicycle_tracks_seen,

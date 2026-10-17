@@ -1,3 +1,59 @@
+# Traffic AI V0.5.94 — Ổn định điểm neo và chẩn đoán Human Guard
+
+Tiếp tục từ đúng full source V0.5.93. Giữ báo cáo giờ/ngày/tháng, Excel/CSV/PDF, phân quyền, backup, dashboard, huấn luyện, benchmark, công cụ audit và quy trình GitHub Release hiện có. Không cần tạo lại tài khoản Admin.
+
+## Sửa dao động hướng ở xe hai bánh
+
+Trace session 194 cho thấy track 345897 có box lớn nhưng tâm chỉ dao động vài pixel; heading đổi mạnh làm điểm neo đi qua vạch và tạo các lượt sớm. Hai event thực được lưu là IN 811.64 s và OUT 815.2484 s; GT IN 816.964961 s còn lọt.
+
+Bản này giới hạn góc đổi hướng của **điểm neo hai bánh** theo quãng đường tâm thực sự di chuyển và bán kính box (nửa đường chéo lớn hơn của box trước/hiện tại, sàn 1.5 px). Khi bước di chuyển nhỏ hơn bán kính, góc đổi tối đa là `travel / radius` radian; độ cong nhỏ có đủ chuyển động hỗ trợ vẫn cập nhật ngay. Bước di chuyển từ một bán kính trở lên cập nhật ngay theo vận tốc mới, như nhánh xử lý trước. Không thay vận tốc đo/dự đoán dùng để nối identity.
+
+Xe bốn bánh, thiếu rect, chưa có heading, khoảng mất dấu dài và chế độ rollback giữ cách xử lý heading của .93. Điểm neo giữ độ lớn ở ngưỡng full-heading, tránh vector bằng 0 khi quay ngược 180°. Không nới Gate, cửa sổ matching, backend dedup, Human Guard hay đổi quy ước van chở hàng là Xe tải. Có thể đối chiếu với .93 bằng `AI_TWO_WHEEL_HEADING_INERTIA=0` trong `.env`; mặc định bật. Guard nối nhầm ID gap 1–12 của .93 vẫn được giữ.
+
+Tái lập có kiểm soát trên 677 hàng của track 345897 bằng heading/counter/rescuer thật còn OUT 811.925 s và IN 816.922 s, loại chu kỳ dao động quanh 815 s. OUT sớm vẫn chưa có GT tương ứng nên không tuyên bố đã hết dư. Kiểm tra mở rộng trên 271.208 observations giữ toàn bộ 142 GT từng khớp thời gian; đây là kiểm tra hình học, không phải số event DB của ứng dụng. Một thay đổi ghép hướng do hai proposal cạnh tranh quanh 606 s được ghi rõ trong VERIFICATION.md.
+
+## Xem bằng chứng Human Guard trên web
+
+Ở **Benchmark Report**, mở **Bằng chứng Human Guard** dưới lượt lọt hoặc sai loại xe. Phiên mới ghi PERSON, xe trực tiếp/xe lân cận, IoU/độ phủ khi đã tính, frame kiểm tra gốc, tuổi cache, số lần xác nhận từ các frame riêng biệt và trạng thái track.
+
+- Phân biệt quan sát mới, cùng frame, chờ chu kỳ kiểm tra, frame cũ, model chưa sẵn sàng và không có kết quả. Thiếu bằng chứng hiển thị `—`, không biến thành confidence 0.
+- Nếu GT chưa có identity AI đã ghép, UI ghi rõ đây là **các track gần timecode**, cần xem video để xác định xe GT. Không gán một track lân cận thành xe bị lọt.
+- Chỉ giữ tối đa 8 bản ghi chẩn đoán; danh sách ghi trong mỗi frame có giới hạn. Không ghi ảnh crop, đường dẫn nội bộ hoặc response model vào audit. Trace có thể lớn hơn do thêm bằng chứng; chưa đo dung lượng gzip của một lần inference mới.
+- Hàm quyết định và chính sách Human Guard giữ nguyên. Dùng lại cache không tạo thêm strike; lỗi ghi audit không chặn quá trình đếm. Trace cũ chưa có trường này không được dựng thêm bằng chứng.
+
+## Kết quả input đã xác minh
+
+Benchmark #67/session 194: **149 GT / 151 AI / 140 khớp / 9 lọt / 11 dư / F1 93,33%**. So với #66/session 193: khớp thêm mốc 534.086505 s và 640.140782 s, hết dư 638.12 s; không có signature lọt/dư mới. Cùng 149 GT theo thứ tự và cấu hình byte giống nhau; chưa chứng minh weights và toàn bộ môi trường inference giống nhau nên không gán mọi cải thiện cho một thay đổi source.
+
+Đính chính mô tả ảnh trong ghi chú .93 bên dưới: track 255061 ở frame 15954/15968 của phiên mới là **box phần thân trên của người đang đi xe máy**, không phải người đi bộ. .93 tách identity này khỏi 251681: OUT 638.6037 s và IN 639.7107 s đều khớp GT. Lỗi đã chứng minh là ghép nhầm hai phương tiện.
+
+**Chưa có điểm benchmark toàn clip của V0.5.94.** Các kiểm tra tái lập dùng observations đã ghi và thuật toán thật, không thay thế một lần chạy detector/tracker/models/Guard/dispatcher/backend toàn pipeline. Kết quả và giới hạn cụ thể xem VERIFICATION.md. Human Guard ở 397 s vẫn cần crop-model opinions của lần chạy mới trước khi quyết định thay ngưỡng. Source không tự sửa GT, class hay timecode.
+
+## Test, chạy và tự động phát hành
+
+Chép đầy đủ source vào `D:\LienThongDH\DoAn\traffic-ai`, giữ `.env`, `.git`, models, video và volumes hiện có.
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+
+# Test
+.\scripts\test.ps1
+
+# Khởi động
+.\scripts\start.ps1
+
+# Tự test, commit, push GitHub, tạo tag v0.5.94 và Release
+.\scripts\publish.ps1
+```
+
+Mở https://traffic-ai.test:8443 rồi Ctrl+F5. Chạy lại cùng clip/vạch/model, sao chép GT đã review sang benchmark mới rồi **Tải hồ sơ benchmark** sau khi có GT. Bằng chứng Human Guard mới xuất hiện từ trace của lần chạy .94. Báo cáo thống kê vẫn có thể đọc phiên 194 đang lưu; chọn đúng phiên để không cộng nhiều lần chạy lại video.
+
+Migration `0108_guard_audit_v0594`, parent `0107_reports_guard_v0593`, chỉ đồng bộ schema_version 0.5.94; không chỉnh dữ liệu GT/events. `publish.ps1` đọc VERSION và giữ quy trình kiểm thử → commit/push → tag → Release, không ghi đè tag cũ. Các mục bên dưới là lịch sử của những bản trước.
+
+---
+
 # Traffic AI V0.5.93 — Báo cáo thống kê và sửa nối ID cự ly ngắn
 
 Bản này tiếp tục từ đúng full source V0.5.92 được cung cấp. Giữ toàn bộ chức năng đăng nhập/phân quyền, backup, huấn luyện, dashboard 50/50, benchmark và công cụ audit cũ.

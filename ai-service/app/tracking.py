@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import hypot, nextafter
+from math import atan2, cos, hypot, nextafter, sin
 
 Point = tuple[float, float]
 Rect = tuple[float, float, float, float]
@@ -69,6 +69,7 @@ class TrackContinuityResolver:
         heavy_max_distance_ratio: float | None = None,
         raw_reuse_jump_ratio: float = 0.18,
         short_gap_alias_guard: bool = True,
+        two_wheel_heading_inertia: bool = True,
     ) -> None:
         self.max_gap_frames = max(2, int(max_gap_frames))
         self.max_distance_ratio = max(0.01, float(max_distance_ratio))
@@ -90,6 +91,7 @@ class TrackContinuityResolver:
         self.raw_id_discontinuities = 0
         self.short_gap_alias_rejections = 0
         self.short_gap_alias_guard = bool(short_gap_alias_guard)
+        self.two_wheel_heading_inertia = bool(two_wheel_heading_inertia)
         self._raw_to_canonical: dict[int, int] = {}
         # V0.5.84: raw-token observations are NOT interchangeable with the
         # canonical identity's latest position. A canonical may be updated by
@@ -483,7 +485,7 @@ class TrackContinuityResolver:
         self._states[canonical] = _IdentityState(point, frame_index, str(label), raw_id, velocity, rect)
         speed = abs(velocity[0]) + abs(velocity[1])
         if speed >= 1.5:
-            self._anchor_velocities[canonical] = (int(frame_index), velocity)
+            self._set_anchor_heading(canonical, frame_index, velocity, previous)
             self._anchor_reversals.pop(canonical, None)
             return
 
@@ -513,10 +515,58 @@ class TrackContinuityResolver:
             # Round upward by one float step so normalization cannot fall just
             # below 1.5 and leave a microscopic stationary-blend remainder.
             full_speed = nextafter(1.5, float("inf"))
-            self._anchor_velocities[canonical] = (
-                int(frame_index), (velocity[0] * full_speed / speed, velocity[1] * full_speed / speed),
+            self._set_anchor_heading(
+                canonical, frame_index,
+                (velocity[0] * full_speed / speed, velocity[1] * full_speed / speed), previous,
             )
             self._anchor_reversals.pop(canonical, None)
+
+    def _set_anchor_heading(
+        self, canonical: int, frame_index: int, velocity: Point,
+        previous: _IdentityState | None,
+    ) -> None:
+        """Turn a two-wheel contact proxy in proportion to observed travel.
+
+        V0.5.94: a few pixels of detector-box jitter can exceed the 1.5-pixel
+        full-heading boundary and swing a large box's anchor across the gate.
+        Retain the actual velocity for prediction; only its contact heading has
+        inertia. One observed half-box diagonal of travel permits a complete
+        heading update. Smaller motion caps the shortest turn to travel/radius
+        radians, so modest, supported curvature keeps its immediate response.
+        The finite gate and road-zone checks remain unchanged.
+        """
+        heading = self._anchor_velocities.get(canonical)
+        state = self._states[canonical]
+        if (
+            not self.two_wheel_heading_inertia or previous is None or heading is None
+            or _vehicle_family(state.label) != "two-wheel"
+            or previous.rect is None or state.rect is None
+            or frame_index - previous.frame_index > self.max_gap_frames
+        ):
+            self._anchor_velocities[canonical] = (int(frame_index), velocity)
+            return
+        radius = max(
+            hypot(max(0., box[2] - box[0]), max(0., box[3] - box[1])) * .5
+            for box in (previous.rect, state.rect)
+        )
+        travel = hypot(state.point[0] - previous.point[0], state.point[1] - previous.point[1])
+        weight = min(1., travel / max(1.5, radius))
+        if weight >= 1.:
+            self._anchor_velocities[canonical] = (int(frame_index), velocity)
+            return
+        old = heading[1]
+        # atan2 also defines the exact antiparallel case. Interpolating angles
+        # avoids a zero vector at a half turn and its stationary-bottom fallback.
+        turn = atan2(old[0] * velocity[1] - old[1] * velocity[0],
+                     old[0] * velocity[0] + old[1] * velocity[1])
+        if abs(turn) <= weight:
+            self._anchor_velocities[canonical] = (int(frame_index), velocity)
+            return
+        angle = atan2(old[1], old[0]) + max(-weight, min(weight, turn))
+        unit = (cos(angle), sin(angle))
+        full_speed = nextafter(1.5, float("inf"))
+        scale = full_speed / (abs(unit[0]) + abs(unit[1]))
+        self._anchor_velocities[canonical] = (int(frame_index), (unit[0] * scale, unit[1] * scale))
 
     def _cleanup(self, frame_index: int) -> None:
         expiry = max(self.max_gap_frames, self.heavy_max_gap_frames) * 8

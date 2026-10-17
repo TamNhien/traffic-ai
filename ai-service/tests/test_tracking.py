@@ -1264,3 +1264,159 @@ def test_v0593_known_raw_token_is_outside_newcomer_handoff_guard() -> None:
     ) == (1, False)
     assert resolver.short_gap_alias_rejections == 0
     assert resolver.raw_id_discontinuities == 0
+
+
+def _v0594_heading_step(resolver, frame, center, *, raw_id=9401, label='motorcycle', size=(120., 160.), rect=True):
+    cx, cy = center
+    width, height = size
+    box = (cx-width/2., cy-height/2., cx+width/2., cy+height/2.) if rect else None
+    canonical, _ = resolver.resolve(raw_id, center, label, frame, 1440, 1000, rect=box)
+    return canonical, box
+
+
+def test_v0594_large_two_wheel_box_limits_jitter_turn_without_filtering_prediction() -> None:
+    from math import atan2, hypot
+
+    current = TrackContinuityResolver()
+    baseline = TrackContinuityResolver(two_wheel_heading_inertia=False)
+    for resolver in (current, baseline):
+        _v0594_heading_step(resolver, 10, (500., 500.))
+        _v0594_heading_step(resolver, 11, (520., 500.))
+        before = resolver.anchor_velocity_for(9401)
+        _v0594_heading_step(resolver, 12, (520., 503.))
+    assert current.velocity_for(9401) == baseline.velocity_for(9401)
+    heading = current.anchor_velocity_for(9401)
+    raw = current.velocity_for(9401)
+    turn = abs(atan2(before[0]*heading[1]-before[1]*heading[0], before[0]*heading[0]+before[1]*heading[1]))
+    assert abs(turn - 3./hypot(60., 80.)) < 1e-12
+    assert atan2(raw[1], raw[0]) > turn
+    assert abs(heading[0]) + abs(heading[1]) >= 1.5
+
+
+def test_v0594_small_boxes_and_footprint_sized_motion_keep_fast_turn_response() -> None:
+    for size, movement in (((2., 2.), 3.), ((60., 80.), 60.)):
+        current = TrackContinuityResolver()
+        baseline = TrackContinuityResolver(two_wheel_heading_inertia=False)
+        for resolver in (current, baseline):
+            _v0594_heading_step(resolver, 10, (500., 500.), size=size)
+            _v0594_heading_step(resolver, 11, (500., 480.), size=size)
+            _v0594_heading_step(resolver, 12, (500.+movement, 480.), size=size)
+        assert current.anchor_velocity_for(9401) == baseline.anchor_velocity_for(9401)
+        assert current.velocity_for(9401) == baseline.velocity_for(9401)
+
+
+def test_v0594_antiparallel_turn_has_full_heading_and_no_zero_vector_fallback() -> None:
+    from math import isfinite
+
+    resolver = TrackContinuityResolver()
+    _v0594_heading_step(resolver, 10, (500., 500.), size=(60., 80.))
+    _v0594_heading_step(resolver, 11, (500., 480.), size=(60., 80.))
+    _, box = _v0594_heading_step(resolver, 12, (500., 505.), size=(60., 80.))
+    heading = resolver.anchor_velocity_for(9401)
+    assert all(isfinite(value) for value in heading)
+    assert abs(heading[0]) + abs(heading[1]) >= 1.5
+    assert heading[1] < 0. < resolver.velocity_for(9401)[1]
+    assert motion_leading_anchor(box, heading) != (500., box[3])
+    for frame in range(13, 22):
+        _v0594_heading_step(resolver, frame, (500., 505.+25.*(frame-12)), size=(60., 80.))
+    assert resolver.anchor_velocity_for(9401)[1] > 0.
+
+
+def test_v0594_boxless_four_wheel_and_flag_off_preserve_existing_heading_contract() -> None:
+    points = [(500., 500.), (520., 500.), (520., 503.), (519., 499.), (519., 505.)]
+    for label, use_rect in (('truck', True), ('car', True), ('bus', True), ('motorcycle', False)):
+        current = TrackContinuityResolver()
+        baseline = TrackContinuityResolver(two_wheel_heading_inertia=False)
+        for frame, point in enumerate(points, 10):
+            _v0594_heading_step(current, frame, point, label=label, rect=use_rect)
+            _v0594_heading_step(baseline, frame, point, label=label, rect=use_rect)
+            assert current.velocity_for(9401) == baseline.velocity_for(9401)
+            assert current.anchor_velocity_for(9401) == baseline.anchor_velocity_for(9401)
+    # Either missing rectangle prevents a new assumption about the footprint.
+    for missing_previous in (True, False):
+        current = TrackContinuityResolver()
+        baseline = TrackContinuityResolver(two_wheel_heading_inertia=False)
+        for resolver in (current, baseline):
+            _v0594_heading_step(resolver, 10, points[0])
+            _v0594_heading_step(resolver, 11, points[1], rect=not missing_previous)
+            _v0594_heading_step(resolver, 12, points[2], rect=missing_previous)
+        assert current.anchor_velocity_for(9401) == baseline.anchor_velocity_for(9401)
+
+
+def test_v0594_real_two_wheel_uturn_keeps_outward_and_return_passages() -> None:
+    from app.counting import CountingLine, LineCrossingCounter
+
+    for label in ('motorcycle', 'bicycle'):
+        resolver = TrackContinuityResolver()
+        gate = LineCrossingCounter(CountingLine(.1, .5, .9, .5), startup_grace_frames=0)
+        directions = []
+        centers = list(range(600, 399, -10)) + list(range(410, 641, 10))
+        for frame, cy in enumerate(centers, 100):
+            canonical, box = _v0594_heading_step(resolver, frame, (500., float(cy)), label=label, size=(60., 80.))
+            direction = gate.update(canonical, motion_leading_anchor(box, resolver.anchor_velocity_for(canonical)), 1440, 1000, frame)
+            if direction:
+                directions.append(direction)
+        assert directions == ['out', 'in']
+
+
+def test_v0594_duplicate_clock_and_long_gap_do_not_reuse_unproven_turn_evidence() -> None:
+    resolver = TrackContinuityResolver(max_gap_frames=10)
+    baseline = TrackContinuityResolver(max_gap_frames=10, two_wheel_heading_inertia=False)
+    for item in (resolver, baseline):
+        _v0594_heading_step(item, 10, (500., 500.))
+        _v0594_heading_step(item, 11, (520., 500.))
+    before = resolver.anchor_velocity_for(9401)
+    _v0594_heading_step(resolver, 11, (520., 550.))
+    assert resolver.anchor_velocity_for(9401) == before
+    # An observation after the continuity gap uses the established legacy rule.
+    for item in (resolver, baseline):
+        _v0594_heading_step(item, 30, (520., 550.))
+    assert resolver.anchor_velocity_for(9401) == baseline.anchor_velocity_for(9401)
+
+
+def _v0594_recorded_heading_replay(inertia):
+    import json
+    from pathlib import Path
+    from app.counting import CountingLine, LineCrossingCounter, RoadZone
+
+    fixture = json.loads((Path(__file__).parent/'fixtures'/'heading-jitter-v0594.json').read_text())
+    assert len(fixture['observations']) == 677
+    assert fixture['observations'][0][0] == 19343
+    assert fixture['observations'][-1][0] == 20485
+    resolver = TrackContinuityResolver(two_wheel_heading_inertia=inertia)
+    counter = LineCrossingCounter(
+        CountingLine(.343, .479, .7587, .385),
+        road_zone=RoadZone(.5719, .02, .351, .0438, .2798, .8142, .9543, .6617),
+        side_confirm_samples=2, crossing_cooldown_frames=60,
+        passage_rearm_min_frames=16, road_anchor_margin_ratio=.012,
+        fast_confirm_distance_ratio=.018, adaptive_cooldown=True,
+        cooldown_release_ratio=.055, rescue_min_normal_ratio=.28,
+        rescue_max_jump_ratio=.26, rescue_min_side_distance_ratio=.010,
+        rescue_strict_gap_frames=18, rescue_strict_min_normal_ratio=.40,
+        rescue_strict_max_jump_ratio=.20, rescue_strict_min_side_distance_ratio=.014,
+        lineage_rescue_guard=True, bracket_confirm=True, late_geometry_confirm=True,
+    )
+    events = []
+    for frame, raw, cx, cy, x1, y1, x2, y2 in fixture['observations']:
+        rect = (x1, y1, x2, y2)
+        canonical, _ = resolver.resolve(raw, (cx, cy), 'motorcycle', frame, 1440, 811, rect=rect)
+        direction = counter.update(
+            canonical, motion_leading_anchor(rect, resolver.anchor_velocity_for(canonical)),
+            1440, 811, frame, lineage_size=resolver.lineage_size(canonical),
+        )
+        if direction:
+            events.append((frame, direction, (counter.crossing_frame_for(canonical)-1.)/25.))
+    return events
+
+
+def test_v0594_recorded_full_heading_history_removes_false_near_gate_cycles() -> None:
+    baseline = _v0594_recorded_heading_replay(False)
+    guarded = _v0594_recorded_heading_replay(True)
+    assert [(frame, direction) for frame, direction, _ in baseline] == [
+        (20292, 'in'), (20308, 'out'), (20381, 'in'), (20400, 'out'), (20420, 'in'),
+    ]
+    # Keep the observed earlier outward motion; eliminate the false 815s cycle.
+    # The real later return remains a separate, physically supported IN passage.
+    assert [(frame, direction) for frame, direction, _ in guarded] == [(20301, 'out'), (20425, 'in')]
+    assert 816.90 < guarded[-1][2] < 816.95
+    assert not any(815.0 <= seconds < 816.0 for _, _, seconds in guarded)
