@@ -147,7 +147,7 @@ async def import_backup(request: Request, _=Depends(admin)):
         meta={'id':identifier, 'database':os.getenv('POSTGRES_DB','traffic_ai_db'),
               'created_at':datetime.now(timezone.utc).isoformat(), 'bytes':target.stat().st_size,
               'sha256':sha256_file(target), 'format':'postgresql-custom', 'pg_major':18,
-              'automatic':False,'imported':True,'version':'0.5.102'}
+              'automatic':False,'imported':True,'version':'0.5.103'}
         atomic_json(ROOT/'archives'/(identifier+'.json'),meta)
         return meta
     except (ValueError, json.JSONDecodeError, zipfile.BadZipFile, RuntimeError, OSError) as exc:

@@ -1,0 +1,397 @@
+{
+  "format": "traffic-ai-verified-gate-coverage",
+  "version": 1,
+  "benchmark_id": 74,
+  "session_id": 201,
+  "ground_truth_total": 149,
+  "ai_total": 149,
+  "matched": 143,
+  "missed": 6,
+  "extra": 6,
+  "verified_trace_sha256": "03fad354ed9246f1eaa1669ee9d34439426e9214b069523f86673ad5a2965be7",
+  "window_seconds": 1.0,
+  "near_gate_radius_normalized": 0.035,
+  "frame_count_verified": 23650,
+  "cases": [
+    {
+      "kind": "extra",
+      "case_id": 14309,
+      "time_s": 54.296,
+      "direction": "out",
+      "vehicle_type": "motorcycle",
+      "gate_observation_count": 456,
+      "unique_track_count": 12,
+      "near_gate_tracks": 1,
+      "finite_segment_span_candidates": 0,
+      "nearest_tracks": [
+        {
+          "track_id": 15369,
+          "label": "motorcycle",
+          "raw_track_id": 15715,
+          "closest_frame": 1351,
+          "closest_time_s": 54.0,
+          "min_gate_distance": 0.009465,
+          "gate_projection": 0.6024,
+          "near_frame_count": 4,
+          "candidate_spans": 0
+        }
+      ],
+      "track_candidates_truncated": 0,
+      "scope": "observed_bbox_geometry_only",
+      "physical_identity_proven": false,
+      "auto_recount_permitted": false
+    },
+    {
+      "kind": "missed",
+      "case_id": 10738,
+      "time_s": 59.446,
+      "direction": "in",
+      "vehicle_type": "motorcycle",
+      "gate_observation_count": 467,
+      "unique_track_count": 13,
+      "near_gate_tracks": 2,
+      "finite_segment_span_candidates": 1,
+      "nearest_tracks": [
+        {
+          "track_id": 14,
+          "label": "motorcycle",
+          "raw_track_id": 16743,
+          "closest_frame": 1473,
+          "closest_time_s": 58.88,
+          "min_gate_distance": 0.002893,
+          "gate_projection": 0.1195,
+          "near_frame_count": 8,
+          "candidate_spans": 1
+        },
+        {
+          "track_id": 17463,
+          "label": "motorcycle",
+          "raw_track_id": 17463,
+          "closest_frame": 1486,
+          "closest_time_s": 59.4,
+          "min_gate_distance": 0.003489,
+          "gate_projection": 0.7003,
+          "near_frame_count": 1,
+          "candidate_spans": 0
+        }
+      ],
+      "track_candidates_truncated": 0,
+      "scope": "observed_bbox_geometry_only",
+      "physical_identity_proven": false,
+      "auto_recount_permitted": false
+    },
+    {
+      "kind": "missed",
+      "case_id": 10768,
+      "time_s": 237.042,
+      "direction": "out",
+      "vehicle_type": "motorcycle",
+      "gate_observation_count": 411,
+      "unique_track_count": 13,
+      "near_gate_tracks": 1,
+      "finite_segment_span_candidates": 1,
+      "nearest_tracks": [
+        {
+          "track_id": 84351,
+          "label": "motorcycle",
+          "raw_track_id": 84351,
+          "closest_frame": 5908,
+          "closest_time_s": 236.28,
+          "min_gate_distance": 0.005015,
+          "gate_projection": 0.2723,
+          "near_frame_count": 4,
+          "candidate_spans": 1
+        }
+      ],
+      "track_candidates_truncated": 0,
+      "scope": "observed_bbox_geometry_only",
+      "physical_identity_proven": false,
+      "auto_recount_permitted": false
+    },
+    {
+      "kind": "missed",
+      "case_id": 10780,
+      "time_s": 289.824,
+      "direction": "in",
+      "vehicle_type": "motorcycle",
+      "gate_observation_count": 447,
+      "unique_track_count": 14,
+      "near_gate_tracks": 1,
+      "finite_segment_span_candidates": 1,
+      "nearest_tracks": [
+        {
+          "track_id": 25767,
+          "label": "motorcycle",
+          "raw_track_id": 107899,
+          "closest_frame": 7241,
+          "closest_time_s": 289.6,
+          "min_gate_distance": 0.003577,
+          "gate_projection": 0.5636,
+          "near_frame_count": 5,
+          "candidate_spans": 1
+        }
+      ],
+      "track_candidates_truncated": 0,
+      "scope": "observed_bbox_geometry_only",
+      "physical_identity_proven": false,
+      "auto_recount_permitted": false
+    },
+    {
+      "kind": "extra",
+      "case_id": 14351,
+      "time_s": 292.864,
+      "direction": "out",
+      "vehicle_type": "motorcycle",
+      "gate_observation_count": 474,
+      "unique_track_count": 14,
+      "near_gate_tracks": 2,
+      "finite_segment_span_candidates": 1,
+      "nearest_tracks": [
+        {
+          "track_id": 110284,
+          "label": "motorcycle",
+          "raw_track_id": 110284,
+          "closest_frame": 7323,
+          "closest_time_s": 292.88,
+          "min_gate_distance": 0.002655,
+          "gate_projection": 0.1408,
+          "near_frame_count": 12,
+          "candidate_spans": 1
+        },
+        {
+          "track_id": -4,
+          "label": "motorcycle",
+          "raw_track_id": 111572,
+          "closest_frame": 7341,
+          "closest_time_s": 293.6,
+          "min_gate_distance": 0.010845,
+          "gate_projection": 0.0735,
+          "near_frame_count": 1,
+          "candidate_spans": 0
+        }
+      ],
+      "track_candidates_truncated": 0,
+      "scope": "observed_bbox_geometry_only",
+      "physical_identity_proven": false,
+      "auto_recount_permitted": false
+    },
+    {
+      "kind": "missed",
+      "case_id": 10797,
+      "time_s": 392.179,
+      "direction": "out",
+      "vehicle_type": "motorcycle",
+      "gate_observation_count": 513,
+      "unique_track_count": 13,
+      "near_gate_tracks": 1,
+      "finite_segment_span_candidates": 1,
+      "nearest_tracks": [
+        {
+          "track_id": 143964,
+          "label": "motorcycle",
+          "raw_track_id": 145089,
+          "closest_frame": 9800,
+          "closest_time_s": 391.96,
+          "min_gate_distance": 0.004258,
+          "gate_projection": 0.8092,
+          "near_frame_count": 3,
+          "candidate_spans": 1
+        }
+      ],
+      "track_candidates_truncated": 0,
+      "scope": "observed_bbox_geometry_only",
+      "physical_identity_proven": false,
+      "auto_recount_permitted": false
+    },
+    {
+      "kind": "missed",
+      "case_id": 10802,
+      "time_s": 406.488,
+      "direction": "out",
+      "vehicle_type": "motorcycle",
+      "gate_observation_count": 489,
+      "unique_track_count": 11,
+      "near_gate_tracks": 1,
+      "finite_segment_span_candidates": 1,
+      "nearest_tracks": [
+        {
+          "track_id": 149041,
+          "label": "motorcycle",
+          "raw_track_id": 149041,
+          "closest_frame": 10175,
+          "closest_time_s": 406.96,
+          "min_gate_distance": 0.001189,
+          "gate_projection": 0.1483,
+          "near_frame_count": 11,
+          "candidate_spans": 1
+        }
+      ],
+      "track_candidates_truncated": 0,
+      "scope": "observed_bbox_geometry_only",
+      "physical_identity_proven": false,
+      "auto_recount_permitted": false
+    },
+    {
+      "kind": "extra",
+      "case_id": 14384,
+      "time_s": 519.418,
+      "direction": "out",
+      "vehicle_type": "motorcycle",
+      "gate_observation_count": 488,
+      "unique_track_count": 11,
+      "near_gate_tracks": 2,
+      "finite_segment_span_candidates": 1,
+      "nearest_tracks": [
+        {
+          "track_id": 191795,
+          "label": "motorcycle",
+          "raw_track_id": 191795,
+          "closest_frame": 12988,
+          "closest_time_s": 519.48,
+          "min_gate_distance": 0.000704,
+          "gate_projection": 0.0371,
+          "near_frame_count": 8,
+          "candidate_spans": 1
+        },
+        {
+          "track_id": 192389,
+          "label": "motorcycle",
+          "raw_track_id": 192389,
+          "closest_frame": 12994,
+          "closest_time_s": 519.72,
+          "min_gate_distance": 0.032207,
+          "gate_projection": 0.8192,
+          "near_frame_count": 1,
+          "candidate_spans": 0
+        }
+      ],
+      "track_candidates_truncated": 0,
+      "scope": "observed_bbox_geometry_only",
+      "physical_identity_proven": false,
+      "auto_recount_permitted": false
+    },
+    {
+      "kind": "missed",
+      "case_id": 10822,
+      "time_s": 591.091,
+      "direction": "in",
+      "vehicle_type": "bicycle",
+      "gate_observation_count": 389,
+      "unique_track_count": 8,
+      "near_gate_tracks": 0,
+      "finite_segment_span_candidates": 0,
+      "nearest_tracks": [],
+      "track_candidates_truncated": 0,
+      "scope": "observed_bbox_geometry_only",
+      "physical_identity_proven": false,
+      "auto_recount_permitted": false
+    },
+    {
+      "kind": "extra",
+      "case_id": 14424,
+      "time_s": 808.0,
+      "direction": "out",
+      "vehicle_type": "motorcycle",
+      "gate_observation_count": 517,
+      "unique_track_count": 15,
+      "near_gate_tracks": 2,
+      "finite_segment_span_candidates": 2,
+      "nearest_tracks": [
+        {
+          "track_id": 368014,
+          "label": "motorcycle",
+          "raw_track_id": 368646,
+          "closest_frame": 20218,
+          "closest_time_s": 808.68,
+          "min_gate_distance": 0.020421,
+          "gate_projection": 0.6415,
+          "near_frame_count": 3,
+          "candidate_spans": 2
+        },
+        {
+          "track_id": 365295,
+          "label": "motorcycle",
+          "raw_track_id": 365295,
+          "closest_frame": 20176,
+          "closest_time_s": 807.0,
+          "min_gate_distance": 0.014139,
+          "gate_projection": 0.928,
+          "near_frame_count": 3,
+          "candidate_spans": 0
+        }
+      ],
+      "track_candidates_truncated": 0,
+      "scope": "observed_bbox_geometry_only",
+      "physical_identity_proven": false,
+      "auto_recount_permitted": false
+    },
+    {
+      "kind": "extra",
+      "case_id": 14426,
+      "time_s": 811.925,
+      "direction": "out",
+      "vehicle_type": "motorcycle",
+      "gate_observation_count": 479,
+      "unique_track_count": 13,
+      "near_gate_tracks": 2,
+      "finite_segment_span_candidates": 2,
+      "nearest_tracks": [
+        {
+          "track_id": 345897,
+          "label": "motorcycle",
+          "raw_track_id": 369724,
+          "closest_frame": 20299,
+          "closest_time_s": 811.92,
+          "min_gate_distance": 0.000796,
+          "gate_projection": 0.075,
+          "near_frame_count": 21,
+          "candidate_spans": 1
+        },
+        {
+          "track_id": 366576,
+          "label": "motorcycle",
+          "raw_track_id": 367219,
+          "closest_frame": 20316,
+          "closest_time_s": 812.6,
+          "min_gate_distance": 0.004045,
+          "gate_projection": 0.0777,
+          "near_frame_count": 5,
+          "candidate_spans": 1
+        }
+      ],
+      "track_candidates_truncated": 0,
+      "scope": "observed_bbox_geometry_only",
+      "physical_identity_proven": false,
+      "auto_recount_permitted": false
+    },
+    {
+      "kind": "extra",
+      "case_id": 14439,
+      "time_s": 882.29,
+      "direction": "in",
+      "vehicle_type": "truck",
+      "gate_observation_count": 375,
+      "unique_track_count": 9,
+      "near_gate_tracks": 1,
+      "finite_segment_span_candidates": 1,
+      "nearest_tracks": [
+        {
+          "track_id": 286434,
+          "label": "truck",
+          "raw_track_id": 286434,
+          "closest_frame": 22058,
+          "closest_time_s": 882.28,
+          "min_gate_distance": 0.002776,
+          "gate_projection": 0.3896,
+          "near_frame_count": 12,
+          "candidate_spans": 1
+        }
+      ],
+      "track_candidates_truncated": 0,
+      "scope": "observed_bbox_geometry_only",
+      "physical_identity_proven": false,
+      "auto_recount_permitted": false
+    }
+  ],
+  "disclaimer": "Geometry-only review. An observed span is not a validated crossing or physical identity. No event/GT/score edits."
+}

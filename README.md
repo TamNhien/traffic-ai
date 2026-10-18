@@ -1,3 +1,20 @@
+# V0.5.103 — Verified Finite-Gate Coverage Audit
+
+## Release scope
+
+Input: Benchmark #74 / Session #201 and camera images from `camera_1(20261018-131808).rar`. This release does not modify detector weights, crossing policy, database events, saved Ground Truth or benchmark score; no automatic re-counting or deleting vehicle events. The last two sessions #200/#201 have identical 149 event signatures (time, type, direction, method, canonical track) and identical 143 matched / 6 missed / 6 extra. A "zero net count error" is not perfect accuracy.
+
+New `scripts/audit-gate-coverage.py` and `.ps1` verify the manifest and closed trace, inspect the finite counting segment at every frame near all 12 mismatch timecodes, and export JSON/CSV/Markdown with closest observed canonical tracks, normalized distance, finite-segment location, raw ID and sign-changing geometry witnesses. Geometric sign changes are *review candidates*, never proven physical passages. This lets reviewers distinguish missed nearby crossings from missing near-gate detections without increasing the matching window or fabricating counts. Only bounded per-case observations are retained; no full video decoding/model execution in the audit. Twelve regression tests and the test.ps1 contract are added. Alembic metadata-only revision `0117_gate_audit_v05103`.
+
+To audit Benchmark #74 on Windows:
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+.\scripts\audit-gate-coverage.ps1 -Export ".\traffic-ai-benchmark-74-session-201.zip" -OutputDirectory ".\gate-coverage-audit"
+```
+
+Always run `scripts/test.ps1` and `scripts/start.ps1` after installation, and `scripts/publish.ps1` only after confirming tests and runtime. Do not overwrite live `.env`, database volumes, models, source videos or prior audit exports during extraction.
+
 # Traffic AI V0.5.102 — Admission-first HumanGuard + Verified Timecode Audit
 
 **Nâng cấp từ V0.5.101; giữ nguyên GT và dữ liệu PostgreSQL.** Benchmark #73 / session #200 có **149 GT / 149 AI / 143 khớp / 6 lọt / 6 dư / F1 96,0%**. Đây là số đo của phiên chạy trước khi cập nhật .102, không phải đánh giá độ chính xác của bản .102. Một sự kiện AI dư bị loại so với #72 và số lọt vẫn 6, xác nhận trên export mới; không suy ra các ca còn lại đều là lỗi detector.

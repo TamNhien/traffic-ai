@@ -2460,6 +2460,18 @@ Invoke-Step "V0.5.102 verified temporal-neighbor audit (stdlib-only)" {
     python -m unittest discover -s scripts/tests -p test_audit_temporal_neighbors_v05102.py -v
 }
 
+Invoke-Step "V0.5.103 verified gate coverage geometry audit (stdlib-only)" {
+  $audit = Get-Content (Join-Path $root 'scripts/audit-gate-coverage.py') -Raw -Encoding UTF8
+  $tests = Get-Content (Join-Path $root 'scripts/tests/test_audit_gate_coverage_v05103.py') -Raw -Encoding UTF8
+  if ($audit -notmatch 'verified_trace_sha256' -or $audit -notmatch 'physical_identity_proven' -or
+      $audit -notmatch 'auto_recount_permitted' -or $tests -notmatch 'test_two_distant_vehicles_do_not_automatically_merge' -or
+      -not (Test-Path (Join-Path $root 'scripts/audit-gate-coverage.ps1'))) {
+    throw 'V0.5.103 verified finite gate audit contract failed.'
+  }
+  docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 -v "${root}:/src" -w /src python:3.14.7-slim `
+    python -m unittest discover -s scripts/tests -p test_audit_gate_coverage_v05103.py -v
+}
+
 Invoke-Step "V0.5.92 verified crossing-cycle witness audit (stdlib-only)" {
   docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 -v "${root}:/src" -w /src python:3.14.7-slim `
     python -m unittest discover -s scripts/tests -p test_audit_crossing_cycles_v0592.py -v

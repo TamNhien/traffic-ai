@@ -1,3 +1,16 @@
+# V0.5.103 — Source verification and limitations
+
+- Baseline: V0.5.102 full source ZIP, original 345 source files. All old file paths retained; 4 new source files; 349 total. Metadata bumped to V0.5.103 / Alembic `0117_gate_audit_v05103` (schema version only).
+- User-provided Benchmark #74 / Session #201 and 165 camera JPGs inspected. Benchmark GT149 / AI149 / match143 / miss6 / extra6 / F1 96.0%. Exactly the same 149 event signatures as Benchmark #73 / Session #200; no measured detector improvement between these prior runs.
+- New read-only verified finite-gate spatial witness audit. Source/GT/events/report unchanged. Full 23,650-frame archive verified by existing benchmark-forensics, report for 12 mismatched cases exported to JSON/CSV/Markdown. Geometry measures normalized perpendicular distance and segment projection for real observed track anchors, may report geometric sign-flip review candidates but NEVER asserts same physical identity or authorizes adding/removing counts.
+- Test execution (Linux Python 3.13 / Node.js 22): AI pytest 741 passed; backend pytest 195 passed; frontend node 47 passed; script unittest 122 passed, 1 native PowerShell test skipped; backup worker 4 passed; benchmark gate 5 passed (1 intentional duplicate ZIP-name warning). Total unique suites: **1,114 passed, 1 skipped**. Version contract and `compileall` pass; 35 PowerShell scripts normalized to CRLF without BOM. Windows native script, Docker Compose, PostgreSQL migration/live transaction, npm production build and GPU/full-video inference not executed in this environment.
+- The local test harness requires an HTTPX2 shim mapped to installed httpx, outside release code; backend uses SQLite in-memory override. Neither shim nor temporary environment configuration is shipped. Native compatibility must be checked with Docker on Windows.
+- This release intentionally does not change counting thresholds, GT, model weights, matching tolerance or stored events. **No claim of F1 increase or reduction of the 6 missed / 6 extra events.**
+
+On Windows: `cd D:\LienThongDH\DoAn\traffic-ai`, unblock scripts, `scripts\test.ps1`, `scripts\start.ps1`, then `scripts\audit-gate-coverage.ps1 -Export ".\traffic-ai-benchmark-74-session-201.zip"`. Once verified, `scripts\publish.ps1`. Preserve user `.env`, video, models, database and Docker volumes.
+
+---
+
 # V0.5.102 — Verification / limits
 
 **Baseline** `traffic-ai-v0.5.101-full-source.zip` (341 source members). **Measured previous run** Benchmark #73 / Session #200: 149 GT, 149 AI events, 143 assigned matches, 6 unmatched GT, 6 unmatched AI, 96.0% F1. Source camera RAR extracted: 165 JPG verified readable via libarchive; report/manifest/hash/closed trace verified using the project's forensics tool, not altered.

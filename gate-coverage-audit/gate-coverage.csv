@@ -1,0 +1,13 @@
+﻿time_s,kind,case_id,direction,vehicle_type,near_gate_tracks,finite_segment_span_candidates,unique_track_count,nearest_track_id,nearest_distance,nearest_projection
+54.296,extra,14309,out,motorcycle,1,0,12,15369,0.009465,0.6024
+59.446,missed,10738,in,motorcycle,2,1,13,14,0.002893,0.1195
+237.042,missed,10768,out,motorcycle,1,1,13,84351,0.005015,0.2723
+289.824,missed,10780,in,motorcycle,1,1,14,25767,0.003577,0.5636
+292.864,extra,14351,out,motorcycle,2,1,14,110284,0.002655,0.1408
+392.179,missed,10797,out,motorcycle,1,1,13,143964,0.004258,0.8092
+406.488,missed,10802,out,motorcycle,1,1,11,149041,0.001189,0.1483
+519.418,extra,14384,out,motorcycle,2,1,11,191795,0.000704,0.0371
+591.091,missed,10822,in,bicycle,0,0,8,,,
+808.0,extra,14424,out,motorcycle,2,2,15,368014,0.020421,0.6415
+811.925,extra,14426,out,motorcycle,2,2,13,345897,0.000796,0.075
+882.29,extra,14439,in,truck,1,1,9,286434,0.002776,0.3896
