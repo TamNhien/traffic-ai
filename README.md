@@ -1,3 +1,33 @@
+# Traffic AI V0.5.99 - Verified Passage Evidence Review
+
+**Nâng cấp từ V0.5.98; không tự chỉnh thuật toán counting/detector.** Phân tích benchmark mới #71 / session #198 bằng full export ZIP và 166 JPG trong RAR (giải nén riêng). 149 GT / 150 AI / 143 khớp / 6 lọt / 7 dư: dữ liệu từ lượt chạy V0.5.98, **không phải** kết quả inference sau khi nâng cấp. 4 trong 6 mốc GT chưa khớp có event AI đã được matcher ghép sang GT khác, không đủ bằng chứng nói detector bỏ sót; 2 GT còn lại không có event đã lưu tương ứng trong tolerance. 1 AI extra ở khoảng 491.920 giây có chỉ dấu hàng xóm hình học, nhưng chưa xác lập cùng xe. Van/xe tải tại 882.290 giây có snapshot ngay vùng vạch; không loại tự động.
+
+**Giao diện:** trong báo cáo Benchmark thêm ghi chú V0.5.99 phân biệt số GT cạnh tranh ghép timecode với số GT chưa có event DB trong cửa sổ ghép, có kiểm tra phạm vi/chỉ số để không hiện dữ liệu thiếu nhất quán. 4 bài kiểm tra Node mới bảo vệ logic này.
+
+**Tính năng mới:** `scripts/audit-error-evidence.py` / `audit-error-evidence.ps1`: xác minh CRC, manifest SHA256, SHA256 trace giải nén và delivery footer qua benchmark-forensics hiện có; tạo **13 hồ sơ rà soát** theo timecode với tình trạng matcher, event GT đã chiếm AI, khung hình/track hai phía, crossing proposal / delivery receipt gần thời điểm, cùng ảnh JPG gần nhất (nếu đã giải nén). Ảnh chỉ được liên kết khi cách source time tối đa **1 giây** và dùng FPS phiên từ snapshot đã xác minh. Kết quả xuất `passage-evidence.json`, `.csv`, `.md`; không ghi DB, không sửa GT, không tự gộp hoặc xóa event/track. Gần nhau về thời gian, xuất hiện ở hai phía vạch và JPG tĩnh đều **không chứng minh** cùng xe.
+
+Ví dụ sau khi sao chép bản full source, export benchmark đã tải và (nếu cần) giải nén RAR vào thư mục ảnh:
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+.\scripts\test.ps1
+.\scripts\start.ps1
+
+# Đọc hồ sơ benchmark đã export, không cần chạy lại AI/benchmark.
+.\scripts\audit-error-evidence.ps1 -Export ".\traffic-ai-benchmark-71-session-198.zip" -OutputDirectory ".\passage-evidence-audit"
+
+# Có thể truyền ảnh JPG đã giải nén từ RAR để ghép hình theo frame/timecode.
+.\scripts\audit-error-evidence.ps1 -Export ".\traffic-ai-benchmark-71-session-198.zip" -CameraImages ".\camera_1" -OutputDirectory ".\passage-evidence-audit"
+
+# Chỉ publish khi đã test/kiểm tra trên máy thật thành công.
+.\scripts\publish.ps1
+```
+
+Bản .99 có migration metadata `0113_passage_evidence_v0599`, parent `0112_clock_owner_v0598`; không thay đổi cấu trúc dữ liệu hay mật khẩu Admin. Hãy so benchmark của **phiên chạy mới** với GT có cùng video/vạch trước khi tuyên bố chỉ số AI thay đổi. Mục tiêu của công cụ mới là phân loại bằng chứng để nhắm đúng lỗi, không tuyên bố đã giảm từ 6/7.
+
+---
+
 # Traffic AI V0.5.98 — Giữ đúng lượt sở hữu mốc thời gian crossing
 
 Sửa lỗi mốc thời gian của một đoạn quỹ đạo cũ còn đi theo alias sau khi gộp track vào một track đã nhận lượt cắt vạch mới hơn. Lỗi này có thể kéo timestamp của event về lượt trước và gây sai ghép benchmark. Bộ đếm không được tự tạo thêm event từ timestamp hint.

@@ -2437,6 +2437,19 @@ Invoke-Step "GT case forensics unit tests (stdlib-only)" {
     python -m unittest discover -s scripts/tests -p test_benchmark_forensics.py -v
 }
 
+Invoke-Step "V0.5.99 verified passage-evidence audit (stdlib-only)" {
+  $auditSource = Get-Content (Join-Path $root 'scripts/audit-error-evidence.py') -Raw -Encoding UTF8
+  $auditTests = Get-Content (Join-Path $root 'scripts/tests/test_audit_error_evidence_v0599.py') -Raw -Encoding UTF8
+  if ($auditSource -notmatch 'traffic-ai-passage-evidence-worklist' -or
+      $auditSource -notmatch 'physical_identity_proven' -or
+      $auditTests -notmatch 'test_invalid_or_incomplete_trace_fails_closed' -or
+      -not (Test-Path (Join-Path $root 'scripts/audit-error-evidence.ps1'))) {
+    throw 'V0.5.99 verified passage evidence contract missing.'
+  }
+  docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 -v "${root}:/src" -w /src python:3.14.7-slim `
+    python -m unittest discover -s scripts/tests -p test_audit_error_evidence_v0599.py -v
+}
+
 Invoke-Step "V0.5.92 verified crossing-cycle witness audit (stdlib-only)" {
   docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 -v "${root}:/src" -w /src python:3.14.7-slim `
     python -m unittest discover -s scripts/tests -p test_audit_crossing_cycles_v0592.py -v

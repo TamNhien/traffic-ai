@@ -7,10 +7,11 @@ import { TrafficReports } from './traffic-reports.jsx'
 import { shouldShowTemporalCompetitionReview } from './benchmark-review.js'
 import { buildReviewQueue, filterReviewQueue, reviewSeekStart } from './benchmark-review-navigator.js'
 import { buildPassageCycleReview } from './benchmark-passage-cycles.js'
+import { verifiedPassageSummary } from './passage-evidence-summary.js'
 import { buildHumanGuardAuditView } from './human-guard-audit.js'
 import { buildObservedTrackAuditView } from './observed-track-audit.js'
 
-const APP_VERSION = '0.5.98'
+const APP_VERSION = '0.5.99'
 const vehicleLabels = {
   motorcycle: 'Xe máy', bicycle: 'Xe đạp', car: 'Ô tô', bus: 'Xe buýt', truck: 'Xe tải', other: 'Khác'
 }
@@ -1051,6 +1052,7 @@ function GroundTruthBenchmark({ selectedCameraId, sessions }) {
         {!reportScoringAvailable && <><div className="source-status warn"><strong>Chưa có Ground Truth để chấm điểm</strong><span>AI đã ghi nhận {report.ai_total} lượt. Hãy sao chép GT từ benchmark cùng clip và vạch, hoặc đánh dấu xe trên video. Khi GT còn trống, điểm số và chẩn đoán lọt/dư chưa được tính.</span></div>{compatibleCloneSource && <button className="secondary benchmark-clone-gt" disabled={busy} onClick={cloneGroundTruthIntoCurrent}>Sao chép {compatibleCloneSource.mark_count} GT từ Benchmark #{compatibleCloneSource.id} sang Benchmark #{detail.id}</button>}</>}
         <div className="benchmark-metrics"><div><span>Ground truth</span><strong>{report.ground_truth_total}</strong></div><div><span>AI đếm</span><strong>{report.ai_total}</strong></div><div><span>Khớp</span><strong>{reportScoringAvailable ? report.matched : '—'}</strong></div><div className={reportScoringAvailable && report.missed ? 'metric-bad' : ''}><span>Lọt không đếm</span><strong>{reportScoringAvailable ? report.missed : '—'}</strong></div><div className={reportScoringAvailable && report.false_positives ? 'metric-warn' : ''}><span>Đếm dư</span><strong>{reportScoringAvailable ? report.false_positives : '—'}</strong></div><div><span>Sai số tổng</span><strong>{reportScoringAvailable ? `${report.count_error > 0 ? '+' : ''}${report.count_error}` : '—'}</strong></div></div>
         <div className="benchmark-scores"><span>Counting Recall <strong>{reportScoringAvailable ? `${(Number(report.counting_recall || 0)*100).toFixed(1)}%` : '—'}</strong></span><span>Precision <strong>{reportScoringAvailable ? `${(Number(report.counting_precision || 0)*100).toFixed(1)}%` : '—'}</strong></span><span>F1 <strong>{reportScoringAvailable ? `${(Number(report.counting_f1 || 0)*100).toFixed(1)}%` : '—'}</strong></span><span>Class đúng <strong>{!reportScoringAvailable || report.class_accuracy == null ? '—' : `${(report.class_accuracy*100).toFixed(1)}%`}</strong></span><span title="Trong các cặp khớp timecode, có bao nhiêu cặp đúng hướng IN/OUT">Hướng đúng <strong>{!reportScoringAvailable || report.direction_accuracy == null ? '—' : `${(report.direction_accuracy*100).toFixed(1)}%`}</strong></span><span title="Phải khớp timecode, đúng loại xe và đúng hướng; chỉ là chỉ số bổ sung, không sửa benchmark cũ">Khớp đủ 3 <strong>{!reportScoringAvailable || report.strict_matches == null ? '—' : report.strict_matches}</strong></span><span title="GT lọt và AI dư gần nhau ngoài cửa sổ chấm điểm; chỉ phục vụ review, không đổi Recall/Precision">Review gần <strong>{reportScoringAvailable ? (report.unmatched_review_links ?? 0) : '—'}</strong></span></div>
+        {verifiedPassageSummary(report, reportScoringAvailable) && <div className="benchmark-temporal-note" role="note"><strong>Kiểm toán bằng chứng V0.5.99:</strong> {verifiedPassageSummary(report, reportScoringAvailable).detail} Xuất ZIP benchmark và dùng <code>audit-error-evidence.ps1</code> để xem từng trường hợp theo timecode.</div>}
         {reportScoringAvailable && <section className="benchmark-review-nav" aria-label="Điều hướng kiểm tra lượt lọt và dư">
           <div className="benchmark-review-nav-heading"><strong>Rà soát lần lượt {reviewCases.length} mốc lỗi</strong><small>Chỉ điều hướng video; không tự ghép xe hoặc thay điểm số.</small></div>
           <div className="benchmark-review-nav-tools">
