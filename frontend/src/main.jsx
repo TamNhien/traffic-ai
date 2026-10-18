@@ -11,7 +11,7 @@ import { verifiedPassageSummary } from './passage-evidence-summary.js'
 import { buildHumanGuardAuditView } from './human-guard-audit.js'
 import { buildObservedTrackAuditView } from './observed-track-audit.js'
 
-const APP_VERSION = '0.5.104'
+const APP_VERSION = '0.5.105'
 const vehicleLabels = {
   motorcycle: 'Xe máy', bicycle: 'Xe đạp', car: 'Ô tô', bus: 'Xe buýt', truck: 'Xe tải', other: 'Khác'
 }

@@ -17,6 +17,7 @@ def check(root: Path) -> list[str]:
         'frontend/src/main.jsx': [f"const APP_VERSION = '{version}'"],
         'backend/app/main.py': [f'version="{version}"', f'"version": "{version}"'],
         'ai-service/app/main.py': [f"APP_VERSION = '{version}'"],
+        'ai-service/app/trace_identity.py': [f"TRACE_RUNTIME_VERSION = '{version}'"],
         'backup-worker/worker.py': [f"'version':'{version}'", f'V{version} ready'],
         'backend/app/backup_routes.py': [f"'version':'{version}'"],
     }

@@ -12,6 +12,7 @@ import gzip
 import importlib.util
 import json
 import math
+import re
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -119,12 +120,15 @@ def case_witnesses(case: dict, observations: list[dict], *, near_radius: float =
     return result
 
 
-def build_report(export: Path, *, window: float = 1.0, near_radius: float = .035) -> dict:
+def build_report(export: Path, *, window: float = 1.0, near_radius: float = .035,
+                 expected_session: int | None = None, require_provenance: bool = False) -> dict:
     if not _finite_number(window) or not 0.1 <= window <= 2.0:
         raise ValueError('Window must be finite and between 0.1 and 2 seconds')
     if not _finite_number(near_radius) or not 0 < near_radius <= .1:
         raise ValueError('Near radius must be in (0, 0.1]')
     integrity = _verify(export)
+    if expected_session is not None and integrity['session_id'] != expected_session:
+        raise ValueError(f'Wrong benchmark export: expected Session #{expected_session}, received Session #{integrity["session_id"]}. Export the correct session before auditing.')
     with ZipFile(export) as z:
         score=json.loads(z.read('report.json'))
         miss=score['missed_items']; extra=score['false_positive_items']
@@ -143,15 +147,29 @@ def build_report(export: Path, *, window: float = 1.0, near_radius: float = .035
         frame_exposures=[[] for _ in raw_cases]
         geometry=None
         last_frame=0
+        session_meta = None
+        provenance_observations = 0
         with z.open('benchmark-trace.jsonl.gz') as compressed, gzip.open(compressed,'rt',encoding='utf-8') as stream:
             for line in stream:
                 d=json.loads(line)
+                if d.get('kind') == 'session_metadata':
+                    if session_meta is not None:
+                        raise ValueError('Duplicate trace session metadata')
+                    session_meta = d
+                    continue
                 if d.get('kind')=='geometry_metadata':
                     geometry=d
                     continue
                 if 'frame_index' not in d:
                     continue
                 frame=int(d['frame_index'])
+                if session_meta is None:
+                    raise ValueError('Missing trace session metadata')
+                if session_meta.get('gate_decision_scope') == 'per-gate-track-v1':
+                    for row in d.get('gate_tracks',[]):
+                        provenance_observations += 1
+                        if not isinstance(row,dict) or not isinstance(row.get('primary_gate_decision'),str) or not isinstance(row.get('final_gate_decision'),str):
+                            raise ValueError(f'Declared gate-decision schema missing track evidence at frame {frame}')
                 if frame<=last_frame:
                     raise ValueError('Non-monotonic trace frames')
                 last_frame=frame
@@ -188,6 +206,20 @@ def build_report(export: Path, *, window: float = 1.0, near_radius: float = .035
                             'secondary_gate_rejection':row.get('secondary_gate_rejection')}
                     for idx in targets:
                         observations[idx].append(record)
+    if session_meta is None:
+        raise ValueError('Missing session metadata')
+    runtime_version = session_meta.get('ai_runtime_version')
+    runtime_sha = session_meta.get('worker_source_sha256')
+    trace_schema = session_meta.get('gate_decision_schema_version')
+    has_attestation = (isinstance(runtime_version,str) and
+        re.fullmatch(r'\d+\.\d+\.\d+',runtime_version) is not None and
+        tuple(int(x) for x in runtime_version.split('.')) >= (0,5,105) and
+        isinstance(runtime_sha,str) and re.fullmatch(r'[0-9a-f]{64}',runtime_sha) is not None and
+        trace_schema == 1 and session_meta.get('gate_decision_scope') == 'per-gate-track-v1')
+    if require_provenance and not has_attestation:
+        raise ValueError('Trace lacks V0.5.105+ runtime/worker decision provenance; this is a legacy export. Rerun AI with the current source and export the new session.')
+    if session_meta.get('gate_decision_scope') == 'per-gate-track-v1' and not has_attestation:
+        raise ValueError('Inconsistent declared runtime provenance')
     result=[case_witnesses(c,items,near_radius=near_radius) for c,items in zip(raw_cases,observations)]
     for case, exposures in zip(result,frame_exposures):
         case['verified_window_frames'] = len(exposures)
@@ -202,6 +234,13 @@ def build_report(export: Path, *, window: float = 1.0, near_radius: float = .035
         'verified_trace_sha256':integrity['source_trace_sha256'],
         'window_seconds':window,'near_gate_radius_normalized':near_radius,
         'frame_count_verified':last_frame, 'cases':result,
+        'runtime_provenance': {
+            'status': 'verified-schema' if has_attestation else 'legacy-unattested',
+            'runtime_version': runtime_version if has_attestation else None,
+            'worker_source_sha256': runtime_sha if has_attestation else None,
+            'gate_decision_schema_version': trace_schema if has_attestation else None,
+            'evidence_track_observations': provenance_observations if has_attestation else 0,
+        },
         'disclaimer':'Geometry and decision provenance are review-only. A gate rejection is not proof of detector failure or physical vehicle identity. No event/GT/score edits.'
     }
 
@@ -221,7 +260,10 @@ def write_report(report: dict, folder: Path) -> None:
                 'nearest_primary_decisions':json.dumps(top.get('primary_gate_decisions',{}),ensure_ascii=False),
                 'nearest_secondary_rejections':json.dumps(top.get('secondary_gate_rejections',{}),ensure_ascii=False),
                 'road_tracks_zero_frames':item.get('road_tracks_zero_frames',0)})
+    runtime_info=report.get('runtime_provenance', {
+        'status':'legacy-unattested','runtime_version':None,'evidence_track_observations':0})
     md=[f'# Gate coverage audit — Benchmark #{report["benchmark_id"]} / Session #{report["session_id"]}',
+        '',f'Runtime trace: **{runtime_info["status"]}**; version: {runtime_info["runtime_version"] or "not attested"}; gate-decision samples: {runtime_info["evidence_track_observations"]}.',
         '',f'GT {report["ground_truth_total"]} | AI {report["ai_total"]} | matched {report["matched"]} | missed {report["missed"]} | extra {report["extra"]}',
         '',f'Window ±{report["window_seconds"]:.2f}s; normalized gate radius {report["near_gate_radius_normalized"]:.3f}.',
         '', '**Read-only evidence: do NOT automatically count, suppress or edit GT.**','',
@@ -244,14 +286,18 @@ def main(argv=None) -> int:
     p.add_argument('--output-dir',type=Path,default=Path('gate-coverage-audit'))
     p.add_argument('--window',type=float,default=1.0)
     p.add_argument('--near-radius',type=float,default=.035)
+    p.add_argument('--expected-session',type=int,default=None)
+    p.add_argument('--require-provenance',action='store_true')
     args=p.parse_args(argv)
     try:
-        report=build_report(args.export,window=args.window,near_radius=args.near_radius)
+        report=build_report(args.export,window=args.window,near_radius=args.near_radius,
+            expected_session=args.expected_session,require_provenance=args.require_provenance)
         write_report(report,args.output_dir)
     except (OSError,ValueError,KeyError,TypeError,OverflowError,EOFError,json.JSONDecodeError) as exc:
         print(f'[ERROR] Verified gate coverage aborted: {exc}',file=sys.stderr)
         return 2
     print(f'Benchmark #{report["benchmark_id"]} / Session #{report["session_id"]}: {len(report["cases"])} gate cases, {report["frame_count_verified"]} frames verified')
+    print(f'Runtime evidence: {report["runtime_provenance"]["status"]} / {report["runtime_provenance"]["runtime_version"] or "unknown"}')
     print(f'Reports: {args.output_dir}')
     return 0
 

@@ -1,3 +1,40 @@
+# V0.5.105 — Runtime Trace Provenance & Session-Safe Audit
+
+**Issue established:** Screenshot shows Benchmark #76 / Session #203 running V0.5.104,
+but the uploaded ZIP is Benchmark #75 / Session #202 (created earlier). A gate
+audit of #75 cannot diagnose V0.5.104's per-track decisions. The lack of
+`primary_gate_decision` in #75 is expected and does not prove a stale container.
+
+New worker traces include `ai_runtime_version`, SHA256 of the exact deployed
+worker/counting/trace-identity source bytes, and a declared decision schema.
+Every track emitted by the gate loop has an explicit primary/final reason,
+including tracks skipped while HumanGuard is pending. The audit validates a
+declared schema on every frame and can **fail closed** if a requested Session
+ID does not match the ZIP or if provenance is missing. Old benchmark exports
+remain readable without strict flags, clearly labeled `legacy-unattested`.
+
+**No changes to detector/model weights, counting or GT/DB/scoring policies.**
+No AI inference accuracy gain is claimed. This upgrade prevents misleading
+comparisons and enables the next targeted logic correction when the #76 trace
+is available. Migration 0119 changes schema-version metadata only.
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+.\scripts\test.ps1
+.\scripts\start.ps1
+# Export Benchmark #76 / Session #203 from the application first.
+.\scripts\audit-gate-coverage.ps1 `
+  -Export ".\traffic-ai-benchmark-76-session-203.zip" `
+  -ExpectedSession 203 `
+  -OutputDirectory ".\gate-coverage-audit"
+# For V0.5.105-generated sessions only, add -RequireProvenance.
+# After Windows tests and replay are verified:
+.\scripts\publish.ps1
+```
+
+---
+
 # V0.5.104 — Per-track Gate Decision Provenance
 
 This release adds a **read-only** primary gate decision reason for each canonical

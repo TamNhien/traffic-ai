@@ -21,6 +21,7 @@ class VersionMetadataTests(unittest.TestCase):
             'VERSION', 'frontend/package.json', 'frontend/src/main.jsx',
             'frontend/index.html', 'backend/app/main.py',
             'backend/app/backup_routes.py', 'ai-service/app/main.py',
+            'ai-service/app/trace_identity.py',
             'backup-worker/worker.py', 'scripts/test.ps1'
         ]
         paths += [str(p.relative_to(SOURCE)) for p in (SOURCE / 'backend/alembic/versions').glob('*.py')]

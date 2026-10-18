@@ -717,6 +717,9 @@ def test_v0556_pending_guard_trace_keeps_visible_geometry_without_committing() -
         "stable_label": "motorcycle", "class_certainty": .9, "class_hits": 4,
         "class_override": None, "truck_semantic_lock": None,
         "center_signed": .05, "human_guard_status": "pending",
+        "primary_gate_decision": "pending-human-guard",
+        "final_gate_decision": "pending-human-guard",
+        "secondary_gate_rejection": None,
         "raw_track_id": 77, "stitched": False, "rect": [40.0, 45.0, 60.0, 65.0],
         "anchor": [50.0, 65.0], "center": [50.0, 55.0],
         "measured_velocity": [0.0, 2.0], "anchor_velocity": [0.0, 2.0],
@@ -1122,6 +1125,7 @@ def _execute_trace_startup(worker, path):
     env = {
         "self": worker, "trace_file": None, "source_frame_count": 23650,
         "trace_path": lambda _session_id: path,
+        "trace_runtime_metadata": __import__("app.trace_identity", fromlist=["metadata"]).metadata,
     }
     exec(compile(ast.fix_missing_locations(ast.Module(body=[startup, warming], type_ignores=[])), str(source_path), "exec"), env)
     return env
@@ -1159,6 +1163,7 @@ def test_v0558_session_trace_header_contains_no_synthetic_observation_or_secrets
     assert header == {
         "kind": "session_metadata", "audit_only": True, "camera_id": 1, "session_id": 2,
         "source_fps": 25.0, "source_frame_count": 23650, "frame_policy": "all-frames",
+        **__import__("app.trace_identity", fromlist=["metadata"]).metadata(),
     }
     assert "source_time_seconds" not in header and "frame_index" not in header
     assert "secret" not in writer.getvalue()

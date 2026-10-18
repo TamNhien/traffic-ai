@@ -38,6 +38,7 @@ from app.counting import (
 )
 from app.dedup import single_heavy_vehicle_plan, stable_tracking_order
 from app.raw_handoff_guard import RawHandoffCrossingGuard
+from app.trace_identity import metadata as trace_runtime_metadata
 from app.flow_calibration import FlowCalibrator
 from app.gate_roi import gate_roi_for_line, road_zone_roi
 from app.human_guard import (
@@ -1628,6 +1629,7 @@ class PipelineWorker(threading.Thread):
                     "camera_id": self.payload.camera_id, "session_id": self.payload.session_id,
                     "source_fps": self.state.source_fps, "source_frame_count": source_frame_count,
                     "frame_policy": self.state.frame_policy,
+                    **trace_runtime_metadata(),
                 })
             self.state.status = "warming"
 
@@ -2059,6 +2061,11 @@ class PipelineWorker(threading.Thread):
                             "anchor_signed": round(float(anchor_signed), 6),
                             "center_signed": round(float(center_signed), 6),
                             "human_guard_status": self._human_guard_policy.status(track_id),
+                            # Even pending HumanGuard tracks have an explicit
+                            # value; absence of these keys indicates stale code.
+                            "primary_gate_decision": "pending-human-guard",
+                            "final_gate_decision": "pending-human-guard",
+                            "secondary_gate_rejection": None,
                         }
                         gate_trace_tracks.append(gate_trace_track)
 

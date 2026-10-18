@@ -2472,6 +2472,20 @@ Invoke-Step "V0.5.103 verified gate coverage geometry audit (stdlib-only)" {
     python -m unittest discover -s scripts/tests -p test_audit_gate_coverage_v05103.py -v
 }
 
+Invoke-Step "V0.5.105 runtime trace identity + expected-session audit (stdlib-only)" {
+  $worker = Get-Content (Join-Path $root 'ai-service/app/worker.py') -Raw -Encoding UTF8
+  $trace = Get-Content (Join-Path $root 'ai-service/app/trace_identity.py') -Raw -Encoding UTF8
+  $audit = Get-Content (Join-Path $root 'scripts/audit-gate-coverage.py') -Raw -Encoding UTF8
+  if ($worker -notmatch 'trace_runtime_metadata' -or $worker -notmatch 'pending-human-guard' -or
+      $trace -notmatch 'worker_source_sha256' -or $audit -notmatch 'expected_session' -or
+      $audit -notmatch 'require_provenance') {
+    throw 'V0.5.105 runtime provenance/session audit contract missing.'
+  }
+  docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 -v "${root}:/src" -w /src python:3.14.7-slim `
+    python -m unittest discover -s scripts/tests -p test_trace_provenance_v05105.py -v
+  if ($LASTEXITCODE -ne 0) { throw 'V0.5.105 runtime provenance regression tests failed.' }
+}
+
 Invoke-Step "V0.5.92 verified crossing-cycle witness audit (stdlib-only)" {
   docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 -v "${root}:/src" -w /src python:3.14.7-slim `
     python -m unittest discover -s scripts/tests -p test_audit_crossing_cycles_v0592.py -v
