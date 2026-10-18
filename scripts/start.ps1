@@ -7,6 +7,10 @@ $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $ProjectRoot
 
+# Fail before creating .env, certificates, secrets or PostgreSQL volumes.
+. (Join-Path $PSScriptRoot "docker-engine.ps1")
+Assert-TrafficDockerEngine
+
 function Get-ContainerHealth([string]$Name) {
   try {
     $value = docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' $Name 2>$null
@@ -378,6 +382,7 @@ Ensure-EnvSetting "AI_DATASET_SEED" "2026"
 & (Join-Path $PSScriptRoot "ensure-local-https.ps1") -HostName "traffic-ai.test"
 
 $volume = docker volume ls --filter "name=^traffic_ai_postgres_data$" --format "{{.Name}}"
+if ($LASTEXITCODE -ne 0) { throw "Không kiểm tra được PostgreSQL volume; đã dừng. Kiểm tra Docker Linux engine rồi chạy lại; không tạo volume khi truy vấn thất bại." }
 if ($volume -ne "traffic_ai_postgres_data") {
   Write-Host "[Traffic AI] Đang tạo PostgreSQL volume..." -ForegroundColor Yellow
   docker volume create traffic_ai_postgres_data | Out-Null

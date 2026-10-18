@@ -1,3 +1,104 @@
+# Traffic AI V0.5.96 — Sửa cache Python khi chạy test Docker
+
+Bản này xử lý lỗi trong log .95: kiểm tra source báo đúng version mới, nhưng ba test backend vẫn nhận `0.5.94` thay vì `0.5.95`.
+
+## Nguyên nhân đã tái hiện
+
+Hai ZIP .94/.95 trước đó đóng các file với cùng thời gian 00:00 ngày 17/10. Riêng `backend/app/main.py` đổi version nhưng vẫn cùng kích thước 1181 byte. Python có thể xem bytecode `.pyc` cũ là hợp lệ vì timestamp và kích thước đều khớp, dù nội dung source đã đổi. `compileall` mặc định cũng có thể bỏ qua cache này.
+
+Đã tái hiện bằng chính bytes `main.py` của hai ZIP và loader CPython thật: source .95 nhưng code cache còn .94; dùng cache prefix mới đọc đúng .95. Chỉ thêm `-B` hoặc `PYTHONDONTWRITEBYTECODE=1` không đủ để ngăn đọc cache cũ.
+
+## Sửa trong .96
+
+- Cả **20 lệnh Docker Python** của `test.ps1` dùng `PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache` và `PYTHONDONTWRITEBYTECODE=1`. Prefix nằm trong filesystem riêng của container `--rm`, không nằm trong source bind mount. Mỗi container có cache riêng; `compileall` cũng ghi cache vào prefix này.
+- Bổ sung pattern cache đệ quy trong `.dockerignore` của backend/AI để không đưa `.pyc` lồng trong thư mục vào image. Pattern `**` theo [Docker Docs](https://docs.docker.com/build/concepts/context/).
+- ZIP .96 dùng timestamp build UTC mới; audit kiểm tra các Python file đã thay đổi có timestamp khác ZIP .95.
+- Thêm 8 regression dùng tiến trình Python thật cho trường hợp cùng mtime/kích thước, no-write flag, cache prefix mới/cũ và compileall. Giữ nguyên các test phiên bản hiện có.
+
+**955 kiểm thử offline/Node đạt.** Source gồm đủ các chức năng .95: khôi phục rider có bằng chứng trực tiếp, Docker readiness, điểm neo ổn định, báo cáo Excel/CSV/PDF, phân quyền, backup và benchmark. Bản này không thay thuật toán AI hoặc điểm benchmark.
+
+Log Windows bạn gửi đã xác nhận harness Docker readiness **26 assertions đạt**; backend có 186 đạt/3 lỗi version trong hai lần chạy .95. Đây không phải log chạy .96. Kiểm chứng .96 ở môi trường hiện tại chưa có Docker/PowerShell/HTTP ORM đầy đủ; chi tiết xem VERIFICATION.md.
+
+## Test, chạy và tự động phát hành
+
+Chép full source vào dự án hiện có, giữ `.env`, `.git`, models, video và volumes. Các lệnh dưới không yêu cầu xóa cache trên máy hoặc tạo lại Admin.
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+
+# Test
+.\scripts\test.ps1
+
+# Khởi động
+.\scripts\start.ps1
+
+# Tự test, commit, push GitHub, tạo tag v0.5.96 và Release
+.\scripts\publish.ps1
+```
+
+Mở https://traffic-ai.test:8443 rồi Ctrl+F5. Migration `0110_pycache_v0596`, parent `0109_docker_guard_v0595`, chỉ đồng bộ schema_version .96. Các mục bên dưới là lịch sử giữ nguyên.
+
+---
+
+# Traffic AI V0.5.95 — Khôi phục rider có bằng chứng và kiểm tra Docker
+
+Tiếp tục từ full source V0.5.94. Giữ điểm neo ổn định, báo cáo Excel/CSV/PDF, dashboard, phân quyền, backup, benchmark và toàn bộ chức năng cũ.
+
+## Sửa HumanGuard giữ trạng thái chặn khi đã có bằng chứng xe
+
+Trace session 195 xác định track 143399 bị chặn từ frame 9806. Tại frame 9822, model kiểm tra cùng crop đã cho xe trực tiếp 0.700684, PERSON 0.672363; nhưng box PERSON không đủ chiếm ưu thế hình học nên hàm trả neutral trước khi xét bằng chứng xe. Neutral giữ nguyên trạng thái rejected, làm các candidate quanh 397 s tiếp tục bị loại.
+
+Bản .95 xét **bằng chứng xe trực tiếp cạnh tranh** trong đúng nhánh hình học PERSON chưa đủ chiếm ưu thế, dùng nguyên comparator có sẵn `direct >= max(0.20, person - confidence_margin - 0.03)`. Confidence phải là giá trị hợp lệ trong `[0,1]`. Bằng chứng đủ mạnh trả `rider_supported`, để chính sách hiện có khôi phục rider; không hạ ngưỡng, tăng inference hay sửa số lần xác nhận.
+
+Xe lân cận hoặc chuyển động riêng lẻ không được dùng để khôi phục ở nhánh này. Các điều kiện thiếu PERSON, box không giống người, class khác và nhánh hình học PERSON đã chiếm ưu thế giữ cách xử lý cũ. Cùng frame vẫn dùng một quyết định cache; toàn bộ `HumanGuardTrackPolicy`, tracking, counter, rescuer và backend dedup giữ nguyên.
+
+Tái lập có kiểm soát 26 quan sát thật bằng các ý kiến/IoU/coverage đã ghi, với predicate/policy/cache thật: .94 giữ rejected; .95 khôi phục tại frame 9822 và rider tại candidate frame 9929/9938. Trace không có PERSON rectangle nên phép kiểm tra dùng các chỉ số hình học đã ghi, **không phải inference lại ảnh hoặc benchmark toàn clip**. Fixture số liệu cùng các kiểm tra người đứng cạnh xe/score không hợp lệ được đóng gói trong source.
+
+## Sửa lỗi Docker chưa chạy trong log Windows
+
+Log bạn gửi báo thiếu pipe `dockerDesktopLinuxEngine`. Lỗi gốc là Docker Linux engine chưa kết nối được; thông báo không tạo được PostgreSQL volume chỉ là lỗi theo sau.
+
+- `start.ps1` kiểm tra engine trước khi sửa `.env`, tạo secret/chứng chỉ hoặc query volume. Query volume thất bại dừng rõ ràng, không coi đó là volume chưa tồn tại.
+- `test.ps1` kiểm tra engine trước test đầu tiên cần Docker. Engine Linux sẵn sàng trả ngay, không có thời gian ngủ cố định.
+- Khi xác minh đúng Windows/context `desktop-linux`/pipe cục bộ, script có thể mở Docker Desktop một lần và chờ engine trong thời hạn 120 giây. Mỗi lệnh probe có deadline riêng và đọc stdout/stderr đồng thời. Desktop đã mở chỉ được chờ, không mở lại.
+- Docker CLI chưa cài, Windows containers, endpoint/context khác chưa sẵn sàng hoặc hết thời gian sẽ có thông báo xử lý rõ. Không tự đổi Docker context, restart service/WSL, xóa volume hay thay dữ liệu.
+- Bộ kiểm tra PowerShell độc lập daemon được chạy trên host trước preflight trong `test.ps1`; môi trường kiểm chứng hiện tại chưa có PowerShell nên phần native này chưa chạy tại đây. Kết quả chi tiết xem VERIFICATION.md.
+
+## Kết quả input mới
+
+Benchmark #68/session 195 chạy bản .94: **149 GT / 149 AI / 142 khớp / 7 lọt / 7 dư / F1 95,302%**. So với session 194, hết lọt tại 525.21028 s và 816.964611 s, không thêm GT lọt mới. Tổng AI bằng GT vẫn còn 7 lọt và 7 dư, không phải đếm đúng hoàn toàn.
+
+Ba sai loại vẫn giữ nguyên. Hướng startup 0.16 s được sửa nhưng có một assignment sai hướng mới quanh 754.558486 s. Số lần refiner/model phụ cũng khác nên không gán toàn bộ cải thiện cho riêng thay đổi điểm neo. Không tự sửa GT, quy ước van chở hàng là Xe tải hay matcher.
+
+**Chưa có điểm full pipeline của .95.** Cần chạy lại cùng clip/vạch/model với GT đã review để đo hiệu quả sửa rider.
+
+## Test, chạy và tự động phát hành
+
+Chép full source vào dự án hiện có, giữ `.env`, `.git`, models, video và volumes. Không tạo lại Admin.
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+
+# Test
+.\scripts\test.ps1
+
+# Khởi động
+.\scripts\start.ps1
+
+# Tự test, commit, push GitHub, tạo tag v0.5.95 và Release
+.\scripts\publish.ps1
+```
+
+Mở https://traffic-ai.test:8443, Ctrl+F5. Nếu Docker Desktop không ở thư mục/context thông thường, mở ứng dụng thủ công và chờ Engine running trước khi chạy lệnh. Sau replay .95, sao chép GT sang benchmark mới rồi Tải hồ sơ benchmark sau khi có GT.
+
+Migration metadata `0109_docker_guard_v0595`, parent `0108_guard_audit_v0594`; không thay GT/events. Các mục bên dưới là lịch sử được giữ nguyên.
+
+---
+
 # Traffic AI V0.5.94 — Ổn định điểm neo và chẩn đoán Human Guard
 
 Tiếp tục từ đúng full source V0.5.93. Giữ báo cáo giờ/ngày/tháng, Excel/CSV/PDF, phân quyền, backup, dashboard, huấn luyện, benchmark, công cụ audit và quy trình GitHub Release hiện có. Không cần tạo lại tài khoản Admin.

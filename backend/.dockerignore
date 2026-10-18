@@ -3,3 +3,7 @@ __pycache__
 *.pyc
 *.pyo
 .venv
+# Also exclude nested Python cache produced by bind-mounted test commands.
+**/__pycache__
+**/*.pyc
+**/*.pyo

@@ -2346,36 +2346,74 @@ if ($shadowSource -notmatch 'DIRECT_SHADOW_MAX_TIME_SECONDS = 0.32' -or
 }
 Write-Host '[OK] V0.5.78 Direct Shadow Evidence Gate' -ForegroundColor Green
 
+Write-Host "`n[Traffic AI] Docker preflight + direct rider recovery V0.5.95 contract" -ForegroundColor Cyan
+$dockerReadyText = Get-Content (Join-Path $PSScriptRoot "docker-engine.ps1") -Raw -Encoding UTF8
+$dockerNativeTests = Get-Content (Join-Path $PSScriptRoot "tests/test-docker-engine-v0595.ps1") -Raw -Encoding UTF8
+$guardRecoveryText = Get-Content (Join-Path $root "ai-service/app/human_guard.py") -Raw -Encoding UTF8
+$guardRecoveryTests = Get-Content (Join-Path $root "ai-service/tests/test_v0595_guard_recovery.py") -Raw -Encoding UTF8
+if ($dockerReadyText -notmatch 'function Assert-TrafficDockerEngine' -or $dockerReadyText -notmatch 'WaitForExit' -or $dockerNativeTests -notmatch 'Invoke-TrafficDockerProbe') {
+  throw 'V0.5.95 missing bounded Docker engine preflight or native regressions.'
+}
+if ($guardRecoveryText -notmatch 'and direct_competitive' -or $guardRecoveryTests -notmatch 'test_v0595_recorded_rider_releases_old_rejection' -or $guardRecoveryTests -notmatch 'invalid_scores_cannot_release') {
+  throw 'V0.5.95 missing direct rider recovery evidence or rejection controls.'
+}
+Write-Host '[OK] Docker preflight + direct rider recovery V0.5.95 contract' -ForegroundColor Green
+
+Write-Host "`n[Traffic AI] Isolated Python test cache V0.5.96 contract" -ForegroundColor Cyan
+$cacheTests = Get-Content (Join-Path $PSScriptRoot "tests/test_python_cache_v0596.py") -Raw -Encoding UTF8
+$testRunner = Get-Content (Join-Path $PSScriptRoot "test.ps1") -Raw -Encoding UTF8
+if ($testRunner -notmatch 'PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache' -or $cacheTests -notmatch 'sys.executable' -or $cacheTests -notmatch 'PYTHONDONTWRITEBYTECODE') {
+  throw 'V0.5.96 missing isolated Python cache or real import regressions.'
+}
+Write-Host '[OK] Isolated Python test cache V0.5.96 contract' -ForegroundColor Green
+
+# Check daemon readiness before the first Docker-dependent test.
+. (Join-Path $PSScriptRoot "docker-engine.ps1")
+& (Join-Path $PSScriptRoot "tests/test-docker-engine-v0595.ps1")
+Assert-TrafficDockerEngine
+
+# Keep Python caches inside each disposable container. Same-size release edits can
+# share extracted ZIP timestamps; -B alone still reads stale host .pyc files.
+Invoke-Step "Isolated Python bytecode cache V0.5.96 (stdlib-only)" {
+  docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 -v "${root}:/src" -w /src python:3.14.7-slim `
+    python -m unittest discover -s scripts/tests -p test_python_cache_v0596.py -v
+}
+
 Invoke-Step "Quiet startup and isolated pip warning contract (stdlib-only)" {
-  docker run --rm -v "${root}:/src" -w /src python:3.14.7-slim `
+  docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 -v "${root}:/src" -w /src python:3.14.7-slim `
     python -m unittest discover -s scripts/tests -p test_startup_silence_v0581.py -v
 }
 
+Invoke-Step "Docker Linux engine readiness V0.5.95 (stdlib-only)" {
+  docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 -v "${root}:/src" -w /src python:3.14.7-slim `
+    python -m unittest discover -s scripts/tests -p test_docker_engine_v0595.py -v
+}
+
 Invoke-Step "Release version drift regression (stdlib-only)" {
-  docker run --rm -v "${root}:/src" -w /src python:3.14.7-slim `
+  docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 -v "${root}:/src" -w /src python:3.14.7-slim `
     python scripts/version-contract.py
   if ($LASTEXITCODE -ne 0) { throw "Release version metadata drift." }
-  docker run --rm -v "${root}:/src" -w /src python:3.14.7-slim `
+  docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 -v "${root}:/src" -w /src python:3.14.7-slim `
     python -m unittest discover -s scripts/tests -p test_version_contract.py -v
 }
 
 Invoke-Step "Release packaging line endings and tag safety V0.5.89 (stdlib-only)" {
-  docker run --rm -v "${root}:/src" -w /src python:3.14.7-slim `
+  docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 -v "${root}:/src" -w /src python:3.14.7-slim `
     python -m unittest discover -s scripts/tests -p test_release_eol_v0589.py -v
 }
 
 Invoke-Step "Direct Shadow offline counterfactual tests (stdlib-only)" {
-  docker run --rm -v "${root}:/src" -w /src python:3.14.7-slim `
+  docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 -v "${root}:/src" -w /src python:3.14.7-slim `
     python -m unittest discover -s scripts/tests -p test_direct_shadow_578.py -v
 }
 
 Invoke-Step "GT case forensics unit tests (stdlib-only)" {
-  docker run --rm -v "${root}:/src" -w /src python:3.14.7-slim `
+  docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 -v "${root}:/src" -w /src python:3.14.7-slim `
     python -m unittest discover -s scripts/tests -p test_benchmark_forensics.py -v
 }
 
 Invoke-Step "V0.5.92 verified crossing-cycle witness audit (stdlib-only)" {
-  docker run --rm -v "${root}:/src" -w /src python:3.14.7-slim `
+  docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 -v "${root}:/src" -w /src python:3.14.7-slim `
     python -m unittest discover -s scripts/tests -p test_audit_crossing_cycles_v0592.py -v
   if ($LASTEXITCODE -ne 0) { throw "V0.5.92 crossing-cycle witness tests failed." }
   $helper = Get-Content (Join-Path $root 'frontend/src/benchmark-passage-cycles.js') -Raw -Encoding UTF8
@@ -2400,34 +2438,34 @@ Invoke-Step "V0.5.91 benchmark review navigation UI contract" {
 }
 
 Invoke-Step "V0.5.90 verified unmatched-crossing review queue (stdlib-only)" {
-  docker run --rm -v "${root}:/src" -w /src python:3.14.7-slim `
+  docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 -v "${root}:/src" -w /src python:3.14.7-slim `
     python -m unittest discover -s scripts/tests -p test_review_benchmark_errors_v0590.py -v
   if ($LASTEXITCODE -ne 0) { throw "V0.5.90 review queue tests failed." }
 }
 
 Invoke-Step "V0.5.90 verified benchmark comparison with GT-free mode (stdlib-only)" {
-  docker run --rm -v "${root}:/src" -w /src python:3.14.7-slim `
+  docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 -v "${root}:/src" -w /src python:3.14.7-slim `
     python -m unittest discover -s scripts/tests -p test_compare_benchmark_exports_v0587.py -v
   if ($LASTEXITCODE -ne 0) { throw "V0.5.90 benchmark comparison tests failed." }
 }
 
 Invoke-Step "Replay audit unit tests (stdlib-only)" {
-  docker run --rm -v "${root}:/src" -w /src python:3.14.7-slim `
+  docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 -v "${root}:/src" -w /src python:3.14.7-slim `
     python -m unittest discover -s scripts/tests -p test_replay_diff.py -v
 }
 
 Invoke-Step "Raw ID Continuity Guard V0.5.82 regression (stdlib-only)" {
-  docker run --rm -v "${root}:/src" -w /src python:3.14.7-slim `
+  docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 -v "${root}:/src" -w /src python:3.14.7-slim `
     python -m unittest discover -s scripts/tests -p test_raw_id_audit_v0582.py -v
 }
 
 Invoke-Step "V0.5.83 GT-direction and replay witness tests (stdlib-only)" {
-  docker run --rm -v "${root}:/src" -w /src python:3.14.7-slim `
+  docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 -v "${root}:/src" -w /src python:3.14.7-slim `
     python -m unittest discover -s scripts/tests -p test_gt_replay_witness_v0583.py -v
 }
 
 Invoke-Step "V0.5.84 raw-provenance diagnostics contract (stdlib-only)" {
-  docker run --rm -v "${root}:/src" -w /src python:3.14.7-slim `
+  docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 -v "${root}:/src" -w /src python:3.14.7-slim `
     python -m unittest discover -s scripts/tests -p test_raw_provenance_v0584.py -v
 }
 
@@ -2519,12 +2557,12 @@ Invoke-Step "V0.5.94 anchor stability and HumanGuard decision audit contract" {
 }
 
 Invoke-Step "Backend syntax check" {
-  docker run --rm -v "${root}:/src" -w /src/backend python:3.14.7-slim python -m compileall -q app tests alembic
+  docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 -v "${root}:/src" -w /src/backend python:3.14.7-slim python -m compileall -q app tests alembic
 }
 
 Invoke-Step "Backup worker syntax + unit tests" {
   # pytest is installed only into a disposable Docker container, not the host.
-  docker run --rm `
+  docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 `
     -e PIP_ROOT_USER_ACTION=ignore `
     -e PIP_DISABLE_PIP_VERSION_CHECK=1 `
     -v "${root}:/src" -w /src/backup-worker python:3.14.7-slim `
@@ -2532,11 +2570,11 @@ Invoke-Step "Backup worker syntax + unit tests" {
 }
 
 Invoke-Step "AI service syntax check" {
-  docker run --rm -v "${root}:/src" -w /src/ai-service python:3.14.7-slim python -m compileall -q app tests
+  docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 -v "${root}:/src" -w /src/ai-service python:3.14.7-slim python -m compileall -q app tests
 }
 
 Invoke-Step "Backend unit tests" {
-  docker run --rm `
+  docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 `
     -e DATABASE_URL_OVERRIDE=sqlite+pysqlite:///:memory: `
     -e AI_SERVICE_URL=http://127.0.0.1:8001 `
     -e AI_SHARED_TOKEN=TrafficAI-V068-Test-Only `
@@ -2548,7 +2586,7 @@ Invoke-Step "Backend unit tests" {
 }
 
 Invoke-Step "AI service unit tests" {
-  docker run --rm `
+  docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 `
     -e PYTHONPATH=/src/ai-service `
     -e AI_DATASET_ROOT=/tmp/traffic-ai-tests/datasets `
     -e AI_TRAINING_ROOT=/tmp/traffic-ai-tests/training-runs `

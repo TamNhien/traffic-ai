@@ -9,7 +9,7 @@ import { buildReviewQueue, filterReviewQueue, reviewSeekStart } from './benchmar
 import { buildPassageCycleReview } from './benchmark-passage-cycles.js'
 import { buildHumanGuardAuditView } from './human-guard-audit.js'
 
-const APP_VERSION = '0.5.94'
+const APP_VERSION = '0.5.96'
 const vehicleLabels = {
   motorcycle: 'Xe máy', bicycle: 'Xe đạp', car: 'Ô tô', bus: 'Xe buýt', truck: 'Xe tải', other: 'Khác'
 }

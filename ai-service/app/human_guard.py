@@ -234,16 +234,24 @@ def human_dominates_two_wheel_candidate(
             and ph / th >= float(min_height_ratio)
         )
     )
-    if not geometry_dominates:
-        return HumanGuardDecision(False, overlap_iou=iou, target_coverage=coverage)
-
     person_conf = float(person_confidence)
     direct_vehicle_conf = float(vehicle_evidence_confidence)
+    direct_competitive = direct_vehicle_conf >= max(0.20, person_conf - float(confidence_margin) - 0.03)
+    if not geometry_dominates:
+        # V0.5.95: a weak PERSON overlap cannot discard a competing direct
+        # vehicle opinion. Otherwise a previously rejected rider stays rejected
+        # even after the same crop provides positive motorcycle/bicycle evidence.
+        # Nearby evidence or motion alone still leaves this branch neutral.
+        if 0.0 <= person_conf <= 1.0 and 0.0 <= direct_vehicle_conf <= 1.0 and direct_competitive:
+            return HumanGuardDecision(
+                False, "rider_evidence", person_conf, direct_vehicle_conf,
+                float(nearby_vehicle_evidence_confidence), iou, coverage, rider_supported=True,
+            )
+        return HumanGuardDecision(False, overlap_iou=iou, target_coverage=coverage)
+
     nearby_vehicle_conf = float(nearby_vehicle_evidence_confidence)
     target_conf = float(target_confidence)
     motion_ratio = max(0.0, float(speed_ratio))
-
-    direct_competitive = direct_vehicle_conf >= max(0.20, person_conf - float(confidence_margin) - 0.03)
     nearby_competitive = nearby_vehicle_conf >= max(float(min_nearby_rider_confidence), person_conf - 0.34)
     motion_supported = (
         motion_ratio >= float(min_rider_speed_ratio)

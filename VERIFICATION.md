@@ -1,3 +1,182 @@
+# V0.5.96 — Kiểm chứng sửa Python bytecode cache
+
+Baseline là full source .95, SHA256 `0966e3d02e908b7ee11cb5936afda3a75ad46cf20e436e5edbc49b998ec9dd4d`, 311 file. Bản .96 sửa môi trường chạy test và cách đóng gói. Không sửa predicate HumanGuard, tracking, counter, worker, rescuer, dedup, matcher hoặc GT.
+
+## Log mới do người dùng cung cấp
+
+File `Văn bản đã dán (1)(20261017-124555).txt` có hai lần chạy .95. Mỗi lần đều qua static version contract `0.5.95`, migration `0109_docker_guard_v0595`, host Docker readiness **26 assertions** và các bước Docker trước backend tests.
+
+Backend pytest mỗi lần: **186 passed / 3 failed**, lần lượt 8.18 s và 8.63 s. Ba lỗi là `test_root_metadata`, `test_backend_version_metadata`, `test_v0533_version`: app trả .94 trong khi VERSION đọc từ source là .95. Hai lần lặp cùng scenario không được cộng thành 52 native tests hoặc 372 backend tests mới. Đây là bằng chứng người dùng chạy Windows/Docker .95, không phải .96 tại môi trường này. Lỗi `[ERROR]`/`[FAIL]` trong các test âm về replay trước đó là output dự kiến và các test đó vẫn `ok`.
+
+## Tái lập nguyên nhân bằng source đã gửi
+
+Lấy chính `backend/app/main.py` từ ZIP .94 và .95: mỗi file 1181 byte, khác version; cả hai có ZIP timestamp `2026-10-17 00:00:00`. Tạo `.pyc` timestamp-based bằng CPython rồi chép bytes .95 lên cùng mtime/kích thước. Tiến trình Python riêng dùng SourceFileLoader thật nhận code constants .94, mặc dù source đọc trực tiếp có .95.
+
+| Cách đọc source sau overlay | Kết quả tái lập |
+|---|---|
+| Cache mặc định | Còn code .94 |
+| `-B` | Còn code .94 |
+| Chỉ `PYTHONDONTWRITEBYTECODE=1` | Còn code .94 |
+| `PYTHONPYCACHEPREFIX` mới | Code .95 |
+
+Reproducer không thực thi FastAPI hoặc gọi HTTP endpoint: nó kiểm đúng bytecode mà loader import sẽ nhận. Vì vậy không gọi đây là chạy lại ba backend HTTP test trong môi trường hiện tại. Bằng chứng dùng artifact thật và cơ chế CPython thật phù hợp trực tiếp với lỗi version trong log; không sửa expected version để làm test đạt.
+
+8 regression mới gồm subprocess import thật, no-write flags, prefix mới, prefix cũ bị tái dùng, compileall với prefix riêng và coverage các Docker Python calls. Bộ kiểm tra chạy trên Python 3.12.14 tại đây; log Windows dùng Docker Python pin 3.14.7. Chưa chạy lại container 3.14.7 .96 ở môi trường này.
+
+## Thay đổi và rà soát cache
+
+19 lệnh Docker Python cũ giữ nguyên command text khi bỏ hai env flags mới; thêm một bước regression, tổng 20 lệnh đều có prefix `/tmp/traffic-ai-test-pycache` và no-write env. Prefix nằm ngoài `/src` bind mount, không có volume gắn vào nó, và thuộc container `--rm` mới. Việc tái sử dụng một prefix đã chứa cache cũ vẫn có thể gây stale import; regression bao phủ điều đó, nên thiết kế dựa vào cache filesystem mới của từng container chứ không coi prefix string tự nó luôn mới.
+
+`compileall` chủ động tạo bytecode kể cả khi bật no-write, nhưng khi có prefix thì output ở `/tmp` của container. `.dockerignore` không áp dụng cho bind mount khi chạy test; nó bảo vệ build context riêng. Backend/AI được bổ sung `**/__pycache__`, `**/*.pyc`, `**/*.pyo`, giữ các rule cũ. Docker hỗ trợ `**` cho mọi độ sâu; tham khảo [tài liệu build context chính thức](https://docs.docker.com/build/concepts/context/). Chưa gọi Docker build/matcher thực tế tại đây, không dùng Python glob giả làm Docker để tuyên bố đã build.
+
+Node Docker command byte-exact .95. Docker readiness helper, native harness, start.ps1 và toàn bộ thuật toán AI giữ nguyên .95; chỉ metadata version trong app main/backup đổi .96. Không xóa cache/source/data trên máy người dùng, không đổi cache Docker toàn hệ thống hoặc đặt env host lâu dài.
+
+Cách đóng ZIP chuyển từ mốc 00:00 cố định sang UTC build timestamp (độ phân giải DOS 2 giây), có kiểm tra tránh trùng timestamp của các Python member đã thay đổi so với .95. Audit ZIP yêu cầu mtime mới cho từng Python member cũ có bytes đổi. Cache isolation vẫn cần thiết và không phụ thuộc timestamp archive.
+
+## Kiểm thử .96 thực thi tại đây
+
+| Nhóm | Đạt |
+|---|---:|
+| AI offline / worker helpers | 689 |
+| Backend offline | 129 |
+| Scripts stdlib unittest | 95 |
+| Benchmark-gate standalone | 5 |
+| Backup-worker standalone | 4 |
+| Node built-in tests | 33 |
+| Tổng | 955 |
+
+63 HTTP/ORM test chưa thực thi vẫn đúng danh sách lịch sử (3 AI, 60 backend). 1 conditional native PowerShell runner mới từ .95 tiếp tục bỏ qua vì thiếu pwsh tại đây; bằng chứng 26 assertions Windows đã đạt nằm trong log người dùng .95 và được ghi riêng. Không cộng native assertions hoặc các phép tái lập bổ sung vào 955.
+
+978 Python test identities/thân AST cũ và cả 6 Node test file cũ (33 tests) giữ nguyên byte/AST tương ứng. Thêm 8 Python regression, tổng 986 definitions. Toàn bộ 79 thân hàm Assert lịch sử giữ nguyên. Không nới test hoặc sửa expected version; test metadata tiếp tục so với VERSION hiện hành.
+
+313 source file; 210 Python parse/compile; 31 PowerShell UTF-8/CRLF không BOM, text khác LF. 790 internal imports, 1090 literal PowerShell source predicates, 121 cặp UI/runtime; Babel 18 JS/JSX / 45 import-export symbols. 311 code/config hashes đóng băng, README/VERIFICATION được duyệt riêng trước archive audit. Source retains đủ 311 baseline paths, chỉ thêm test và migration.
+
+38 release checks đạt: 17 Git/artifact cục bộ thực thi, 14 static, 4 simulation, 3 Bash syntax. Không push GitHub hoặc tạo Release thật.
+
+## Giới hạn và sử dụng
+
+Chưa thực thi .96 native PowerShell/Docker, full pytest HTTP/ORM, PostgreSQL/migration live, pinned npm install/audit/Vite build, browser hoặc GPU/full-video inference. Python 3.12.14 và Node 24.19.0 có sẵn; môi trường thiếu pytest/FastAPI/SQLAlchemy/Alembic/httpx/httpx2/cv2/Torch/pwsh/Docker. Các kết quả runtime khác ở phần lịch sử không được coi là phép chạy .96 mới.
+
+Benchmark #68/session 195 (bản .94) vẫn là kết quả gần nhất: 149 GT / 149 AI / 142 khớp / 7 lọt / 7 dư, F1 95.302%. .96 không thay thuật toán nên không tạo hoặc suy ra F1 mới. Bản .95 khôi phục rider cần đánh giá bằng lần inference mới sau khi quy trình test chạy thông suốt.
+
+Migration metadata `0110_pycache_v0596`, parent `0109_docker_guard_v0595`, chỉ đổi schema_version .96 / downgrade .95; không sửa GT/events. Giữ .env/.git/models/video/volumes khi chép source.
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+
+# Test
+.\scripts\test.ps1
+
+# Khởi động
+.\scripts\start.ps1
+
+# Tự test, commit, push GitHub, tạo tag v0.5.96 và Release
+.\scripts\publish.ps1
+```
+
+Mở https://traffic-ai.test:8443, Ctrl+F5. Không tạo lại Admin. Các mục sau là lịch sử giữ nguyên byte.
+
+---
+
+# V0.5.95 — HumanGuard recovery và Docker Linux preflight
+
+Full source tiếp tục đúng ZIP V0.5.94, SHA256 `f3cb76c0dd1562273dec2fa1601d9299eaf26f9b8fd55300aaeac6236640dfe7`, 305 file. Đã thực thi **947 kiểm thử offline/Node, 0 lỗi**; PowerShell native và Docker không có trong môi trường này.
+
+## Kết quả kiểm tra source
+
+| Nhóm thực thi | Đạt |
+|---|---:|
+| AI offline / worker helpers thực tế | 689 |
+| Backend offline | 129 |
+| Scripts stdlib unittest | 87 |
+| Benchmark-gate standalone | 5 |
+| Backup-worker standalone | 4 |
+| Node built-in tests | 33 |
+| Tổng | 947 |
+
+63 test HTTP/ORM chưa thực thi là đúng danh sách lịch sử (3 AI, 60 backend). Có **1 test mới bỏ qua riêng** vì thiếu `pwsh`: runner của harness PowerShell native. Không gộp trường hợp này vào danh sách loại trừ HTTP/ORM. 8 kiểm tra Python của Docker chỉ xác minh source contract; các kiểm tra subprocess/timeout/chính sách daemon thực tế bằng PowerShell chưa được chạy tại đây. Chúng được tích hợp chạy trên host Windows trước preflight và test đầu tiên cần Docker.
+
+Giữ nguyên toàn bộ 964 Python test identities/thân AST cũ, cả 6 file Node test cũ (33 tests), 79 thân hàm Assert lịch sử. Thêm 5 AI test và 9 Python scripts test definitions, tổng 978 definitions; trong 9 mới có 8 static contract đạt và 1 native runner chưa chạy. Các test cũ không bị sửa hoặc bỏ để làm bản mới đạt.
+
+311 source file, 208 Python parse/compile hợp lệ, 31 PowerShell UTF-8/CRLF không BOM, text khác LF. Đã đối chiếu 790 internal imports, 1087 literal PowerShell source predicates và 121 cặp trường UI/runtime. Babel parse 18 JS/JSX / 45 import-export symbols; frontend ngoài version không đổi. 309 code/config/fixture hashes đóng băng; README/VERIFICATION review riêng, sau đó kiểm CRC/đường dẫn/byte equality của ZIP.
+
+38 kiểm tra release giữ kết quả đạt: 17 Git/artifact cục bộ thực thi, 14 static, 4 mô phỏng, 3 Bash syntax. Không push GitHub/tạo Release thật. Kiểm tra độc lập HumanGuard trên 35.280 tổ hợp box/ý kiến hợp lệ xác nhận thay đổi chỉ thuộc nhánh direct-positive geometry-neutral; các precondition và 10.080 trường hợp PERSON chiếm ưu thế hình học giữ kết quả cũ. Đây là kiểm tra bổ sung, không cộng vào 947.
+
+## Input #68 / session 195 chạy V0.5.94
+
+ZIP bảy member an toàn, CRC và toàn bộ manifest bytes/SHA hợp lệ; gzip được đọc đến EOF. Trace JSONL từ RAR giống tuyệt đối trace giải nén: 325.953.712 byte, SHA256 `1bbc7b8789aece8a57ca94ac02fb7c0a8c83b66380ae4449b12a28d72981fa87`. Có 23.650 frame liên tục; RAR gồm 165 ảnh và một trace session 195.
+
+166 proposal = 28 direct + 95 interpolated + 43 rescued. 166 terminal receipt có source fields khớp toàn bộ, 149 created khớp tập DB events + 17 deduplicated; delivery drain complete, pending/dropped 0. Không có bằng chứng mất event khi gửi backend. 149 GT nội dung/thứ tự clone và config byte-exact so với session 194, giữ đủ các mark cùng semantic.
+
+Matcher thực tế tái tạo mọi base/matched/missed/false-positive field của cả hai báo cáo:
+
+| Chỉ số | #67 / 194 | #68 / 195 |
+|---|---:|---:|
+| GT / AI | 149 / 151 | 149 / 149 |
+| Khớp / Lọt / Dư | 140 / 9 / 11 | 142 / 7 / 7 |
+| Recall | 93,9597% | 95,3020% |
+| Precision | 92,7152% | 95,3020% |
+| F1 | 93,3333% | 95,3020% |
+| Đúng class / đúng hướng | 137 / 138 | 139 / 140 |
+| Đúng cả time/class/direction | 135 | 137 |
+
+Hết lọt tại GT OUT 525.21028 s → AI 525.3925 s (194513) và GT IN 816.964611 s → AI 816.9225 s (345897). Không có GT lọt mới. Ba mark sai loại giữ nguyên. Hướng startup 0.16 s được sửa, có sai hướng mới tại GT OUT 754.558486 s → AI IN 754.045 s (296297); không tuyên bố không có regression.
+
+FP 491.92 s của 181574 vốn đã tồn tại và khớp ở 194; 195 có proposal/event 182056 OUT 492.2 s gần GT hơn nên matcher đổi ownership, event cũ trở thành unmatched. Chưa chứng minh cùng phương tiện nên không thêm dedup tùy tiện. 345897 vẫn có OUT unmatched 811.925 s dù IN thật 816.9225 s đã được khôi phục. Tổng AI bằng GT không có nghĩa là hết lọt/dư.
+
+Refiner checks 2195 → 1419 và HumanGuard rejections 37 → 38; config/model path không chứng minh cùng weights/model availability/toàn bộ runtime. Điểm 95,302% thuộc lần chạy .94 được gửi, **không phải điểm .95 và không suy ra mọi thay đổi do một fix**.
+
+## Sửa HumanGuard có bằng chứng
+
+Track 143399 bị rejected từ frame 9806. Frame 9822 có direct vehicle 0.700684 / PERSON 0.672363, IoU 0.357267 / coverage 0.463132; PERSON không đủ ưu thế hình học. Hàm .94 trả neutral sớm nên bỏ mất direct evidence, policy giữ rejected. Các candidate frame 9929 (source 397.020933 s) và 9938 (397.374 s) tiếp tục bị chặn; GT quanh 397.288 s vẫn lọt.
+
+.95 đưa comparator **direct_competitive hiện có** lên trước nhánh geometry-neutral, chỉ nhánh này được trả rider_evidence khi direct >= max(0.20, person - confidence_margin - 0.03), cả person/direct trong [0,1]. Không đổi ngưỡng. NaN, ±Inf, âm hoặc >1 không khôi phục ở nhánh mới. Nhánh PERSON chiếm ưu thế hình học, thiếu PERSON, box không giống người, class ngoài hai bánh giữ cách xử lý cũ. Nearby vehicle hoặc motion đơn lẻ vẫn neutral trong nhánh mới; không dùng confidence primary/periodic khác nguồn thay cho crop verifier.
+
+`HumanGuardTrackPolicy`, tracking, counting, toàn bộ rescuer, worker và backend dedup byte-exact .94. Chỉ app/main.py đổi version; human_guard.py là thay đổi AI thuật toán duy nhất. Guard audit schema/caching/stride và số lần inference giữ nguyên.
+
+Fixture 32.425 byte SHA256 `4ed6eddc58b048361108a7331c4b7382773df8dc8486f130532b64dfef8ed5ec` chứa 26 quan sát fresh đã ghi. Kiểm tra predicate/policy/cache thực tế tái tạo đầy đủ mọi decision/action/status .94 trong fixture rồi so với .95: rejected 9806 → released 9822; vẫn có pending 9880 khi có ý kiến bất lợi, rider 9896 và tại candidate 9929/9938. Force cùng frame không gọi verifier lần hai và không tạo thêm strike. Các test bao gồm nearby/motion không đủ, người đi bộ mạnh vẫn cần các frame riêng biệt, precondition cũ và score lỗi.
+
+Trace không có PERSON rectangle/width-ratio; fixture chủ động đưa IoU/coverage đã ghi vào phép kiểm tra, không giả vờ đã tái tạo crop hoặc inference model. Reproducer không chạy lại detector/tracker/guard models, dispatcher/deferred crossing/counter/backend transaction toàn pipeline. Phân tích guard diện rộng còn dữ liệu hình học không tái dựng được nên chỉ là thăm dò; không dùng số lượng track giả định giải phóng làm hiệu quả. **Chưa có F1 .95 hoặc bằng chứng 7 lượt lọt giảm còn bao nhiêu.**
+
+## Docker engine và log Windows
+
+Log .94 cho thấy static contracts đã chạy nhưng lệnh Docker đầu tiên báo pipe `dockerDesktopLinuxEngine` không tồn tại; start sau đó query volume thất bại rồi hiểu nhầm là cần tạo volume. Chưa có bằng chứng volume PostgreSQL hỏng hoặc cần xóa.
+
+Shared `scripts/docker-engine.ps1` chỉ định nghĩa functions khi import. Probe gọi Docker executable qua ProcessStartInfo.ArgumentList, không qua shell, không phụ thuộc $LASTEXITCODE. Đọc stdout/stderr đồng thời; WaitForExit và chờ drain chia chung deadline, timeout dừng process probe và Dispose. Không in stderr/endpoint chứa dữ liệu nhạy cảm.
+
+Engine Linux khỏe được chấp nhận ngay, bao gồm remote/custom context, không ngủ cố định và không lookup context thêm. Khi chưa khỏe, auto mở Desktop chỉ trên Windows + context desktop-linux + endpoint npipe dockerDesktopLinuxEngine đã xác minh. Mở một lần nếu chưa có tiến trình Desktop; nếu đã mở chỉ chờ. Tổng chờ engine cấu hình mặc định 120 giây, mỗi probe tối đa 5 giây theo phần thời gian còn lại. Docker CLI chưa có, Windows engine, remote/custom chưa sẵn sàng hoặc timeout sẽ dừng có hướng dẫn; không tự sửa context/service/WSL hoặc xóa volume.
+
+start.ps1 gọi preflight trước .env/secret/certificate/volume; kiểm LASTEXITCODE của volume ls trước khi quyết định tạo volume. test.ps1 chạy harness host độc lập daemon trước preflight và trước Docker-dependent step đầu tiên. Python source contracts kiểm thứ tự/timeout/dữ liệu; native harness có subprocess thật, stdout+stderr lớn, nonzero exit, hung process và chính sách mocked endpoint/launch/deadline. Các mock nằm trong child script scope, env được khôi phục; **native harness chưa thực thi tại đây vì không có pwsh**.
+
+Toàn bộ dòng lịch sử start/test được giữ nguyên theo thứ tự, chỉ chèn preflight, volume-error check, test invocation và contract .95. User chưa cung cấp log chạy .95, vì vậy không nói Docker Desktop đã được mở hoặc hệ thống Windows của bạn đã sửa xong từ xa.
+
+## Môi trường và lệnh sử dụng
+
+Python 3.12.14 / Node 24.19.0 hiện có; chưa có pytest/FastAPI/SQLAlchemy/Alembic/httpx/httpx2/cv2/Torch/PowerShell/Docker. Không chạy HTTP/ORM/PostgreSQL migration live, pinned npm install/audit/Vite build, browser/React DOM hay GPU/full-video .95. Dependencies pin và các feature/UI cũ giữ nguyên.
+
+Migration `0109_docker_guard_v0595`, parent `0108_guard_audit_v0594`, chỉ đồng bộ schema_version .95/downgrade .94, không sửa GT/events. Không tạo lại Admin, không publish GitHub thật.
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+
+# Test
+.\scripts\test.ps1
+
+# Khởi động
+.\scripts\start.ps1
+
+# Tự test, commit, push GitHub, tạo tag v0.5.95 và Release
+.\scripts\publish.ps1
+```
+
+Mở https://traffic-ai.test:8443, Ctrl+F5. Giữ .env/.git/models/video/volumes khi cập nhật source; chạy lại cùng clip/vạch/model, chép GT đã review rồi xuất benchmark ZIP mới sau khi có GT. Các phần dưới là lịch sử kiểm chứng .94 và các bản trước được giữ nguyên byte.
+
+---
+
 # V0.5.94 — Kiểm chứng ổn định điểm neo và Human Guard audit
 
 Bản này tiếp tục đúng ZIP full source .93 có SHA256 `a682bac12333683a5c8dec2f563c27c3989e73b0abee19c52a7ae4945d6b0f36`, 300 file. Đã thực thi **934 kiểm thử sản phẩm, 0 lỗi**, bằng harness offline/hàm thực tế và Node; không gọi đây là một lần chạy pytest/Docker/PowerShell đầy đủ.
