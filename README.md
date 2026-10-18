@@ -1,3 +1,47 @@
+# V0.5.104 — Per-track Gate Decision Provenance
+
+This release adds a **read-only** primary gate decision reason for each canonical
+track observation and propagates it to the benchmark trace, plus the final
+secondary acceptance/rejection signal. Reasons include dead-band, missing an
+opposite-side sample, road-zone rejection, finite-segment rejection, cooldown,
+late confirmation, insufficient motion, long-gap rescue validation and cycles.
+
+`scripts/audit-gate-coverage.ps1` now summarizes per-track gate reasons in
+JSON/CSV/Markdown and reports the number of frames without road-zone tracks
+around each mismatch. For old exports, reasons are explicitly marked
+`not-recorded-in-export`; do not backfill or infer them from aggregate counters.
+
+**No detector or counting thresholds changed.** No GT marks, historical events,
+precision/recall scoring, and database data were altered. In particular, a
+geometric span is insufficient evidence to automatically count a vehicle.
+The 149 AI events in Benchmark #74 and #75 are identical, so F1 remains 96.0%
+for the supplied runs. A new inference replay using this release is required
+before concluding whether any policy change would improve 6 misses / 6 extras.
+
+Database migration `0118_gate_decision_v05104` updates version metadata only.
+Six new runtime and six new report regressions, with contract coverage.
+
+## Windows commands
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+.\scripts\test.ps1
+.\scripts\start.ps1
+
+.\scripts\audit-gate-coverage.ps1 `
+  -Export ".\traffic-ai-benchmark-75-session-202.zip" `
+  -OutputDirectory ".\gate-coverage-audit"
+
+# When tests and inference are validated on Windows:
+.\scripts\publish.ps1
+```
+
+**Safe update:** Back up `.env`, PostgreSQL volumes, model weights, videos and
+user uploads before replacing the source. No admin creation required.
+
+---
+
 # V0.5.103 — Verified Finite-Gate Coverage Audit
 
 ## Release scope

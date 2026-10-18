@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""V0.5.103: verified, read-only near-gate spatial witnesses for benchmark misses/extras.
+"""V0.5.104: verified gate geometry and per-track primary decision evidence.
 
 Never infers physical vehicle identity or changes Ground Truth, source events or scoring.
 A crossing-like *span* is a review candidate, not permission to insert a count.
@@ -13,7 +13,7 @@ import importlib.util
 import json
 import math
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -78,6 +78,14 @@ def case_witnesses(case: dict, observations: list[dict], *, near_radius: float =
         if not near and not spans:
             continue
         best = min(near or values, key=lambda v: (abs(v['signed']),abs(v['time']-case['time_s'])))
+        primary_decisions = Counter(
+            v['primary_gate_decision'] for v in values
+            if isinstance(v.get('primary_gate_decision'), str) and v['primary_gate_decision']
+        )
+        secondary_rejections = Counter(
+            v['secondary_gate_rejection'] for v in values
+            if isinstance(v.get('secondary_gate_rejection'), str) and v['secondary_gate_rejection']
+        )
         candidates.append({
             'track_id': tid, 'label': best['label'],
             'raw_track_id': best.get('raw_track_id'),
@@ -87,6 +95,9 @@ def case_witnesses(case: dict, observations: list[dict], *, near_radius: float =
             'gate_projection': round(best['u'],4),
             'near_frame_count': len(near),
             'candidate_spans': spans,
+            'primary_gate_decisions': dict(sorted(primary_decisions.items())),
+            'secondary_gate_rejections': dict(sorted(secondary_rejections.items())),
+            'decision_samples': sum(primary_decisions.values()),
         })
     candidates.sort(key=lambda x:(-int(x['candidate_spans']>0),x['min_gate_distance'],abs(x['closest_time_s']-case['time_s']),x['track_id']))
     result = dict(case)
@@ -97,6 +108,10 @@ def case_witnesses(case: dict, observations: list[dict], *, near_radius: float =
         finite_segment_span_candidates=sum(v['candidate_spans'] for v in candidates),
         nearest_tracks=candidates[:6],
         track_candidates_truncated=max(0,len(candidates)-6),
+        gate_decision_provenance=(
+            'per-track-present' if any(v.get('decision_samples') for v in candidates)
+            else 'not-recorded-in-export'
+        ),
         scope='observed_bbox_geometry_only',
         physical_identity_proven=False,
         auto_recount_permitted=False,
@@ -125,6 +140,7 @@ def build_report(export: Path, *, window: float = 1.0, near_radius: float = .035
                 raise ValueError('Invalid case time')
         raw_cases.sort(key=lambda c:(c['time_s'],c['kind']))
         observations=[[] for _ in raw_cases]
+        frame_exposures=[[] for _ in raw_cases]
         geometry=None
         last_frame=0
         with z.open('benchmark-trace.jsonl.gz') as compressed, gzip.open(compressed,'rt',encoding='utf-8') as stream:
@@ -147,6 +163,10 @@ def build_report(export: Path, *, window: float = 1.0, near_radius: float = .035
                     raise ValueError('Missing gate geometry')
                 line_points=geometry['line']
                 width=int(geometry['frame_width']);height=int(geometry['frame_height'])
+                for idx in targets:
+                    road_tracks=d.get('road_tracks')
+                    if isinstance(road_tracks,int) and not isinstance(road_tracks,bool) and road_tracks>=0:
+                        frame_exposures[idx].append(road_tracks)
                 for row in d.get('gate_tracks',[]):
                     if not isinstance(row,dict):
                         continue
@@ -163,44 +183,58 @@ def build_report(export: Path, *, window: float = 1.0, near_radius: float = .035
                     if not (-.5<=u<=1.5 and abs(signed)<=.3):
                         continue
                     record={'track_id':tid,'raw_track_id':row.get('raw_track_id'),
-                            'label':row.get('label'),'frame':frame,'time':time,'u':u,'signed':signed}
+                            'label':row.get('label'),'frame':frame,'time':time,'u':u,'signed':signed,
+                            'primary_gate_decision':row.get('primary_gate_decision'),
+                            'secondary_gate_rejection':row.get('secondary_gate_rejection')}
                     for idx in targets:
                         observations[idx].append(record)
     result=[case_witnesses(c,items,near_radius=near_radius) for c,items in zip(raw_cases,observations)]
+    for case, exposures in zip(result,frame_exposures):
+        case['verified_window_frames'] = len(exposures)
+        case['road_tracks_min_in_window'] = min(exposures) if exposures else None
+        case['road_tracks_max_in_window'] = max(exposures) if exposures else None
+        case['road_tracks_zero_frames'] = sum(n==0 for n in exposures)
     return {
-        'format':'traffic-ai-verified-gate-coverage', 'version':1,
+        'format':'traffic-ai-verified-gate-coverage', 'version':2,
         'benchmark_id':integrity['benchmark_id'],'session_id':integrity['session_id'],
         'ground_truth_total':integrity['ground_truth_total'], 'ai_total':integrity['ai_total'],
         'matched':integrity['matched'], 'missed':integrity['missed'], 'extra':integrity['extra'],
         'verified_trace_sha256':integrity['source_trace_sha256'],
         'window_seconds':window,'near_gate_radius_normalized':near_radius,
         'frame_count_verified':last_frame, 'cases':result,
-        'disclaimer':'Geometry-only review. An observed span is not a validated crossing or physical identity. No event/GT/score edits.'
+        'disclaimer':'Geometry and decision provenance are review-only. A gate rejection is not proof of detector failure or physical vehicle identity. No event/GT/score edits.'
     }
 
 
 def write_report(report: dict, folder: Path) -> None:
     folder.mkdir(parents=True,exist_ok=True)
     (folder/'gate-coverage.json').write_text(json.dumps(report,ensure_ascii=False,indent=2,allow_nan=False)+'\n',encoding='utf-8')
-    headings=['time_s','kind','case_id','direction','vehicle_type','near_gate_tracks','finite_segment_span_candidates','unique_track_count','nearest_track_id','nearest_distance','nearest_projection']
+    headings=['time_s','kind','case_id','direction','vehicle_type','near_gate_tracks','finite_segment_span_candidates','unique_track_count','nearest_track_id','nearest_distance','nearest_projection','gate_decision_provenance','nearest_primary_decisions','nearest_secondary_rejections','road_tracks_zero_frames']
     with (folder/'gate-coverage.csv').open('w',encoding='utf-8-sig',newline='') as dest:
         writer=csv.DictWriter(dest,fieldnames=headings);writer.writeheader()
         for item in report['cases']:
             top=item['nearest_tracks'][0] if item['nearest_tracks'] else {}
             writer.writerow({**{k:item[k] for k in headings[:8]},
                 'nearest_track_id':top.get('track_id'),'nearest_distance':top.get('min_gate_distance'),
-                'nearest_projection':top.get('gate_projection')})
+                'nearest_projection':top.get('gate_projection'),
+                'gate_decision_provenance':item['gate_decision_provenance'],
+                'nearest_primary_decisions':json.dumps(top.get('primary_gate_decisions',{}),ensure_ascii=False),
+                'nearest_secondary_rejections':json.dumps(top.get('secondary_gate_rejections',{}),ensure_ascii=False),
+                'road_tracks_zero_frames':item.get('road_tracks_zero_frames',0)})
     md=[f'# Gate coverage audit — Benchmark #{report["benchmark_id"]} / Session #{report["session_id"]}',
         '',f'GT {report["ground_truth_total"]} | AI {report["ai_total"]} | matched {report["matched"]} | missed {report["missed"]} | extra {report["extra"]}',
         '',f'Window ±{report["window_seconds"]:.2f}s; normalized gate radius {report["near_gate_radius_normalized"]:.3f}.',
         '', '**Read-only evidence: do NOT automatically count, suppress or edit GT.**','',
-        '| Time | Kind | Case | Near tracks | Span candidates | Nearest track / distance |',
-        '|---:|---|---:|---:|---:|---|']
+        '| Time | Kind | Case | Near tracks | Span candidates | Closest track / distance | Decision evidence |',
+        '|---:|---|---:|---:|---:|---|---|']
     for row in report['cases']:
         top=row['nearest_tracks'][0] if row['nearest_tracks'] else None
         neighbor=f'{top["track_id"]} / {top["min_gate_distance"]:.4f}' if top else 'none'
-        md.append(f'| {row["time_s"]:.3f} | {row["kind"]} | {row["case_id"]} | {row["near_gate_tracks"]} | {row["finite_segment_span_candidates"]} | {neighbor} |')
-    md +=['','Span candidates are unverified geometric signs, NOT crossing events or same-vehicle matches. Review original clip before changing inference policy.','']
+        summary = ', '.join(f'{k}:{v}' for k,v in (top or {}).get('primary_gate_decisions',{}).items())
+        if not summary:
+            summary = 'not in legacy trace'
+        md.append(f'| {row["time_s"]:.3f} | {row["kind"]} | {row["case_id"]} | {row["near_gate_tracks"]} | {row["finite_segment_span_candidates"]} | {neighbor} | {summary} |')
+    md +=['','Gate decisions appear only in traces generated by V0.5.104 or newer. A geometric span or counter rejection is NOT proof of the correct physical vehicle. No automatic re-count or GT edits.','']
     (folder/'gate-coverage.md').write_text('\n'.join(md),encoding='utf-8')
 
 

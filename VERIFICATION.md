@@ -1,3 +1,16 @@
+# V0.5.104 — Verification and limitations
+
+- Base archive: V0.5.103 full source (349 files), all previous paths retained.
+- Tests: **747 AI** pass (using `httpx2` -> local `httpx` test-only alias), **195 backend** pass (local SQLite override and HTTPX alias), **128 Python script** pass with **1 native PowerShell test skipped**, **47 frontend Node** pass. Total **1117 passed, 1 skipped**.
+- Complete gate-coverage audit of Benchmark #75: 23650 verified frames, 12 cases (6 missed, 6 extra).
+- Counter/worker per-track reasons are read-only observations; no new counting acceptance or suppression branch.
+- SQLite and compatibility alias were used for isolated test execution only; neither is included in production source.
+- Full Windows PowerShell + Docker test.ps1, GPU inference, PostgreSQL integration, npm dependency install and frontend production bundle were **not** run here.
+- Logs in `docs/verification-v05104/`; a successful validation on the user Windows host is still required before publish.
+- Migration head `0118_gate_decision_v05104` updates schema-version metadata only.
+
+---
+
 # V0.5.103 — Source verification and limitations
 
 - Baseline: V0.5.102 full source ZIP, original 345 source files. All old file paths retained; 4 new source files; 349 total. Metadata bumped to V0.5.103 / Alembic `0117_gate_audit_v05103` (schema version only).

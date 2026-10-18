@@ -367,6 +367,8 @@ class _TrackGateState:
     first_frame: int | None = None
     total_samples: int = 0
     max_abs_distance_since_count: float = 0.0
+    last_primary_decision_frame: int = -1
+    last_primary_decision: str = "not-observed"
 
 
 @dataclass(slots=True)
@@ -1862,10 +1864,15 @@ class LineCrossingCounter:
         side = 0 if abs(distance) <= dead_band else (1 if distance > 0 else -1)
 
         state = self._tracks.setdefault(int(track_id), _TrackGateState())
+        # Read-only decision provenance. No change to counting policy or gate state.
+        state.last_primary_decision_frame = int(frame_index)
+        state.last_primary_decision = "observing"
+        self._last_external_reject_reason.pop(int(track_id), None)
         sample = _GateSample(int(frame_index), anchor, distance, side)
         if state.history and sample.frame_index <= state.history[-1].frame_index:
             # Aliases observed in the same source frame cannot supply a second
             # destination observation or re-arm an accepted passage.
+            state.last_primary_decision = "duplicate-frame-observation"
             return None
         if origin_probe is not None:
             origin_distance = signed_distance(origin_probe, a, b)
@@ -1896,6 +1903,7 @@ class LineCrossingCounter:
                 state.armed = True
                 self.passage_cycle_rearms += 1
                 state.history = deque([sample], maxlen=48)
+            state.last_primary_decision = "passage-not-rearmed"
             return None
 
         state.history.append(sample)
@@ -1903,8 +1911,10 @@ class LineCrossingCounter:
             # Never replay a crossing that happened during startup once the
             # grace window expires. Keep only the most recent side sample.
             state.history = deque([sample], maxlen=48)
+            state.last_primary_decision = "startup-grace"
             return None
         if side == 0:
+            state.last_primary_decision = "inside-dead-band"
             return None
 
         previous: _GateSample | None = None
@@ -1969,6 +1979,7 @@ class LineCrossingCounter:
                         origin_candidate = True
 
         if previous is None:
+            state.last_primary_decision = "no-opposite-side-observation"
             return None
 
         observation_gap = sample.frame_index - previous.frame_index
@@ -2031,6 +2042,7 @@ class LineCrossingCounter:
                 self.adaptive_cooldown_releases += 1
             else:
                 self.rejected_cooldown += 1
+                state.last_primary_decision = "cooldown"
                 return None
 
         # Crossing Engine 6.0: use the most local pair of observations that
@@ -2052,6 +2064,7 @@ class LineCrossingCounter:
             )
             if observed_crossing is None:
                 self.rejected_outside_segment += 1
+                state.last_primary_decision = "outside-finite-gate"
                 return None
             crossing_start, crossing_end, crossing = observed_crossing
         else:
@@ -2064,6 +2077,7 @@ class LineCrossingCounter:
             )
         if crossing is None:
             self.rejected_outside_segment += 1
+            state.last_primary_decision = "outside-finite-gate"
             return None
 
         # Origin rescue has a synthetic pre-side anchor. Its measured origin
@@ -2094,6 +2108,7 @@ class LineCrossingCounter:
             )
             if rescue_invalid:
                 self.rejected_rescue_validation += 1
+                state.last_primary_decision = "rescue-validation"
                 return None
 
             # V0.5.45 False Positive Closure 9.1: the longest history bridges
@@ -2114,6 +2129,7 @@ class LineCrossingCounter:
                 if strict_invalid:
                     self.rejected_long_gap_rescue += 1
                     self.rejected_rescue_validation += 1
+                    state.last_primary_decision = "long-gap-rescue-validation"
                     return None
 
             # V0.5.49: when a long-gap secondary crossing also spans multiple
@@ -2132,6 +2148,7 @@ class LineCrossingCounter:
                 if state.side_streak < self.lineage_rescue_confirm_samples and not lineage_strong:
                     self.rejected_lineage_rescue += 1
                     self.rejected_rescue_validation += 1
+                    state.last_primary_decision = "lineage-rescue-validation"
                     return None
 
         if self.road_zone is not None:
@@ -2166,6 +2183,7 @@ class LineCrossingCounter:
             )
             if not (anchors_ok and corridor_ok):
                 self.rejected_outside_road += 1
+                state.last_primary_decision = "outside-road-corridor"
                 return None
             if not (previous_strict and anchor_strict):
                 self.road_edge_rescues += 1
@@ -2185,18 +2203,22 @@ class LineCrossingCounter:
                 self.late_geometry_confirms += 1
             else:
                 self.rejected_unconfirmed_side += 1
+                state.last_primary_decision = "unconfirmed-destination-side"
                 return None
 
         perpendicular = abs(distance - previous.distance)
         min_motion = max(2.0, scale * self.min_crossing_motion_ratio)
         if perpendicular < min_motion:
+            state.last_primary_decision = "insufficient-normal-motion"
             return None
         if perpendicular / confirm_move_len < self.min_perpendicular_ratio:
+            state.last_primary_decision = "insufficient-normal-ratio"
             return None
 
         direction = "in" if previous.side < 0 < side else "out"
         if direction in state.counted_directions:
             self.rejected_same_direction_cycle += 1
+            state.last_primary_decision = "same-direction-cycle"
             return None
 
         self._capture_passage_rollback(int(track_id), direction, sample.frame_index, state)
@@ -2248,7 +2270,20 @@ class LineCrossingCounter:
             self.in_count += 1
         else:
             self.out_count += 1
+        state.last_primary_decision = "primary-accepted"
         return direction
+
+
+    def primary_decision_for(self, track_id: int, frame_index: int | None = None) -> str | None:
+        """Reason for the latest primary-gate decision, never a GT diagnosis.
+
+        Optional frame check prevents stale aliases being misreported as a
+        current-frame decision. State is owned by the existing track lifecycle.
+        """
+        state = self._tracks.get(int(track_id))
+        if state is None or (frame_index is not None and state.last_primary_decision_frame != int(frame_index)):
+            return None
+        return state.last_primary_decision
 
 
     def register_external_crossing(

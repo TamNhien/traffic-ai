@@ -2151,6 +2151,7 @@ class PipelineWorker(threading.Thread):
                             ),
                             lineage_size=self._continuity.lineage_size(track_id),
                         )
+                        gate_trace_track["primary_gate_decision"] = counter.primary_decision_for(track_id, frame_index)
                         if direction is not None:
                             gate_trace_track["primary_gate_direction"] = direction
                             span_clock_reconciliation_frame = anchor_span_rescuer.reconciliation_crossing_frame_for(
@@ -2195,6 +2196,12 @@ class PipelineWorker(threading.Thread):
                             ):
                                 direction = two_wheel_direction
                                 center_crossing_source = "two-wheel"
+                        gate_trace_track["final_gate_decision"] = (
+                            "secondary-accepted" if direction is not None and
+                            gate_trace_track.get("primary_gate_decision") != "primary-accepted"
+                            else gate_trace_track.get("primary_gate_decision")
+                        )
+                        gate_trace_track["secondary_gate_rejection"] = counter.external_rejection_reason_for(track_id)
                         if direction is not None:
                             # Center candidates are provisional until the main
                             # gate accepts. Commit every secondary passage once
