@@ -1,3 +1,55 @@
+# Traffic AI V0.5.97 — Rà soát track chồng lấp và đổi ID
+
+Bản này bổ sung bằng chứng quỹ đạo cho các ca AI đếm dư, sai hướng và sai loại. Sau khi cập nhật source và khởi động, chọn Benchmark #69, bấm **Đối chiếu lại**, rồi mở **Track chồng lấp và đổi ID** trong ca cần xem. Các nút Đầu/Cuối hoặc Trước/Sau đưa video tới đúng các quan sát đã lưu trong trace phiên 196; không cần tạo thêm benchmark để đọc lại bằng chứng này.
+
+## Chức năng mới
+
+- Hiện các track đồng thời có box lồng nhau, số frame cùng xuất hiện, mức phủ box nhỏ và mốc thời gian quan sát. Track của event gần nhất đã khớp GT được nhận diện từ event đã lưu, thay vì đoán từ ID gần nhau.
+- Phân biệt dịch chuyển tâm box quan sát được với vận tốc đã lọc. Hai loại số đo có thể khác nhau đáng kể khi box rung hoặc ID ghép sai.
+- Hiện lần đổi raw ID trong cùng canonical track, khoảng cách frame và dịch chuyển tâm box; có nút xem video trước/sau.
+- Các ca dư và sai hướng có thêm dấu vết worker đề xuất crossing và phản hồi backend. Bằng chứng luôn gắn với track của event AI đang xem.
+
+Các số đo chồng box và raw ID phục vụ rà soát, không tự kết luận hai track là cùng phương tiện. Bộ đếm, matcher và GT giữ nguyên; đặc biệt hai xe đi sát nhau có thể tạo hình học tương tự một xe bị tách box. Trace thiếu hình học không được bù bằng quan sát giả.
+
+## Đối chiếu dữ liệu bạn gửi
+
+Đã kiểm CRC, manifest SHA/size và gzip của cả hai bản export; 149 GT tương đương và config giống từng byte. Toàn bộ 149 event cũ không đổi, chỉ thêm xe máy IN track 143399 tại 397.0209 s, khớp GT 397.288 s.
+
+| Chỉ số | #68 / 195 | #69 / 196 |
+|---|---:|---:|
+| GT | 149 | 149 |
+| AI đã lưu | 149 | 150 |
+| Khớp / lọt / dư | 142 / 7 / 7 | 143 / 6 / 7 |
+| F1 đếm | 95.3020% | 95.6522% |
+| Khớp cả thời gian, loại và hướng | 137 | 138 |
+
+Ảnh giao diện phiên 196 bạn gửi hiển thị V0.5.96; số liệu #69 là kết quả export của phiên đó, không phải điểm inference mới của .97. Trace không ghi build hash/version nên không độc lập xác minh được chính xác bytes runtime. Cặp 181574/182056 quanh 492 s có ảnh một xe máy với hai box lồng nhau. Track 296297 quanh 754 s có lần đổi raw ID qua gap 18 frame cần xem lại. Các trường hợp này được đưa vào kiểm thử và bằng chứng rà soát; không xóa event theo timecode để làm giảm số dư.
+
+Ảnh van chở hàng tại 641.98 s phù hợp quy ước xe tải của dự án dù GT ghi ô tô; van quay lại tại 882.29 s cũng có ảnh cắt vạch IN thật. Hãy đối chiếu GT bằng video trước khi sửa nhãn. Không tự đổi hai trường hợp này. 6 lượt lọt và 7 lượt dư trong export vẫn là số liệu được giữ để kiểm tra.
+
+## Cập nhật và chạy
+
+Giải nén chép đè source vào thư mục dự án, giữ .env, .git, models, video, snapshots và các volume/dữ liệu hiện có. Không tạo lại tài khoản Admin. Migration metadata mới: `0111_count_review_v0597`, parent `0110_pycache_v0596`.
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+
+# Test
+.\scripts\test.ps1
+
+# Khởi động
+.\scripts\start.ps1
+
+# Tự test, commit, push GitHub, tạo tag v0.5.97 và Release
+.\scripts\publish.ps1
+```
+
+Mở https://traffic-ai.test:8443 rồi Ctrl+F5. Chi tiết kiểm thử và giới hạn xem VERIFICATION.md. Các mục dưới đây là lịch sử giữ nguyên.
+
+---
+
 # Traffic AI V0.5.96 — Sửa cache Python khi chạy test Docker
 
 Bản này xử lý lỗi trong log .95: kiểm tra source báo đúng version mới, nhưng ba test backend vẫn nhận `0.5.94` thay vì `0.5.95`.

@@ -2367,6 +2367,18 @@ if ($testRunner -notmatch 'PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache' -or
 }
 Write-Host '[OK] Isolated Python test cache V0.5.96 contract' -ForegroundColor Green
 
+Write-Host "`n[Traffic AI] Observed track review V0.5.97 contract" -ForegroundColor Cyan
+$observedAudit = Get-Content (Join-Path $root "ai-service/app/observed_track_audit.py") -Raw -Encoding UTF8
+$observedTrace = Get-Content (Join-Path $root "ai-service/app/benchmark_trace.py") -Raw -Encoding UTF8
+$observedUI = Get-Content (Join-Path $root "frontend/src/observed-track-audit.js") -Raw -Encoding UTF8
+$observedRoutes = Get-Content (Join-Path $root "backend/app/api/routes.py") -Raw -Encoding UTF8
+if ($observedAudit -notmatch 'raw_id_handoffs' -or $observedAudit -notmatch 'identity_proven' -or
+    $observedTrace -notmatch 'observed_track_audit' -or $observedRoutes -notmatch 'near_matched_tracking_id' -or
+    $observedUI -notmatch 'buildObservedTrackAuditView' -or $observedUI -notmatch 'actualMotionCosine') {
+  throw 'V0.5.97 missing scoped observed-track evidence or frontend integration.'
+}
+Write-Host '[OK] Observed track review V0.5.97 contract' -ForegroundColor Green
+
 # Check daemon readiness before the first Docker-dependent test.
 . (Join-Path $PSScriptRoot "docker-engine.ps1")
 & (Join-Path $PSScriptRoot "tests/test-docker-engine-v0595.ps1")

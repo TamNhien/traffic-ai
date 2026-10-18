@@ -1,3 +1,78 @@
+# V0.5.97 — Kiểm chứng rà soát hình học và đổi raw ID
+
+Baseline là ZIP .96 SHA256 `bb4609315117077df430f2382a126abf57fd6365e138369b2b106b6e4256ed27`, 313 file. V0.5.97 thêm bằng chứng đọc từ trace và giao diện xem video trước/sau; không đổi thuật toán detector, tracking, counting, class policy, Human Guard, rescuer, dedup, matcher hoặc GT.
+
+## Input và đối chiếu benchmark thực tế
+
+Input mới: `traffic-ai-benchmark-69-session-196.zip`, SHA256 `871887eb3326d48c7949f3aa643dded85f26dddf498b0fd9a4a8d1b9a43c5c55`. Bảy member an toàn/CRC tốt; sáu member dữ liệu khớp toàn bộ SHA/size trong manifest, gzip đọc đến EOF. Trace có 23.650 frame liên tục, source time 0..945.96 s ở 25 fps. Bytes trace từ RAR giống gzip export sau giải nén.
+
+167 proposal = 166 committed_before_submit + 1 submitted_after_guard. Có 167 delivery receipt, 150 created + 17 deduplicated; 150 created tương ứng đủ tập event DB, mọi source field khớp. Drain complete, pending/dropped 0, mỗi acknowledgement một lần thử. Không có bằng chứng mất lượt do gửi backend.
+
+Đối chiếu đủ cả export #68/195 và #69/196: 149 GT tương đương theo thời gian/frame/hướng/loại/note; config byte-exact. 149 AI event cũ giữ nguyên source time/frame/direction/class/track/method/xy/confidence. Thêm duy nhất motorcycle IN 143399 tại 397.0209 s khớp GT 397.288 s. Matcher source thật tái tạo cả hai report: matched 142→143, lọt 7→6, dư 7→7; F1 0.953020→0.956522; strict match 137→138. Không có GT lọt mới hoặc FP mới trong phép đối chiếu này.
+
+6 GT chưa ghép: 59.446 IN, 237.042 OUT, 289.824 IN, 392.179 OUT, 406.488 OUT, 591.091 IN bicycle. 7 event chưa ghép: 15369 OUT 54.296, 110284 OUT 292.864, 181574 OUT 491.920, 191795 OUT 519.418, 368014 OUT 808.000, 345897 OUT 811.925, 286434 truck IN 882.290. Gần thời gian không chứng minh cùng phương tiện.
+
+## Bằng chứng ảnh và lựa chọn triển khai
+
+Ảnh frame 12299/12306 cho thấy một xe máy với hai box 181574/182056; hai track cùng hiện ở 5 frame được giữ trong fixture. Trước crossing thứ hai chỉ có hai quan sát cặp; vận tốc lọc cosine khoảng 0.989 nhưng dịch chuyển tâm box thực giữa hai frame cosine khoảng 0.717. Predicate thử nghiệm có thể chọn đúng cặp này trên clip nhưng cũng nhận một convoy bị che trong phản ví dụ hình học. Vì vậy .97 chỉ đưa ra bằng chứng rà soát, không bật rule suppression theo cặp này. Audit dùng quan sát cả trước/sau trong cửa sổ; không phải cơ chế chống trùng chạy nhân quả tại thời điểm event.
+
+Track 296297 đổi raw 312739→331821 từ frame 18842→18860, gap 18 frame và tâm box dịch khoảng 236 px. Token mới sau đó đi lên nhưng crossing rescue đã ghi IN. Frame đầu token mới thiếu motion riêng; không mở rộng/nới ngưỡng alias guard chỉ từ một mẫu.
+
+Ảnh frame 7243: người dắt xe đạp và xe máy track 25767 là hai đối tượng riêng; không đổi track xe máy để khớp nhãn GT bicycle. Frame 13355 có hỗ trợ bicycle từ general refiner nhưng không đủ hai nguồn theo policy hiện tại. Ảnh frame 16050 là van chở hàng phù hợp truck; ảnh frame 22059 cho thấy van cắt vạch IN thật. Không tự đổi GT hoặc loại event van. Tại 591.091 s thiếu track/proposal ở vạch và không có ảnh đúng thời điểm/raw detections, nên chưa chứng minh tầng nào gây lọt; road-zone reason là heuristic toàn frame.
+
+## Tích hợp và giới hạn bằng chứng
+
+`ObservedTrackAudit` đọc cùng các cửa sổ trace đang được chẩn đoán; không chạy thêm model hoặc quét trace riêng. Giới hạn mỗi cửa sổ: 256 frame, 64 track/frame, 16 peer lưu, 4 peer trả ra, 8 lần đổi raw ID; có cờ truncated. Độ phủ là intersection/diện tích box nhỏ; bottom alignment là chênh mép dưới/chiều cao box lớn. Đây là phép đo, không phải xác nhận identity. `max_consecutive_frames` là số frame đồng xuất hiện liên tiếp, không phải số lần nested liên tiếp.
+
+Backend bổ sung target dư và sai hướng bằng time/track của event DB, chiếu lại đúng canonical owner và giới hạn trường số. Frontend từ chối scope/owner/schema sai, số không hữu hạn và identity claim; phân biệt actual box displacement và filtered velocity. Seek controls nằm ngoài nút timecode. Trace cũ thiếu rect/raw/velocity được xử lý như thiếu bằng chứng.
+
+## Kiểm thử .97
+
+| Nhóm thực thi | Đạt |
+|---|---:|
+| AI offline / worker helpers | 704 |
+| Backend offline | 135 |
+| Scripts stdlib unittest | 95 |
+| Benchmark-gate standalone | 5 |
+| Backup-worker standalone | 4 |
+| Node built-in tests | 43 |
+| Tổng | 986 |
+
+Không có lỗi. Thêm 21 Python và 10 Node tests; giữ nguyên 986 test identities/thân AST Python lịch sử, cả 6 file Node cũ/33 tests và 79 thân hàm Assert lịch sử. Tổng định nghĩa Python hiện tại 1007; đây là số definitions, không phải số test thực thi.
+
+63 HTTP/ORM tests chưa thực thi vẫn đúng danh sách cũ (3 AI, 60 backend). 1 native PowerShell runner skip riêng vì thiếu pwsh, không tính là đạt. Các regression mới gồm fixture thật 181574/182056 và 296297, box/time/owner sai, clock lặp/đảo/xung đột, số không hữu hạn, giới hạn bộ nhớ, peer truncation và projection backend; UI tests giữ actual displacement khác filtered velocity và kiểm tra không sửa input/score.
+
+320 source file; 214 Python parse/compile; 31 PowerShell UTF-8/CRLF không BOM; text khác LF. Đã kiểm 795 internal imports, 1096 literal PowerShell source predicates và 121 cặp UI/runtime. Babel parse 20 JS/JSX và 47 relative import/export symbols. 38 release checks: 17 thực thi Git/artifact cục bộ, 14 static, 4 simulation, 3 Bash syntax; không push GitHub hoặc tạo Release thật.
+
+Replay matcher thật của .96 và .97 trên cùng GT/events cho output giống nhau hoàn toàn và khớp report #69, input không đổi. Replay diagnose_trace thật trên trace 326.237.314 byte, 18 target (6 lọt, 3 sai loại, 7 dư, 2 sai hướng), cửa sổ ±0.75 s: .97 khoảng 4.489 s, peak RSS 21.632 KiB tại đây. Chỉ bỏ field observed_track_audit mới thì toàn bộ diagnosis cũ giống .96. Đây là một lần đo cục bộ, không tuyên bố tăng tốc hoặc bảo đảm timeout trên mọi máy.
+
+Trong cửa sổ mặc định của FP 491.92 s, thực tế trả 4 frame cặp với peer 182056 (12305..12316), không phải toàn bộ 5 frame có trong fixture; cửa sổ kết thúc trước frame 12318. Có 2 frame đồng xuất hiện liên tiếp, sau đó có gap 9 frame. Độ phủ 0.937083..0.999671; target còn có raw handoff 181574→182056 rồi quay lại. Ca sai hướng 296297 trả đúng handoff gap18, tâm box dịch [-56.7605,229.6465] px. Các bằng chứng đã được chiếu lại qua backend và kiểm tra bởi frontend view model.
+
+Môi trường hiện tại Python 3.12.14 / Node 24.19.0, khác runtime pin Python 3.14.7 / Node >=26.10.0 / npm12.2.0. Chưa chạy .97 native PowerShell/Docker, full pytest HTTP/ORM, PostgreSQL/migration live, npm install/audit/Vite production build, trình duyệt hoặc GPU/full-video inference. Không cài thêm dependency. 955 test của .96 được chạy lại làm baseline và ghi riêng, không cộng vào 986. F1 95.6522% thuộc export phiên 196 do bạn gửi; ảnh giao diện hiển thị .96 nhưng trace không có version/build hash để độc lập xác minh bytes runtime. Không suy ra F1 .97 hoặc số lượt lọt/dư sau inference mới.
+
+## Sử dụng
+
+Giữ .env/.git/models/video/snapshots/volumes khi chép source. Cache test vẫn tách khỏi source như .96; ZIP dùng timestamp UTC build mới và kiểm tránh trùng timestamp cũ của Python member đổi bytes. Migration metadata `0111_count_review_v0597`, parent `0110_pycache_v0596`, chỉ nâng schema_version .97 / downgrade .96.
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+
+# Test
+.\scripts\test.ps1
+
+# Khởi động
+.\scripts\start.ps1
+
+# Tự test, commit, push GitHub, tạo tag v0.5.97 và Release
+.\scripts\publish.ps1
+```
+
+Chọn benchmark #69 rồi Đối chiếu lại để đọc bằng chứng từ trace hiện có. Không tạo lại Admin. Các mục dưới đây là lịch sử, không phải các phép chạy .97 mới.
+
+---
+
 # V0.5.96 — Kiểm chứng sửa Python bytecode cache
 
 Baseline là full source .95, SHA256 `0966e3d02e908b7ee11cb5936afda3a75ad46cf20e436e5edbc49b998ec9dd4d`, 311 file. Bản .96 sửa môi trường chạy test và cách đóng gói. Không sửa predicate HumanGuard, tracking, counter, worker, rescuer, dedup, matcher hoặc GT.

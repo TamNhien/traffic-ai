@@ -246,3 +246,6 @@
 .benchmark-cycle-pair{display:grid;gap:6px;padding:9px 0;border-top:1px solid #274566;font-size:12px}
 .benchmark-cycle-pair>div{display:flex;gap:8px;flex-wrap:wrap}
 .benchmark-cycle-pair button{font-size:12px}
+/* Evidence controls remain outside the timecode button so each seek is accessible. */
+.observed-track-seek{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.observed-track-audit .bicycle-context-record{overflow-wrap:anywhere}

@@ -1,0 +1,990 @@
+{
+  "schema_version": 1,
+  "provenance": {
+    "benchmark_id": 69,
+    "session_id": 196,
+    "source_zip_sha256": "871887eb3326d48c7949f3aa643dded85f26dddf498b0fd9a4a8d1b9a43c5c55",
+    "trace_compressed_sha256": "8e1dead951eba25be81a8673087f99d5fb70b10b6dcae51517d8b870fe6f39ec",
+    "trace_source_sha256": "06585216b48dd0a1add5c3e5ea1700b69d126ac7f52220c86f10b5d28dc03d46",
+    "coordinate_system": "normalized_processed_frame for crossing coordinates; pixels for rectangles/centers/velocities",
+    "frame_width": 1440,
+    "frame_height": 811,
+    "source_fps": 25.0,
+    "rounding_limit": "Trace geometry is rounded and does not replace raw model outputs."
+  },
+  "duplicate_candidate": {
+    "scope": "suspected physical duplicate, audit only",
+    "track_ids": [
+      181574,
+      182056
+    ],
+    "ground_truth": {
+      "benchmark_id": 69,
+      "created_at": "2026-10-18T04:01:03.942273+00:00",
+      "direction": "out",
+      "id": 10067,
+      "note": null,
+      "source_frame_index": 12303,
+      "source_time_seconds": 492.083763,
+      "vehicle_type": "motorcycle"
+    },
+    "events": [
+      {
+        "camera_id": 1,
+        "confidence": 1.0,
+        "crossing_method": "direct",
+        "crossing_x": 0.607788,
+        "crossing_y": 0.419125,
+        "detected_at": "2026-10-18T02:39:04.278542+00:00",
+        "direction": "out",
+        "id": 13632,
+        "model_id": 47,
+        "session_id": 196,
+        "source_frame_index": 12299,
+        "source_time_seconds": 491.92,
+        "tracking_id": 181574,
+        "vehicle_type": "motorcycle"
+      },
+      {
+        "camera_id": 1,
+        "confidence": 1.0,
+        "crossing_method": "direct",
+        "crossing_x": 0.598516,
+        "crossing_y": 0.421222,
+        "detected_at": "2026-10-18T02:39:04.632756+00:00",
+        "direction": "out",
+        "id": 13633,
+        "model_id": 47,
+        "session_id": 196,
+        "source_frame_index": 12306,
+        "source_time_seconds": 492.2,
+        "tracking_id": 182056,
+        "vehicle_type": "motorcycle"
+      }
+    ],
+    "frames": [
+      {
+        "frame_index": 12299,
+        "source_time_seconds": 491.92,
+        "tracks": [
+          {
+            "track_id": 181574,
+            "label": "motorcycle",
+            "primary_label": "motorcycle",
+            "stable_label": "motorcycle",
+            "class_certainty": 1.0,
+            "class_hits": 15,
+            "raw_track_id": 181574,
+            "stitched": false,
+            "rect": [
+              845.627,
+              314.907,
+              950.256,
+              456.403
+            ],
+            "anchor": [
+              875.198,
+              321.942
+            ],
+            "center": [
+              897.941,
+              385.655
+            ],
+            "measured_velocity": [
+              -6.331223,
+              -13.114605
+            ],
+            "anchor_velocity": [
+              -6.331223,
+              -13.114605
+            ],
+            "anchor_signed": -0.02198,
+            "center_signed": 0.059493,
+            "primary_gate_direction": "out",
+            "crossing_clock_audit": {
+              "direction": "out",
+              "crossing_method": "direct",
+              "geometric_frame_index": 12298.367911716054,
+              "trusted_span_frame_index": null,
+              "selected_frame_index": 12299.0,
+              "source_frame_index": 12299,
+              "source_time_seconds": 491.92,
+              "vehicle_type": "motorcycle",
+              "producer_decision": "committed_before_submit"
+            }
+          }
+        ],
+        "proposals": [
+          {
+            "camera_id": 1,
+            "session_id": 196,
+            "tracking_id": 181574,
+            "vehicle_type": "motorcycle",
+            "direction": "out",
+            "confidence": 1.0,
+            "source_frame_index": 12299,
+            "source_time_seconds": 491.92,
+            "crossing_method": "direct",
+            "crossing_x": 0.607788,
+            "crossing_y": 0.419125,
+            "stage": "committed_before_submit",
+            "observed_frame_index": 12299
+          }
+        ]
+      },
+      {
+        "frame_index": 12305,
+        "source_time_seconds": 492.16,
+        "tracks": [
+          {
+            "track_id": 181574,
+            "label": "motorcycle",
+            "primary_label": "motorcycle",
+            "stable_label": "motorcycle",
+            "class_certainty": 1.0,
+            "class_hits": 21,
+            "raw_track_id": 181574,
+            "stitched": false,
+            "rect": [
+              818.292,
+              262.045,
+              910.942,
+              396.826
+            ],
+            "anchor": [
+              847.962,
+              266.551
+            ],
+            "center": [
+              864.617,
+              329.436
+            ],
+            "measured_velocity": [
+              -7.609835,
+              -19.750602
+            ],
+            "anchor_velocity": [
+              -7.609835,
+              -19.750602
+            ],
+            "anchor_signed": -0.093975,
+            "center_signed": -0.014463
+          },
+          {
+            "track_id": 182056,
+            "label": "motorcycle",
+            "primary_label": "motorcycle",
+            "stable_label": "motorcycle",
+            "class_certainty": 1.0,
+            "class_hits": 1,
+            "raw_track_id": 182056,
+            "stitched": false,
+            "rect": [
+              842.325,
+              324.665,
+              903.41,
+              401.671
+            ],
+            "anchor": [
+              872.868,
+              401.671
+            ],
+            "center": [
+              872.868,
+              363.168
+            ],
+            "measured_velocity": [
+              0.0,
+              0.0
+            ],
+            "anchor_velocity": [
+              0.0,
+              0.0
+            ],
+            "anchor_signed": 0.075178,
+            "center_signed": 0.028083
+          }
+        ],
+        "proposals": []
+      },
+      {
+        "frame_index": 12306,
+        "source_time_seconds": 492.2,
+        "tracks": [
+          {
+            "track_id": 181574,
+            "label": "motorcycle",
+            "primary_label": "motorcycle",
+            "stable_label": "motorcycle",
+            "class_certainty": 1.0,
+            "class_hits": 22,
+            "raw_track_id": 181574,
+            "stitched": false,
+            "rect": [
+              817.685,
+              265.255,
+              902.608,
+              389.645
+            ],
+            "anchor": [
+              842.539,
+              270.855
+            ],
+            "center": [
+              860.147,
+              327.45
+            ],
+            "measured_velocity": [
+              -5.883145,
+              -9.979731
+            ],
+            "anchor_velocity": [
+              -0.469566,
+              -1.030434
+            ],
+            "anchor_signed": -0.089556,
+            "center_signed": -0.017588
+          },
+          {
+            "track_id": 182056,
+            "label": "motorcycle",
+            "primary_label": "motorcycle",
+            "stable_label": "motorcycle",
+            "class_certainty": 1.0,
+            "class_hits": 2,
+            "raw_track_id": 182056,
+            "stitched": false,
+            "rect": [
+              837.897,
+              314.204,
+              899.962,
+              392.533
+            ],
+            "anchor": [
+              857.358,
+              317.028
+            ],
+            "center": [
+              868.93,
+              353.368
+            ],
+            "measured_velocity": [
+              -2.165977,
+              -5.389825
+            ],
+            "anchor_velocity": [
+              -2.165977,
+              -5.389825
+            ],
+            "anchor_signed": -0.03077,
+            "center_signed": 0.015482,
+            "primary_gate_direction": "out",
+            "crossing_clock_audit": {
+              "direction": "out",
+              "crossing_method": "direct",
+              "geometric_frame_index": 12305.709574328186,
+              "trusted_span_frame_index": null,
+              "selected_frame_index": 12306.0,
+              "source_frame_index": 12306,
+              "source_time_seconds": 492.2,
+              "vehicle_type": "motorcycle",
+              "producer_decision": "committed_before_submit"
+            }
+          }
+        ],
+        "proposals": [
+          {
+            "camera_id": 1,
+            "session_id": 196,
+            "tracking_id": 182056,
+            "vehicle_type": "motorcycle",
+            "direction": "out",
+            "confidence": 1.0,
+            "source_frame_index": 12306,
+            "source_time_seconds": 492.2,
+            "crossing_method": "direct",
+            "crossing_x": 0.598516,
+            "crossing_y": 0.421222,
+            "stage": "committed_before_submit",
+            "observed_frame_index": 12306
+          }
+        ]
+      },
+      {
+        "frame_index": 12315,
+        "source_time_seconds": 492.56,
+        "tracks": [
+          {
+            "track_id": 181574,
+            "label": "motorcycle",
+            "primary_label": "motorcycle",
+            "stable_label": "motorcycle",
+            "class_certainty": 1.0,
+            "class_hits": 25,
+            "raw_track_id": 181574,
+            "stitched": false,
+            "rect": [
+              781.596,
+              205.646,
+              860.319,
+              322.741
+            ],
+            "anchor": [
+              796.959,
+              217.786
+            ],
+            "center": [
+              820.957,
+              264.193
+            ],
+            "measured_velocity": [
+              -4.252038,
+              -5.52777
+            ],
+            "anchor_velocity": [
+              -4.252038,
+              -5.52777
+            ],
+            "anchor_signed": -0.161568,
+            "center_signed": -0.101067
+          },
+          {
+            "track_id": 182056,
+            "label": "motorcycle",
+            "primary_label": "motorcycle",
+            "stable_label": "motorcycle",
+            "class_certainty": 1.0,
+            "class_hits": 9,
+            "raw_track_id": 182056,
+            "stitched": false,
+            "rect": [
+              798.034,
+              253.672,
+              852.807,
+              323.209
+            ],
+            "anchor": [
+              811.232,
+              258.702
+            ],
+            "center": [
+              825.421,
+              288.44
+            ],
+            "measured_velocity": [
+              -4.03096,
+              -6.655157
+            ],
+            "anchor_velocity": [
+              -4.03096,
+              -6.655157
+            ],
+            "anchor_signed": -0.109298,
+            "center_signed": -0.070713
+          }
+        ],
+        "proposals": []
+      },
+      {
+        "frame_index": 12316,
+        "source_time_seconds": 492.6,
+        "tracks": [
+          {
+            "track_id": 181574,
+            "label": "motorcycle",
+            "primary_label": "motorcycle",
+            "stable_label": "motorcycle",
+            "class_certainty": 1.0,
+            "class_hits": 26,
+            "raw_track_id": 181574,
+            "stitched": false,
+            "rect": [
+              777.23,
+              196.192,
+              855.84,
+              317.521
+            ],
+            "anchor": [
+              794.742,
+              206.371
+            ],
+            "center": [
+              816.535,
+              256.857
+            ],
+            "measured_velocity": [
+              -4.345633,
+              -6.522531
+            ],
+            "anchor_velocity": [
+              -4.345633,
+              -6.522531
+            ],
+            "anchor_signed": -0.175876,
+            "center_signed": -0.110729
+          },
+          {
+            "track_id": 182056,
+            "label": "motorcycle",
+            "primary_label": "motorcycle",
+            "stable_label": "motorcycle",
+            "class_certainty": 1.0,
+            "class_hits": 10,
+            "raw_track_id": 182056,
+            "stitched": false,
+            "rect": [
+              794.975,
+              247.659,
+              849.4,
+              317.544
+            ],
+            "anchor": [
+              808.556,
+              252.359
+            ],
+            "center": [
+              822.188,
+              282.601
+            ],
+            "measured_velocity": [
+              -3.59215,
+              -6.206265
+            ],
+            "anchor_velocity": [
+              -3.59215,
+              -6.206265
+            ],
+            "anchor_signed": -0.117473,
+            "center_signed": -0.078358
+          }
+        ],
+        "proposals": []
+      },
+      {
+        "frame_index": 12318,
+        "source_time_seconds": 492.68,
+        "tracks": [
+          {
+            "track_id": 181574,
+            "label": "motorcycle",
+            "primary_label": "motorcycle",
+            "stable_label": "motorcycle",
+            "class_certainty": 1.0,
+            "class_hits": 27,
+            "raw_track_id": 181574,
+            "stitched": false,
+            "rect": [
+              769.16,
+              183.858,
+              844.852,
+              303.151
+            ],
+            "anchor": [
+              785.457,
+              194.471
+            ],
+            "center": [
+              807.006,
+              243.505
+            ],
+            "measured_velocity": [
+              -4.576058,
+              -6.606944
+            ],
+            "anchor_velocity": [
+              -4.576058,
+              -6.606944
+            ],
+            "anchor_signed": -0.191879,
+            "center_signed": -0.128545
+          },
+          {
+            "track_id": 182056,
+            "label": "motorcycle",
+            "primary_label": "motorcycle",
+            "stable_label": "motorcycle",
+            "class_certainty": 1.0,
+            "class_hits": 12,
+            "raw_track_id": 182056,
+            "stitched": false,
+            "rect": [
+              786.743,
+              230.624,
+              841.486,
+              302.588
+            ],
+            "anchor": [
+              801.568,
+              234.626
+            ],
+            "center": [
+              814.114,
+              266.606
+            ],
+            "measured_velocity": [
+              -3.790315,
+              -7.349381
+            ],
+            "anchor_velocity": [
+              -3.790315,
+              -7.349381
+            ],
+            "anchor_signed": -0.140252,
+            "center_signed": -0.099181
+          }
+        ],
+        "proposals": []
+      }
+    ],
+    "claims_limit": "Co-visible nested rectangles support review; an occluded convoy can project identically, so physical identity is not proven from these fields."
+  },
+  "handoff_candidate": {
+    "scope": "discontinuous handoff suspicion, audit only",
+    "tracking_id": 296297,
+    "events": [
+      {
+        "camera_id": 1,
+        "confidence": 1.0,
+        "crossing_method": "rescued",
+        "crossing_x": 0.662556,
+        "crossing_y": 0.40674,
+        "detected_at": "2026-10-18T02:43:26.733293+00:00",
+        "direction": "in",
+        "id": 13665,
+        "model_id": 47,
+        "session_id": 196,
+        "source_frame_index": 18852,
+        "source_time_seconds": 754.0452,
+        "tracking_id": 296297,
+        "vehicle_type": "motorcycle"
+      }
+    ],
+    "frames": [
+      {
+        "frame_index": 18842,
+        "source_time_seconds": 753.64,
+        "tracks": [
+          {
+            "track_id": 296297,
+            "label": "motorcycle",
+            "primary_label": "motorcycle",
+            "stable_label": "motorcycle",
+            "class_certainty": 1.0,
+            "class_hits": 30,
+            "raw_track_id": 312739,
+            "stitched": false,
+            "rect": [
+              961.93,
+              135.141,
+              1005.591,
+              185.716
+            ],
+            "anchor": [
+              1001.842,
+              174.599
+            ],
+            "center": [
+              983.76,
+              160.428
+            ],
+            "measured_velocity": [
+              -0.796022,
+              -0.025327
+            ],
+            "anchor_velocity": [
+              0.89467,
+              0.60533
+            ],
+            "anchor_signed": -0.182478,
+            "center_signed": -0.202628
+          }
+        ],
+        "proposals": []
+      },
+      {
+        "frame_index": 18860,
+        "source_time_seconds": 754.36,
+        "tracks": [
+          {
+            "track_id": 296297,
+            "label": "motorcycle",
+            "primary_label": "motorcycle",
+            "stable_label": "motorcycle",
+            "class_certainty": 1.0,
+            "class_hits": 30,
+            "raw_track_id": 331821,
+            "stitched": true,
+            "rect": [
+              891.956,
+              327.0,
+              962.044,
+              453.15
+            ],
+            "anchor": [
+              916.97,
+              450.511
+            ],
+            "center": [
+              927.0,
+              390.075
+            ],
+            "measured_velocity": [
+              -2.092556,
+              7.005579
+            ],
+            "anchor_velocity": [
+              -2.092556,
+              7.005579
+            ],
+            "anchor_signed": 0.141788,
+            "center_signed": 0.069427,
+            "primary_gate_direction": "in",
+            "crossing_clock_audit": {
+              "direction": "in",
+              "crossing_method": "rescued",
+              "geometric_frame_index": 18852.129355489324,
+              "trusted_span_frame_index": null,
+              "selected_frame_index": 18852.129355489324,
+              "source_frame_index": 18852,
+              "source_time_seconds": 754.0451742195729,
+              "vehicle_type": "motorcycle",
+              "producer_decision": "committed_before_submit"
+            }
+          }
+        ],
+        "proposals": [
+          {
+            "camera_id": 1,
+            "session_id": 196,
+            "tracking_id": 296297,
+            "vehicle_type": "motorcycle",
+            "direction": "in",
+            "confidence": 1.0,
+            "source_frame_index": 18852,
+            "source_time_seconds": 754.0452,
+            "crossing_method": "rescued",
+            "crossing_x": 0.662556,
+            "crossing_y": 0.40674,
+            "stage": "committed_before_submit",
+            "observed_frame_index": 18860
+          }
+        ]
+      },
+      {
+        "frame_index": 18861,
+        "source_time_seconds": 754.4,
+        "tracks": [
+          {
+            "track_id": 296297,
+            "label": "motorcycle",
+            "primary_label": "motorcycle",
+            "stable_label": "motorcycle",
+            "class_certainty": 1.0,
+            "class_hits": 30,
+            "raw_track_id": 331821,
+            "stitched": false,
+            "rect": [
+              886.8,
+              317.667,
+              957.867,
+              445.45
+            ],
+            "anchor": [
+              907.744,
+              439.817
+            ],
+            "center": [
+              922.334,
+              381.559
+            ],
+            "measured_velocity": [
+              -3.508194,
+              -1.531435
+            ],
+            "anchor_velocity": [
+              -0.465722,
+              1.034278
+            ],
+            "anchor_signed": 0.127269,
+            "center_signed": 0.058283
+          }
+        ],
+        "proposals": []
+      },
+      {
+        "frame_index": 18862,
+        "source_time_seconds": 754.44,
+        "tracks": [
+          {
+            "track_id": 296297,
+            "label": "motorcycle",
+            "primary_label": "motorcycle",
+            "stable_label": "motorcycle",
+            "class_certainty": 1.0,
+            "class_hits": 30,
+            "raw_track_id": 331821,
+            "stitched": false,
+            "rect": [
+              881.932,
+              311.118,
+              952.693,
+              438.272
+            ],
+            "anchor": [
+              899.14,
+              429.244
+            ],
+            "center": [
+              917.313,
+              374.695
+            ],
+            "measured_velocity": [
+              -4.340235,
+              -4.464395
+            ],
+            "anchor_velocity": [
+              -0.561703,
+              0.938297
+            ],
+            "anchor_signed": 0.112997,
+            "center_signed": 0.049105
+          }
+        ],
+        "proposals": []
+      },
+      {
+        "frame_index": 18863,
+        "source_time_seconds": 754.48,
+        "tracks": [
+          {
+            "track_id": 296297,
+            "label": "motorcycle",
+            "primary_label": "motorcycle",
+            "stable_label": "motorcycle",
+            "class_certainty": 1.0,
+            "class_hits": 30,
+            "raw_track_id": 331821,
+            "stitched": false,
+            "rect": [
+              878.44,
+              312.173,
+              946.545,
+              433.997
+            ],
+            "anchor": [
+              893.006,
+              423.037
+            ],
+            "center": [
+              912.493,
+              373.085
+            ],
+            "measured_velocity": [
+              -4.604043,
+              -2.894185
+            ],
+            "anchor_velocity": [
+              -0.616514,
+              0.883486
+            ],
+            "anchor_signed": 0.10445,
+            "center_signed": 0.046385
+          }
+        ],
+        "proposals": []
+      },
+      {
+        "frame_index": 18864,
+        "source_time_seconds": 754.52,
+        "tracks": [
+          {
+            "track_id": 296297,
+            "label": "motorcycle",
+            "primary_label": "motorcycle",
+            "stable_label": "motorcycle",
+            "class_certainty": 1.0,
+            "class_hits": 30,
+            "raw_track_id": 331821,
+            "stitched": false,
+            "rect": [
+              883.386,
+              331.198,
+              935.575,
+              422.102
+            ],
+            "anchor": [
+              893.151,
+              412.102
+            ],
+            "center": [
+              909.48,
+              376.65
+            ],
+            "measured_velocity": [
+              -3.728684,
+              0.6582
+            ],
+            "anchor_velocity": [
+              -0.667729,
+              0.832271
+            ],
+            "anchor_signed": 0.091097,
+            "center_signed": 0.050276
+          }
+        ],
+        "proposals": []
+      },
+      {
+        "frame_index": 18865,
+        "source_time_seconds": 754.56,
+        "tracks": [
+          {
+            "track_id": 296297,
+            "label": "motorcycle",
+            "primary_label": "motorcycle",
+            "stable_label": "motorcycle",
+            "class_certainty": 1.0,
+            "class_hits": 30,
+            "raw_track_id": 331821,
+            "stitched": false,
+            "rect": [
+              870.913,
+              299.181,
+              937.379,
+              414.579
+            ],
+            "anchor": [
+              876.479,
+              388.844
+            ],
+            "center": [
+              904.146,
+              356.88
+            ],
+            "measured_velocity": [
+              -4.61165,
+              -10.577228
+            ],
+            "anchor_velocity": [
+              -0.900682,
+              0.599318
+            ],
+            "anchor_signed": 0.060051,
+            "center_signed": 0.025264
+          }
+        ],
+        "proposals": []
+      },
+      {
+        "frame_index": 18870,
+        "source_time_seconds": 754.76,
+        "tracks": [
+          {
+            "track_id": 296297,
+            "label": "motorcycle",
+            "primary_label": "motorcycle",
+            "stable_label": "motorcycle",
+            "class_certainty": 1.0,
+            "class_hits": 30,
+            "raw_track_id": 331821,
+            "stitched": false,
+            "rect": [
+              848.99,
+              252.808,
+              922.527,
+              378.332
+            ],
+            "anchor": [
+              849.071,
+              311.398
+            ],
+            "center": [
+              885.759,
+              315.57
+            ],
+            "measured_velocity": [
+              -3.854031,
+              -8.747527
+            ],
+            "anchor_velocity": [
+              -1.40632,
+              -0.09368
+            ],
+            "anchor_signed": -0.038947,
+            "center_signed": -0.02813,
+            "crossing_clock_audit": {
+              "direction": "out",
+              "crossing_method": "rescued",
+              "geometric_frame_index": 18868.19456661236,
+              "trusted_span_frame_index": null,
+              "selected_frame_index": 18868.19456661236,
+              "source_frame_index": 18868,
+              "source_time_seconds": 754.6877826644944,
+              "vehicle_type": "motorcycle",
+              "producer_decision": "committed_before_submit"
+            }
+          }
+        ],
+        "proposals": [
+          {
+            "camera_id": 1,
+            "session_id": 196,
+            "tracking_id": 296297,
+            "vehicle_type": "motorcycle",
+            "direction": "out",
+            "confidence": 1.0,
+            "source_frame_index": 18868,
+            "source_time_seconds": 754.6878,
+            "crossing_method": "rescued",
+            "crossing_x": 0.595008,
+            "crossing_y": 0.422015,
+            "stage": "committed_before_submit",
+            "observed_frame_index": 18870
+          }
+        ]
+      },
+      {
+        "frame_index": 18872,
+        "source_time_seconds": 754.84,
+        "tracks": [
+          {
+            "track_id": 296297,
+            "label": "motorcycle",
+            "primary_label": "motorcycle",
+            "stable_label": "motorcycle",
+            "class_certainty": 1.0,
+            "class_hits": 30,
+            "raw_track_id": 332237,
+            "stitched": true,
+            "rect": [
+              857.229,
+              295.95,
+              916.671,
+              366.6
+            ],
+            "anchor": [
+              857.567,
+              336.585
+            ],
+            "center": [
+              886.95,
+              331.275
+            ],
+            "measured_velocity": [
+              0.869998,
+              8.2191
+            ],
+            "anchor_velocity": [
+              -1.302037,
+              0.197963
+            ],
+            "anchor_signed": -0.006817,
+            "center_signed": -0.008734
+          }
+        ],
+        "proposals": []
+      }
+    ],
+    "claims_limit": "New raw token has no measured motion before first appearance at18860; later motion contradicts the inherited rescued IN. This retrospective suspicion must not retroactively change counts."
+  }
+}

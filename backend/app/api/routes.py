@@ -1599,7 +1599,109 @@ def _benchmark_trace_targets(report: dict, timed_events: list[VehicleEvent]) -> 
             source_time = item.get("ai_time", item["time"])
         item["ai_tracking_id"] = getattr(event, "tracking_id", item.get("tracking_id"))
         targets.append((item, float(source_time)))
+    targets.extend(_observed_benchmark_trace_targets(report, event_by_id))
     return targets
+
+
+def _observed_benchmark_trace_targets(report: dict, event_by_id: dict) -> list[tuple[dict, float]]:
+    """Review FP/direction cases at persisted source clocks, without rescoring."""
+    from math import isfinite
+
+    targets = []
+    for name in ("false_positive_items", "direction_mismatch_items"):
+        for item in report.get(name, []):
+            event = event_by_id.get(item.get("ai_event_id"))
+            tracking_id = getattr(event, "tracking_id", None)
+            source_time = getattr(event, "source_time_seconds", None)
+            if (type(tracking_id) is not int or abs(tracking_id) > 2**53 - 1
+                    or type(source_time) not in (int, float) or not 0 <= source_time <= 1_000_000
+                    or not isfinite(source_time)):
+                continue
+            item["ai_tracking_id"] = tracking_id
+            if name == "false_positive_items":
+                peer = event_by_id.get(item.get("near_matched_ai_event_id"))
+                peer_id = getattr(peer, "tracking_id", None)
+                if type(peer_id) is int and abs(peer_id) <= 2**53 - 1 and peer_id != tracking_id:
+                    item["near_matched_tracking_id"] = peer_id
+            targets.append((item, float(source_time)))
+    return targets
+
+
+def _scope_observed_track_audit(audit: dict, tracking_id: int | None) -> dict | None:
+    """Keep only the requested canonical owner's bounded numeric evidence."""
+    from math import isfinite
+
+    if (not isinstance(audit, dict) or type(tracking_id) is not int or abs(tracking_id) > 2**53 - 1
+            or type(audit.get("tracking_id")) is not int or audit["tracking_id"] != tracking_id
+            or type(audit.get("schema_version")) is not int or audit["schema_version"] != 1
+            or audit.get("scope") != "canonical_track_window" or audit.get("identity_proven") is not False
+            or audit.get("status") not in {"observed", "unavailable"}):
+        return None
+    def number(value):
+        return value if type(value) in (int, float) and abs(value) <= 2**53 - 1 and isfinite(value) else None
+
+    def vector(value):
+        if not isinstance(value, list) or len(value) != 2:
+            return None
+        values = [number(item) for item in value]
+        return values if all(item is not None for item in values) else None
+
+    def ids(value):
+        if isinstance(value, list) and len(value) > 16:
+            result["truncated"] = True
+        return [item for item in value[:16] if type(item) is int and abs(item) <= 2**53 - 1] if isinstance(value, list) else []
+
+    def motion(value):
+        if not isinstance(value, dict):
+            return None
+        result = {key: number(value.get(key)) for key in ("dx", "dy", "gap_frames")}
+        result["pixels_per_frame"] = vector(value.get("pixels_per_frame"))
+        return result
+
+    bounds = ("first_frame", "last_frame", "first_time", "last_time")
+    result = {key: audit[key] for key in ("schema_version", "scope", "tracking_id", "identity_proven", "status")}
+    result.update(reason=audit.get("reason") if audit.get("reason") in {
+                      "recorded_rectangles", "no_valid_rectangles", "conflicting_observations"} else "no_valid_rectangles",
+                  records_limit=4, truncated=audit.get("truncated") is True,
+                  conflicting_frames=number(audit.get("conflicting_frames")),
+                  out_of_order_frames=number(audit.get("out_of_order_frames")),
+                  target=None, peers=[], raw_id_handoffs=[])
+    if audit["status"] == "unavailable" or (result["conflicting_frames"] or 0) > 0:
+        result["status"] = "unavailable"
+        if (result["conflicting_frames"] or 0) > 0:
+            result["reason"] = "conflicting_observations"
+        return result
+    target = audit.get("target")
+    if isinstance(target, dict):
+        result["target"] = {key: number(target.get(key)) for key in ("frames", *bounds)}
+        result["target"].update(raw_track_ids=ids(target.get("raw_track_ids")),
+                                rect_motion=motion(target.get("rect_motion")),
+                                filtered_velocity=vector(target.get("filtered_velocity")))
+    peers = audit.get("peers")
+    for peer in peers[:4] if isinstance(peers, list) else []:
+        if (not isinstance(peer, dict) or type(peer.get("tracking_id")) is not int
+                or abs(peer["tracking_id"]) > 2**53 - 1 or peer["tracking_id"] == tracking_id
+                or peer.get("identity_proven") is not False):
+            continue
+        projected = {key: number(peer.get(key)) for key in (
+            "tracking_id", "co_visible_frames", "nested_frames", "max_consecutive_frames", *bounds,
+            "containment_min", "containment_max", "bottom_alignment_min", "bottom_alignment_max")}
+        projected.update(identity_proven=False, raw_track_ids=ids(peer.get("raw_track_ids")))
+        for key in ("target_rect_motion", "peer_rect_motion"):
+            projected[key] = motion(peer.get(key))
+        for key in ("target_filtered_velocity", "peer_filtered_velocity"):
+            projected[key] = vector(peer.get(key))
+        result["peers"].append(projected)
+    handoffs = audit.get("raw_id_handoffs")
+    for handoff in handoffs[:8] if isinstance(handoffs, list) else []:
+        if not isinstance(handoff, dict):
+            continue
+        projected = {key: number(handoff.get(key)) for key in (
+            "from_raw_track_id", "to_raw_track_id", "from_frame", "to_frame", "from_time", "to_time", "gap_frames")}
+        projected["rect_displacement"] = vector(handoff.get("rect_displacement"))
+        result["raw_id_handoffs"].append(projected)
+    result["truncated"] |= (isinstance(peers, list) and len(peers) > 4 or isinstance(handoffs, list) and len(handoffs) > 8)
+    return result
 
 
 def _scope_crossing_trace_audit(audit: dict, tracking_id: int | None, *, delivery: bool = False) -> dict:
@@ -1642,6 +1744,12 @@ def _attach_benchmark_trace_diagnosis(item: dict, diagnosis: dict) -> None:
     """Keep class evidence scoped to the matched canonical event track."""
     attached = dict(diagnosis)
     tracking_id = item.get("ai_tracking_id")
+    if "observed_track_audit" in attached:
+        observed = _scope_observed_track_audit(attached["observed_track_audit"], tracking_id)
+        if observed is None:
+            attached.pop("observed_track_audit")
+        else:
+            attached["observed_track_audit"] = observed
     attached["bicycle_context_scope"] = "matched_track" if tracking_id is not None else "nearby_tracks"
     if tracking_id is not None:
         def same_track_audits(audits: list[dict]) -> list[dict]:

@@ -11,6 +11,7 @@ from math import inf, isfinite, nextafter
 
 from app.counting import segment_crossing_point, signed_distance
 from app.human_guard import HUMAN_GUARD_AUDIT_ACTIONS, HUMAN_GUARD_AUDIT_CONTEXTS
+from app.observed_track_audit import ObservedTrackAudit
 from pathlib import Path
 from typing import Iterable
 from uuid import uuid4
@@ -509,6 +510,7 @@ class _TraceWindow:
         self.delivery_summary = None
         self.human_guard_records = {}
         self.human_guard_truncated = False
+        self.observed_track_audit = ObservedTrackAudit(track)
 
     def observe_event_audit(self, record, *, delivery):
         if self.track is not None and record["tracking_id"] != self.track:
@@ -528,6 +530,7 @@ class _TraceWindow:
                 self.proposals_truncated = True
 
     def observe(self, row):
+        self.observed_track_audit.observe(row)
         if row.get('kind') in ('event_delivery', 'delivery_summary'):
             return
         for audit in row.get('bicycle_xframe_decision_audit', []) or []:
@@ -708,6 +711,8 @@ class _TraceWindow:
         output['diagnosis_scope'] = _diagnosis_scope(reason, gate, self.track)
         if not self.count:
             output['diagnosis_scope']['counters'] = "no_trace_window"
+        if self.track is not None:
+            output["observed_track_audit"] = self.observed_track_audit.finish()
         return output
 
 
