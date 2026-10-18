@@ -1,3 +1,38 @@
+# Traffic AI V0.5.102 — Admission-first HumanGuard + Verified Timecode Audit
+
+**Nâng cấp từ V0.5.101; giữ nguyên GT và dữ liệu PostgreSQL.** Benchmark #73 / session #200 có **149 GT / 149 AI / 143 khớp / 6 lọt / 6 dư / F1 96,0%**. Đây là số đo của phiên chạy trước khi cập nhật .102, không phải đánh giá độ chính xác của bản .102. Một sự kiện AI dư bị loại so với #72 và số lọt vẫn 6, xác nhận trên export mới; không suy ra các ca còn lại đều là lỗi detector.
+
+### Sửa lỗi chính: chỉ ghi nhận HumanGuard crossing sau khi hàng đợi nhận sự kiện
+
+Nhánh `PipelineWorker._commit_guard_crossing` của .101 tăng `state.total_count`, biến đếm IN/OUT, ghi dấu context bicycle và đánh dấu transaction thành công **trước** lời gọi `EventDispatcher.submit`. Nếu queue đang đóng hoặc `submit` từ chối, worker vẫn đã tăng số và ghi audit "accepted" dù DB không có event. .102 dựng payload, gọi `submit` trước; chỉ sau khi lời gọi trả về thành công mới ghi state, bicycle rescue, raw handoff history, proposal audit và xóa pending. Lỗi submit tiếp tục nổi lên như cũ, pending được giữ nguyên. Admission ≠ backend persisted; receipt backend mới chứng minh lưu DB.
+
+Ba test hồi quy kiểm tra dispatcher từ chối không tăng counter, không chấp nhận rescue khi lỗi, và submit phải diễn ra trước counter/handoff. Không thay thuật toán crossing, ngưỡng geometry, model weights, phân loại xe, bộ ghép GT hoặc hệ thống xác thực. Alembic revision `0116_queue_admit_v05102` chỉ cập nhật `schema_version`.
+
+### Công cụ kiểm toán timecode
+
+Mới có `scripts/audit-temporal-neighbors.ps1` (Python `.py` tương ứng). Chỉ chạy trên ZIP benchmark có manifest, trace hoàn chỉnh và hash đã được xác minh, xuất JSON/CSV/Markdown cho tất cả ca lọt/dư. Hiện rõ GT có event trong ngưỡng nhưng đã **được ghép với GT khác**, event cùng hướng **nằm ngoài cửa sổ 0,75 giây**, và GT **không có event trong ±2 giây**. Không tự ghép lại, sửa timestamp, thêm/xóa lượt hay suy đoán danh tính cùng xe.
+
+Với #73: GT OUT lúc **392,179 s** có AI OUT gần nhất lúc **393,303 s** (trễ 1,124 s, ngoài tolerance; AI này đã ghép GT khác), GT xe đạp IN lúc **591,091 s** không có event AI trong ±2 giây; bốn GT còn lại có AI trong tolerance nhưng đã được gán mốc GT khác. Mốc 882,290 s là xe tải IN có ảnh vùng vạch: không tự loại chỉ vì báo dư.
+
+Chạy trên Windows sau khi chép source, **giữ `.env`, `.git`, models, video, snapshot và Docker volume PostgreSQL**:
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+.\scripts\test.ps1
+.\scripts\start.ps1
+
+# Kiểm toán benchmark cũ, không chạy lại AI:
+.\scripts\audit-temporal-neighbors.ps1 -Export ".\traffic-ai-benchmark-73-session-200.zip" -OutputDirectory ".\temporal-neighbor-audit"
+
+# Chỉ sau khi test/chạy ổn định:
+.\scripts\publish.ps1
+```
+
+Cần chạy clip trên bản .102 mới để biết hiệu quả thực tế; bản cập nhật này **không tuyên bố giảm thêm 6 lượt lọt hay 6 lượt dư**.
+
+---
+
 # Traffic AI V0.5.101 — Sửa HumanGuard deferred crossing / Raw-ID Guard
 
 **Bản sửa lỗi kế thừa đầy đủ V0.5.100.** Khắc phục 6 bài kiểm thử AI thất bại trong `tests/test_guard_transaction.py`: test fixture dựng `PipelineWorker.__new__` mà không chạy `__init__`, vì vậy thuộc tính `_raw_handoff_guard_enabled` không tồn tại ở nhánh `_commit_guard_crossing`. Bản mới coi guard tùy chọn là tắt khi chưa khởi tạo, nhưng khi worker thực bật vẫn lưu passage đã xác nhận.

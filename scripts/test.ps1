@@ -2450,6 +2450,16 @@ Invoke-Step "V0.5.99 verified passage-evidence audit (stdlib-only)" {
     python -m unittest discover -s scripts/tests -p test_audit_error_evidence_v0599.py -v
 }
 
+Invoke-Step "V0.5.102 verified temporal-neighbor audit (stdlib-only)" {
+  $audit = Get-Content (Join-Path $root "scripts/audit-temporal-neighbors.py") -Raw -Encoding UTF8
+  if ($audit -notmatch 'physical_identity_proven' -or $audit -notmatch 'verified_trace_sha256' -or
+      -not (Test-Path (Join-Path $root 'scripts/audit-temporal-neighbors.ps1'))) {
+    throw 'V0.5.102 verified temporal-neighbor audit is missing or unsafe.'
+  }
+  docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 -v "${root}:/src" -w /src python:3.14.7-slim `
+    python -m unittest discover -s scripts/tests -p test_audit_temporal_neighbors_v05102.py -v
+}
+
 Invoke-Step "V0.5.92 verified crossing-cycle witness audit (stdlib-only)" {
   docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 -v "${root}:/src" -w /src python:3.14.7-slim `
     python -m unittest discover -s scripts/tests -p test_audit_crossing_cycles_v0592.py -v
@@ -2611,6 +2621,14 @@ Invoke-Step "V0.5.101 deferred HumanGuard raw-ID admission safety contract" {
   $method = ($worker -split '    def _commit_guard_crossing\(', 2)[1]
   if ($method -notmatch 'getattr\(self, "_raw_handoff_guard_enabled", False\)') { throw "V0.5.101 deferred guard optional initialization missing." }
   if ($tests -notmatch 'test_v05101_partial_worker_without_guard' -or $tests -notmatch 'test_v05101_failed_dispatcher_does_not_poison_raw_handoff_history') { throw "V0.5.101 raw-ID admission regressions missing." }
+}
+
+Invoke-Step "V0.5.102 deferred queue-admission transaction contract" {
+  $worker = Get-Content (Join-Path $root "ai-service/app/worker.py") -Raw -Encoding UTF8
+  $tests = Get-Content (Join-Path $root "ai-service/tests/test_guard_transaction.py") -Raw -Encoding UTF8
+  $method = (($worker -split '    def _commit_guard_crossing\(', 2)[1] -split '    def _rollback_guard_crossing\(', 2)[0]
+  if ($method -notmatch 'self\._event_dispatcher\.submit\(payload\)' -or $method -notmatch 'self\._record_committed_crossing') { throw 'V0.5.102 admission-first path missing.' }
+  if ($tests -notmatch 'test_v05102_rejected_queue_admission_has_zero_counter_side_effects' -or $tests -notmatch 'test_v05102_rejected_queue_does_not_approve_bicycle_context') { throw 'V0.5.102 admission regression tests missing.' }
 }
 
 Invoke-Step "Backend syntax check" {

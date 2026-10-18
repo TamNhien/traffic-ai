@@ -1,3 +1,27 @@
+# V0.5.102 — Verification / limits
+
+**Baseline** `traffic-ai-v0.5.101-full-source.zip` (341 source members). **Measured previous run** Benchmark #73 / Session #200: 149 GT, 149 AI events, 143 assigned matches, 6 unmatched GT, 6 unmatched AI, 96.0% F1. Source camera RAR extracted: 165 JPG verified readable via libarchive; report/manifest/hash/closed trace verified using the project's forensics tool, not altered.
+
+**Offline QA actually executed (Linux sandbox, 18/10/2026):**
+
+| Suite | Result |
+|---|---:|
+| AI pytest | 741 passed |
+| Backend pytest with SQLite in-memory | 195 passed |
+| Frontend Node built-in tests | 47 passed |
+| Script unittest | 110 passed, 1 skipped (PowerShell-native) |
+| Backup worker + benchmark-gate pytest | 9 passed |
+| **Total (unique suites)** | **1102 passed, 1 skipped** |
+
+- Compiled Python application, tests and scripts via `compileall`: PASS.
+- `scripts/version-contract.py`: PASS; Alembic head `0116_queue_admit_v05102`.
+- Source ZIP: original 341 paths preserved plus 4 new files; 345 total, ZIP CRC validated. All 34 `.ps1` files normalized to CRLF.
+- Benchmark #73 read via verified `benchmark-forensics.analyze`: complete manifest+trace SHA-256 and terminal receipt summary; temporal worklist 12 cases, camera evidence matched 10/12 JPG snapshots within one second.
+- `httpx2` unavailable here: AI + backend tests used a *temporary test-only* import shim to installed `httpx` 0.28.x **outside the release source**. Native dependency parity requires Windows Docker tests. Backend used SQLite in-memory; PostgreSQL schema migration/live transactions not tested.
+- No Windows PowerShell, Docker Compose, Node 26 image builds, browser, YOLO model/MP4 inference or GPU replay executed. Do not claim benchmark improvements from test outcomes. Logs for local verification are provided separately with evidence ZIP.
+
+**Changes:** transactional ordering of deferred HumanGuard event-admission state, three new regression tests, verified read-only ±2s temporal-neighbor worklist with six stdlib tests, Windows wrapper and script contract, version 0.5.102 with Alembic migration 0116. **No change** to detector, YOLO weights, GT/event history, geometry, matching, dedup policy, or saved event counts. No claim that F1 improves without a new inference run.
+
 # V0.5.101 — Kiểm chứng sửa lỗi HumanGuard / Raw-ID Handoff
 
 Nguồn lỗi: log người dùng chạy `scripts/test.ps1`: 6 failures cùng `AttributeError: _raw_handoff_guard_enabled` ở `app/worker.py:_commit_guard_crossing`; 729 AI tests passed và 195 backend passed ở V0.5.100.

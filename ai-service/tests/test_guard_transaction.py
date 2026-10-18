@@ -1511,3 +1511,60 @@ def test_v05101_failed_dispatcher_does_not_poison_raw_handoff_history() -> None:
     assert notes == []
     assert worker._guard_crossing_proposals_this_frame == []
     assert worker.state.human_guard_deferred_commits == 0
+
+
+# V0.5.102: closing dispatcher must not publish a deferred passage that was
+# never admitted. Keep the same pending transaction intact for error handling.
+def test_v05102_rejected_queue_admission_has_zero_counter_side_effects() -> None:
+    import pytest
+    worker = _worker()
+    pending = _pending()
+    worker._pending_guard_crossings[pending.track_id] = pending
+    worker._event_dispatcher.submit = lambda _payload: (_ for _ in ()).throw(RuntimeError("queue closed"))
+    with pytest.raises(RuntimeError, match="queue closed"):
+        worker._commit_guard_crossing(object(), pending)
+    assert worker.state.total_count == worker.state.in_count == worker.state.direct_crossings == 0
+    assert worker.state.human_guard_deferred_commits == 0
+    assert worker.state.human_guard_pending_crossings == 1
+    assert worker._committed_in_count == 0
+    assert worker._guard_crossing_proposals_this_frame == []
+    assert worker._pending_guard_crossings[77] is pending
+
+
+def test_v05102_rejected_queue_does_not_approve_bicycle_context() -> None:
+    import pytest
+    worker = _worker()
+    _enable_context_commit(worker)
+    pending = _pending()
+    pending.label = "bicycle"
+    pending.bicycle_context_method = "weak_motor"
+    pending.bicycle_context_audit = {"commit_status": "pending", "kind": "bicycle_context"}
+    worker._pending_guard_crossings[77] = pending
+    worker._event_dispatcher.submit = lambda _payload: (_ for _ in ()).throw(RuntimeError("queue closed"))
+    with pytest.raises(RuntimeError, match="queue closed"):
+        worker._commit_guard_crossing(object(), pending)
+    assert pending.bicycle_context_audit["commit_status"] == "pending"
+    assert worker.state.total_count == 0
+    assert worker._pending_guard_crossings[77] is pending
+    assert worker._bicycle_xframe_audit_this_frame == []
+
+
+def test_v05102_admission_happens_before_count_and_raw_history() -> None:
+    worker = _worker()
+    pending = _pending()
+    worker._pending_guard_crossings[77] = pending
+    worker._raw_handoff_guard_enabled = True
+    order = []
+    worker._raw_handoff_guard = SimpleNamespace(note_passage=lambda *_args: order.append('raw'))
+    def submit(_payload):
+        assert worker.state.total_count == 0
+        assert worker._committed_in_count == 0
+        assert worker.state.human_guard_deferred_commits == 0
+        assert worker._pending_guard_crossings[77] is pending
+        order.append('submitted')
+    worker._event_dispatcher.submit = submit
+    worker._commit_guard_crossing(object(), pending)
+    assert order == ['submitted', 'raw']
+    assert worker.state.total_count == worker.state.in_count == 1
+    assert worker.state.human_guard_deferred_commits == 1
+    assert worker._pending_guard_crossings == {}

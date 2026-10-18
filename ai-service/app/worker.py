@@ -597,10 +597,27 @@ class PipelineWorker(threading.Thread):
             self.state.rescued_crossings += 1
 
     def _commit_guard_crossing(self, cv2, pending: _PendingGuardCrossing) -> None:
-        snapshot = self._save_crossing_snapshot(cv2, pending.snapshot_frame, pending.observed_frame_index or pending.frame_index)
+        """Finalize a deferred HumanGuard passage only after queue admission.
+
+        A rejected dispatcher submit used to inflate worker totals, commit
+        bicycle-context state and mark the original pending audit as accepted,
+        even though no event was queued. Admission does *not* prove DB storage;
+        the existing delivery receipt remains the persistence authority.
+        """
+        observed_frame = pending.observed_frame_index or pending.frame_index
+        snapshot = self._save_crossing_snapshot(cv2, pending.snapshot_frame, observed_frame)
+        payload = self._event_payload(
+            pending.track_id, pending.label, pending.direction, pending.confidence, snapshot,
+            pending.frame_index, pending.source_time_seconds, pending.crossing_method,
+            pending.crossing_x, pending.crossing_y,
+        )
+        # This can raise when the dispatcher is closing or out of capacity.
+        # No count, rescue, audit, pending removal or raw history is published
+        # before submit returns successfully.
+        self._event_dispatcher.submit(payload)
         if pending.bicycle_context_method is not None:
             self._commit_bicycle_context_rescue(
-                pending.track_id, pending.observed_frame_index or pending.frame_index,
+                pending.track_id, observed_frame,
                 (pending.label, pending.confidence), pending.bicycle_context_method,
                 remember_override=False,
             )
@@ -608,21 +625,11 @@ class PipelineWorker(threading.Thread):
                 pending.bicycle_context_audit["commit_status"] = "accepted"
                 self._bicycle_xframe_audit_this_frame.append(dict(pending.bicycle_context_audit))
         self._record_committed_crossing(pending.label, pending.direction, pending.crossing_method)
-        self._event_dispatcher.submit(
-            self._event_payload(
-                pending.track_id, pending.label, pending.direction, pending.confidence, snapshot,
-                pending.frame_index, pending.source_time_seconds, pending.crossing_method,
-                pending.crossing_x, pending.crossing_y,
-            )
-        )
-        # V0.5.101: some legacy tests intentionally allocate PipelineWorker
-        # via __new__ without __init__. The optional video guard must be
-        # treated as disabled unless explicitly initialized, while normal
-        # workers still record a verified passage after dispatcher admission.
-        # Never poison guard history if submit raises.
+        # Compatible with unit workers constructed via __new__ without __init__.
+        # Guard history only records accepted queue admissions.
         if getattr(self, "_raw_handoff_guard_enabled", False) and pending.label in TWO_WHEEL_LABELS:
             self._raw_handoff_guard.note_passage(
-                pending.track_id, pending.observed_frame_index or pending.frame_index,
+                pending.track_id, observed_frame,
                 pending.direction, pending.crossing_x, pending.crossing_y,
             )
         audit_rows = getattr(self, "_guard_crossing_proposals_this_frame", None)
@@ -632,7 +639,7 @@ class PipelineWorker(threading.Thread):
             pending.track_id, pending.label, pending.direction, pending.confidence,
             pending.frame_index, pending.source_time_seconds, pending.crossing_method,
             pending.crossing_x, pending.crossing_y, stage="submitted_after_guard",
-            observed_frame_index=pending.observed_frame_index or pending.frame_index,
+            observed_frame_index=observed_frame,
         ))
         self.state.human_guard_deferred_commits += 1
         self._pending_guard_crossings.pop(int(pending.track_id), None)
