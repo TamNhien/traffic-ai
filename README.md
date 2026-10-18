@@ -1,3 +1,58 @@
+# Traffic AI V0.5.101 — Sửa HumanGuard deferred crossing / Raw-ID Guard
+
+**Bản sửa lỗi kế thừa đầy đủ V0.5.100.** Khắc phục 6 bài kiểm thử AI thất bại trong `tests/test_guard_transaction.py`: test fixture dựng `PipelineWorker.__new__` mà không chạy `__init__`, vì vậy thuộc tính `_raw_handoff_guard_enabled` không tồn tại ở nhánh `_commit_guard_crossing`. Bản mới coi guard tùy chọn là tắt khi chưa khởi tạo, nhưng khi worker thực bật vẫn lưu passage đã xác nhận.
+
+**An toàn giao dịch:** Raw-ID guard chỉ ghi lịch sử một crossing HumanGuard deferred sau khi `EventDispatcher.submit(...)` hoàn tất, tránh chặn nhầm lượt sau nếu dispatcher từ chối sự kiện. Thêm ba regression test: worker thiếu thuộc tính guard; guard bật và ghi đúng một passage sau admission; dispatcher lỗi không để lại ghi nhận giả. Không chỉnh GT, event lịch sử, thuật toán phân loại hoặc giá trị benchmark. Alembic `0115_guard_commit_v05101` chỉ cập nhật `schema_version`, không tạo/xóa bảng.
+
+**Chạy Windows (giữ nguyên `.env`, data, models và PostgreSQL volumes):**
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+.\scripts\test.ps1
+.\scripts\start.ps1
+# Khi kiểm thử/chạy ổn và có gh: .\scripts\publish.ps1
+```
+
+**Kết quả chạy trên máy của bạn với V0.5.100:** backend 195 đạt, AI 729 đạt / 6 lỗi (log ngày 18-10). V0.5.101 được kiểm thử lại độc lập; xem `VERIFICATION.md` cho phạm vi và giới hạn môi trường. Không tuyên bố F1 thay đổi cho tới khi chạy một phiên video và xuất benchmark mới.
+
+---
+
+# Traffic AI V0.5.100 — Verified raw-ID handoff suppression
+
+**Nâng cấp full source từ V0.5.99, lần này có thay đổi runtime worker**. Dữ liệu benchmark #72 / session #199 có 149 GT / 150 AI / 143 khớp / 6 lọt / 7 dư và giống hệt #71 / session #198 theo chữ ký crossing. Đây là số của phiên đã chạy, **không phải** kết quả inference mới với V0.5.100.
+
+## Sửa lỗi đếm trùng khi raw tracker ID chuyển qua hai canonical
+
+Trong trace cả hai phiên, frame 12304 có raw ID `182056` nằm dưới canonical `181574`; frame 12305 raw ID này chuyển sang canonical `182056` với box IoU 0.7003; hai canonical nhận OUT tại 491.920 và 492.200 giây, với điểm cắt cách nhau Δx=0.009272, Δy=0.002097. Dấu hiệu này đủ để tạo guard *rất hẹp* thay vì chặn các xe chỉ vì cùng timecode.
+
+`app.raw_handoff_guard.RawHandoffCrossingGuard` quan sát trực tuyến raw/canonical ID, đòi hỏi tất cả điều kiện: **cùng raw ID được quan sát dưới hai canonical khác nhau** (đổi trong tối đa 3 frame), IoU box khi handoff ≥0.64, canonical cũ có passage thực sự được commit trong 12 frame, cùng hướng IN hoặc OUT, event mới là `direct`, thời gian sau handoff ≤10 frame, điểm cắt x lệch ≤0.025 và y lệch ≤0.018. Không dùng GT, tên video, session ID, danh sách track ID cố định hay matcher để sửa đầu ra; không chặn xe khác raw ID dù rất gần nhau. Chính sách áp dụng cho `video` với 2 bánh, giữ nguyên RTSP/stream và 4 bánh. Nếu cần A/B, đặt `AI_VERIFIED_RAW_HANDOFF_GUARD=0` trong `.env` rồi chạy lại. Mặc định `1` trên local video.
+
+Bộ bảo vệ chỉ chặn ghi thêm event worker/DB khi có bằng chứng; canonical bị chặn vẫn giữ trạng thái gate đã xác nhận để không bắn lại cùng passage ngay sau đó. Trace lưu `producer_decision=verified_raw_handoff_duplicate_suppressed`, kèm raw/owner ID, IoU, Δframe, Δxy; Dashboard / Thông số kỹ thuật hiển thị **Raw-ID trùng được chặn**. Không thay đổi GT, benchmark matcher, rule class, Human Guard, dedup backend hay mật khẩu Admin.
+
+**Replay shadow** `scripts/audit-raw-handoff.py` (`.ps1` trên Windows) xác minh manifest/CRC/SHA trace, quét đủ 23.650 frame và xuất JSON/Markdown; cả #71 và #72 cho **1 ứng viên** cùng vị trí 492.200s trong 167 đề xuất. Đây là mô phỏng offline từ dữ liệu track cũ, không phải xác nhận F1 mới. Chưa có mô phỏng lại full-video YOLO/tracker sau bản sửa, và có rủi ro hiếm khi raw ID bị ByteTrack tái sử dụng cho hai xe chồng lấp; có thể tắt guard để so đối chứng.
+
+## Cập nhật, kiểm tra, chạy và xuất bản
+
+Giữ nguyên `.env`, `.git`, models, MP4, ảnh camera, storage và PostgreSQL volumes; không khởi tạo lại Admin. Metadata schema `0114_raw_handoff_v05100` nối `0113_passage_evidence_v0599`, không chỉnh bảng hoặc record cũ.
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+.\scripts\test.ps1
+.\scripts\start.ps1
+
+# Phân tích lại export đã lưu; không chạy GPU và không tự sửa điểm:
+.\scripts\audit-raw-handoff.ps1 -Export ".\traffic-ai-benchmark-72-session-199.zip" -OutputDirectory ".\raw-handoff-audit"
+
+# Chỉ khi test/chạy ổn thì phát hành tự động:
+.\scripts\publish.ps1
+```
+
+Chạy lại AI **một lần** với cùng `clip1.mp4` và cùng hình học vạch, tạo benchmark mới rồi sao chép GT từ #72 để so sánh. **Không khẳng định** trước rằng sẽ giảm từ 7 xuống 6 dư hoặc tăng F1: đây mới là counterfactual dựa trên trace cũ. Hai GT không có đề xuất crossing gần 392.179s và 591.091s vẫn phải rà detector/track riêng, không tự sinh lượt ảo.
+
+---
+
 # Traffic AI V0.5.99 - Verified Passage Evidence Review
 
 **Nâng cấp từ V0.5.98; không tự chỉnh thuật toán counting/detector.** Phân tích benchmark mới #71 / session #198 bằng full export ZIP và 166 JPG trong RAR (giải nén riêng). 149 GT / 150 AI / 143 khớp / 6 lọt / 7 dư: dữ liệu từ lượt chạy V0.5.98, **không phải** kết quả inference sau khi nâng cấp. 4 trong 6 mốc GT chưa khớp có event AI đã được matcher ghép sang GT khác, không đủ bằng chứng nói detector bỏ sót; 2 GT còn lại không có event đã lưu tương ứng trong tolerance. 1 AI extra ở khoảng 491.920 giây có chỉ dấu hàng xóm hình học, nhưng chưa xác lập cùng xe. Van/xe tải tại 882.290 giây có snapshot ngay vùng vạch; không loại tự động.

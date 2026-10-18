@@ -115,6 +115,7 @@ class PipelineState:
     pending_events: int = 0
     delivery_failures: int = 0
     stitch_recoveries: int = 0
+    raw_handoff_duplicate_suppressed: int = 0
     raw_id_discontinuities: int = 0
     short_gap_alias_rejections: int = 0
     direct_crossings: int = 0

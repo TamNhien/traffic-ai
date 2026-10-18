@@ -1,3 +1,36 @@
+# V0.5.101 — Kiểm chứng sửa lỗi HumanGuard / Raw-ID Handoff
+
+Nguồn lỗi: log người dùng chạy `scripts/test.ps1`: 6 failures cùng `AttributeError: _raw_handoff_guard_enabled` ở `app/worker.py:_commit_guard_crossing`; 729 AI tests passed và 195 backend passed ở V0.5.100.
+
+**Sửa:** `getattr(self, "_raw_handoff_guard_enabled", False)` ở nhánh deferred commit và dời `note_passage()` sau dispatcher acceptance. Chỉ đường commit deferred thay đổi; đường direct crossing vẫn giữ nguyên. Ba tests mới (legacy `__new__`, guard-on successful submission, failed dispatcher) được thêm để chống hồi quy.
+
+**Đã chạy trong môi trường Linux Python 3.13 / Node.js 22, ngày 18-10-2026:**
+
+- `ai-service`: **738 passed**, bao gồm 6 ca báo lỗi và 3 regressions mới, qua `python -m pytest -q tests`.
+- `backend`: **195 passed**, với biến môi trường test như `scripts/test.ps1`.
+- `scripts/tests` (không tính subtests lặp): **109 passed, 1 skipped** (native PowerShell không có), 59 subtests passed.
+- `frontend`: **47 passed** dùng Node 22 cho unit tests (project cần Node 26 để build/release).
+- `scripts/version-contract.py`: PASS phiên bản V0.5.101, Alembic head `0115_guard_commit_v05101`.
+- Tổng độc lập: **1089 passed, 1 skipped**; 68 bài chạy nhắm riêng human guard trước đó không cộng thêm lần nữa.
+
+**Giới hạn kiểm chứng:** `httpx2==2.13.0` không cài trong container kiểm thử nên AI + backend dùng một module shim tạm thời ngoài source (`from httpx import *`, httpx 0.28.1). Shim không nằm trong ZIP. Không xác nhận full parity với HTTPX2 thực; Docker/PowerShell/Node26, PostgreSQL live, GPU/video replay vẫn phải chạy trên Windows bằng `scripts/test.ps1` và `scripts/start.ps1`. Mốc GT149 / AI150 / khớp143 / lọt6 / dư7 là kết quả phiên #199 trên phiên bản cũ; không tuyên bố đổi F1.
+
+---
+
+# V0.5.100 — Kiểm chứng Raw-ID Handoff Duplicate Guard
+
+Baseline source: `traffic-ai-v0.5.99-full-source.zip` (328 member). Inputs: `traffic-ai-benchmark-72-session-199.zip`, `camera_1(20261018-111357).rar`; compare baseline `traffic-ai-benchmark-71-session-198(1).zip`. RAR chứa 166 ảnh JPG và một trace nguyên bản; ảnh trích ra bằng libarchive để rà soát, không đóng cùng source. Các file benchmark được công cụ verifier xác nhận SHA-256, source trace gzip đầy đủ 326177104 bytes, metadata/footer closed, và 23650 frame liên tiếp.
+
+**Kết quả cũ:** hai benchmark có chữ ký 150 sự kiện DB không đổi; 143 khớp / 6 lọt / 7 dư. 4 GT chưa ghép do temporal assignment cạnh tranh, 2 GT không có event tương ứng. Có 1 raw-alias double direct crossing ở frame 12306, source time 492.2s: canonical 181574 -> 182056, raw 182056, overlap 0.7003, Δframe 7, cùng hướng OUT, điểm cắt gần. Hai phương tiện khác raw ID và gần timecode không có quyền suppression.
+
+**Runtime thay đổi:** thêm `app/raw_handoff_guard.py`, tích hợp worker tại `resolve`/`committed`, lưu trace cùng telemetry, chỉ bật mặc định cho video source và hai bánh. Session mới không dùng GT để quyết định. Không xóa event đã lưu.
+
+**Replay shadow đã chạy:** `scripts/audit-raw-handoff.py` kiểm tra CRC, manifest hash và gzip source hash của cả 2 benchmark; mỗi bản có 23650 frame / 167 proposals và 1 ứng viên. Công cụ này chạy trên *dữ liệu đã lưu*, không phải toàn bộ inference sau thay đổi, và không dự báo đáng tin cậy F1 của phiên mới.
+
+**Hạn chế môi trường:** Không có `pwsh`, Docker, GPU, `httpx2`, `psycopg` để xác minh chạy Windows/Docker/GPU/HTTP đầy đủ. Đã chạy QA offline chọn lọc: AI 513 đạt / 1 loại trừ do thiếu httpx2; backend 80 đạt / 1 loại trừ do thiếu psycopg; scripts 104 đạt / 1 skip native PowerShell; frontend Node 47 đạt. Tổng cộng **744 đạt, 1 skip, 2 loại trừ**. Kiểm thử 12 ca riêng của guard nằm trong 513 bài AI, không cộng lần nữa. Đã chạy `python3 -m compileall -q ai-service/app ai-service/tests backend/app scripts` và `python3 scripts/version-contract.py` đều đạt. Windows `scripts/test.ps1` cần chạy trước khi phát hành. Cần một phiên AI mới với GT cùng clip/vạch để đo thay đổi thực sự.
+
+---
+
 # V0.5.99 - Verified passage evidence worklist (read-only)
 
 Baseline ZIP: `traffic-ai-v0.5.98-full-source(1).zip`; inputs: `traffic-ai-benchmark-71-session-198(1).zip`, `camera_1(20261018-095241).rar`. Verified original export through benchmark-forensics verifier, including full compressed/uncompressed trace digests and closed delivery summary. RAR decoded locally with libarchive: 166 JPG plus a raw trace member. Original GT and event records are unchanged.

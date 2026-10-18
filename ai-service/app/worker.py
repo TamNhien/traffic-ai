@@ -37,6 +37,7 @@ from app.counting import (
     TwoWheelCenterCrossingRescuer, select_event_crossing_frame, signed_distance,
 )
 from app.dedup import single_heavy_vehicle_plan, stable_tracking_order
+from app.raw_handoff_guard import RawHandoffCrossingGuard
 from app.flow_calibration import FlowCalibrator
 from app.gate_roi import gate_roi_for_line, road_zone_roi
 from app.human_guard import (
@@ -95,6 +96,14 @@ class PipelineWorker(threading.Thread):
         self._latest_jpeg: bytes | None = None
         self._latest_jpeg_sequence = 0
         self._seen_track_ids: set[int] = set()
+        # A two-wheel raw token crossing under two canonical owners can create
+        # two events for one passage. Only direct, evidence-backed handoffs on
+        # local video activate the strict guard; RTSP remains unaffected.
+        self._raw_handoff_guard = RawHandoffCrossingGuard()
+        self._raw_handoff_guard_enabled = (
+            payload.source_type == "video"
+            and os.getenv("AI_VERIFIED_RAW_HANDOFF_GUARD", "1").strip().lower() not in {"0", "false", "off"}
+        )
         self._labels = TrackLabelSmoother(history=int(os.getenv("AI_CLASS_HISTORY", "30")))
         self._class_policy = VehicleClassPolicy(
             bicycle_certainty=float(os.getenv("AI_BICYCLE_CERTAINTY", "0.80")),
@@ -606,6 +615,16 @@ class PipelineWorker(threading.Thread):
                 pending.crossing_x, pending.crossing_y,
             )
         )
+        # V0.5.101: some legacy tests intentionally allocate PipelineWorker
+        # via __new__ without __init__. The optional video guard must be
+        # treated as disabled unless explicitly initialized, while normal
+        # workers still record a verified passage after dispatcher admission.
+        # Never poison guard history if submit raises.
+        if getattr(self, "_raw_handoff_guard_enabled", False) and pending.label in TWO_WHEEL_LABELS:
+            self._raw_handoff_guard.note_passage(
+                pending.track_id, pending.observed_frame_index or pending.frame_index,
+                pending.direction, pending.crossing_x, pending.crossing_y,
+            )
         audit_rows = getattr(self, "_guard_crossing_proposals_this_frame", None)
         if audit_rows is None:
             audit_rows = self._guard_crossing_proposals_this_frame = []
@@ -1929,6 +1948,8 @@ class PipelineWorker(threading.Thread):
                         self.state.raw_id_discontinuities = self._continuity.raw_id_discontinuities
                         self.state.short_gap_alias_rejections = self._continuity.short_gap_alias_rejections
                         claimed_canonical_ids.add(track_id)
+                        if self._raw_handoff_guard_enabled and current_label in TWO_WHEEL_LABELS:
+                            self._raw_handoff_guard.observe(raw_track_id, track_id, frame_index, rect)
                         for duplicate_index in duplicate_aliases.get(item_index, []):
                             displaced = self._continuity.alias_raw_id(int(ids[duplicate_index]), track_id)
                             if displaced is not None and int(displaced) != int(track_id):
@@ -2330,6 +2351,29 @@ class PipelineWorker(threading.Thread):
                                 "producer_decision": "committed_before_submit",
                             }
 
+                            # V0.5.100: suppress a second direct passage only if
+                            # the very same raw ByteTrack token was observed on
+                            # a recently counted canonical, then transferred
+                            # with overlapping boxes and the same crossing XY.
+                            # No GT label, time-only, or spatial-only rule is used.
+                            # Leave the duplicate canonical's gate CLOSED (counted)
+                            # to avoid immediately proposing the same event again;
+                            # worker totals and DB see no second passage.
+                            if self._raw_handoff_guard_enabled and event_label in TWO_WHEEL_LABELS:
+                                raw_duplicate = self._raw_handoff_guard.duplicate_of(
+                                    raw_track_id, track_id, frame_index, direction,
+                                    crossing_x, crossing_y, crossing_method=crossing_method,
+                                )
+                                if raw_duplicate is not None:
+                                    gate_trace_track["raw_handoff_suppression"] = raw_duplicate
+                                    gate_trace_track["crossing_clock_audit"]["producer_decision"] = (
+                                        "verified_raw_handoff_duplicate_suppressed"
+                                    )
+                                    self.state.raw_handoff_duplicate_suppressed = (
+                                        self._raw_handoff_guard.suppressed
+                                    )
+                                    continue
+
                             if event_label in TWO_WHEEL_LABELS:
                                 action, _ = self._observe_human_guard(
                                     track_id, frame_index, analysis_frame, rect, event_label, event_confidence,
@@ -2388,6 +2432,10 @@ class PipelineWorker(threading.Thread):
                                 )
                                 context_trace["audit"]["commit_status"] = "accepted"
                             self._record_committed_crossing(event_label, direction, crossing_method)
+                            if self._raw_handoff_guard_enabled and event_label in TWO_WHEEL_LABELS:
+                                self._raw_handoff_guard.note_passage(
+                                    track_id, frame_index, direction, crossing_x, crossing_y
+                                )
                             self.state.rejected_outside_road = counter.rejected_outside_road
                             pending_crossing_events.append((
                                 track_id, event_label, direction, event_confidence, event_frame_index,
@@ -2580,6 +2628,7 @@ class PipelineWorker(threading.Thread):
                         "two_wheel_spatial_signature_duplicates": self.state.two_wheel_spatial_signature_duplicates,
                         "two_wheel_ultra_spatial_signature_duplicates": self.state.two_wheel_ultra_spatial_signature_duplicates,
                         "heavy_stitch_recoveries": self.state.heavy_stitch_recoveries,
+                        "raw_handoff_duplicate_suppressed": self.state.raw_handoff_duplicate_suppressed,
                         "raw_id_discontinuities": self.state.raw_id_discontinuities,
                         "short_gap_alias_rejections": self.state.short_gap_alias_rejections,
                         "four_wheel_duplicate_suppressed": self.state.four_wheel_duplicate_suppressed,
@@ -3287,7 +3336,7 @@ class PipelineWorker(threading.Thread):
         rt = f"x{self.state.realtime_factor:.2f}" if self.state.source_fps > 0 else "live"
         cv2.putText(
             frame,
-            f"DET {self.state.detections_current_frame} | UNTRACKED {self.state.untracked_detections} | TRACK {self.state.active_tracks} | ROAD {self.state.road_tracks_current_frame} | TOTAL {self.state.total_count} | IN {self.state.in_count} | OUT {self.state.out_count} | FPS {self.state.fps:.1f} ({rt}) | {self.state.inference_ms:.0f}ms | {'HYBRID' if self.hybrid_mode else 'DIRECT'} {Path(self.detector_model_name).name} | ROI {self.detection_roi_mode.upper()} | DIRECT-X {self.state.direct_crossings} | INTERP {self.state.interpolated_crossings} | RESCUE {self.state.rescued_crossings} | ROAD-REJECT {counter.rejected_outside_road} | CONFIRM-REJECT {counter.rejected_unconfirmed_side} | COOL-REJECT {counter.rejected_cooldown} | COOL-REL {counter.adaptive_cooldown_releases} | FAST-CONF {counter.fast_confirm_rescues} | BRACKET+ {counter.bracket_confirm_rescues} | LATE-CONF {counter.late_geometry_confirms} | RESCUE-X {counter.rejected_rescue_validation} | LONG-RESCUE-X {counter.rejected_long_gap_rescue} | CLASS-R {self.state.class_refine_checks} | GEN-R {self.state.general_refine_checks} | CONS+ {self.state.class_consensus_rescues} | BIKE+ {self.state.bicycle_class_rescues} | BIKE-CTX {self.state.bicycle_context_rescues} | BIKE-T {self.state.bicycle_context_temporal_rescues} | BIKE-W+ {self.state.bicycle_context_weak_motor_rescues} | BIKE-M+ {self.state.bicycle_context_competitive_rescues} | BIKE-NM+ {self.state.bicycle_context_near_margin_rescues} | 2W-C+ {self.state.two_wheel_center_rescues} | 2W-SIG2 {self.state.two_wheel_spatial_signature_duplicates} | 2W-ULTRA {self.state.two_wheel_ultra_spatial_signature_duplicates} | TRUCK+ {self.state.truck_class_rescues} | LOCK→CAR {self.state.truck_lock_demotion_rescues} | TRUCK-SEEN {self.state.truck_tracks_seen} | TRUCK-X {self.state.truck_crossing_tracks} | HEAVY-A {self.state.heavy_anchor_tracks} | HEAVY-C+ {self.state.heavy_center_rescues} | HEAVY-STITCH {self.state.heavy_stitch_recoveries} | RAW-ID-RESET {self.state.raw_id_discontinuities} | ALIAS-REJECT {self.state.short_gap_alias_rejections} | 4W-DUP {self.state.four_wheel_duplicate_suppressed} | START+ {self.state.video_start_rescues} | TIME-SYNC {self.state.crossing_time_corrections} | TIME-CLAMP {self.state.crossing_time_clamps} | REPLAY {'DET' if self.state.deterministic_video_replay else 'LIVE'} | HUMAN-X {self.state.human_guard_rejections} | RIDER+ {self.state.rider_guard_rescues} | GUARD-PENDING {self.state.human_guard_pending_crossings} | ROAD-EDGE+ {counter.road_edge_rescues}",
+            f"DET {self.state.detections_current_frame} | UNTRACKED {self.state.untracked_detections} | TRACK {self.state.active_tracks} | ROAD {self.state.road_tracks_current_frame} | TOTAL {self.state.total_count} | IN {self.state.in_count} | OUT {self.state.out_count} | FPS {self.state.fps:.1f} ({rt}) | {self.state.inference_ms:.0f}ms | {'HYBRID' if self.hybrid_mode else 'DIRECT'} {Path(self.detector_model_name).name} | ROI {self.detection_roi_mode.upper()} | DIRECT-X {self.state.direct_crossings} | INTERP {self.state.interpolated_crossings} | RESCUE {self.state.rescued_crossings} | ROAD-REJECT {counter.rejected_outside_road} | CONFIRM-REJECT {counter.rejected_unconfirmed_side} | COOL-REJECT {counter.rejected_cooldown} | COOL-REL {counter.adaptive_cooldown_releases} | FAST-CONF {counter.fast_confirm_rescues} | BRACKET+ {counter.bracket_confirm_rescues} | LATE-CONF {counter.late_geometry_confirms} | RESCUE-X {counter.rejected_rescue_validation} | LONG-RESCUE-X {counter.rejected_long_gap_rescue} | CLASS-R {self.state.class_refine_checks} | GEN-R {self.state.general_refine_checks} | CONS+ {self.state.class_consensus_rescues} | BIKE+ {self.state.bicycle_class_rescues} | BIKE-CTX {self.state.bicycle_context_rescues} | BIKE-T {self.state.bicycle_context_temporal_rescues} | BIKE-W+ {self.state.bicycle_context_weak_motor_rescues} | BIKE-M+ {self.state.bicycle_context_competitive_rescues} | BIKE-NM+ {self.state.bicycle_context_near_margin_rescues} | 2W-C+ {self.state.two_wheel_center_rescues} | 2W-SIG2 {self.state.two_wheel_spatial_signature_duplicates} | 2W-ULTRA {self.state.two_wheel_ultra_spatial_signature_duplicates} | TRUCK+ {self.state.truck_class_rescues} | LOCK→CAR {self.state.truck_lock_demotion_rescues} | TRUCK-SEEN {self.state.truck_tracks_seen} | TRUCK-X {self.state.truck_crossing_tracks} | HEAVY-A {self.state.heavy_anchor_tracks} | HEAVY-C+ {self.state.heavy_center_rescues} | HEAVY-STITCH {self.state.heavy_stitch_recoveries} | RAW-ID-RESET {self.state.raw_id_discontinuities} | RAW-HANDOFF-X {self.state.raw_handoff_duplicate_suppressed} | ALIAS-REJECT {self.state.short_gap_alias_rejections} | 4W-DUP {self.state.four_wheel_duplicate_suppressed} | START+ {self.state.video_start_rescues} | TIME-SYNC {self.state.crossing_time_corrections} | TIME-CLAMP {self.state.crossing_time_clamps} | REPLAY {'DET' if self.state.deterministic_video_replay else 'LIVE'} | HUMAN-X {self.state.human_guard_rejections} | RIDER+ {self.state.rider_guard_rescues} | GUARD-PENDING {self.state.human_guard_pending_crossings} | ROAD-EDGE+ {counter.road_edge_rescues}",
             (20, 32),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.62,

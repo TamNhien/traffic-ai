@@ -2594,6 +2594,25 @@ Invoke-Step "V0.5.94 anchor stability and HumanGuard decision audit contract" {
   }
 }
 
+Invoke-Step "V0.5.100 raw-ID handoff duplicate guard contract" {
+  $guard = Get-Content (Join-Path $root "ai-service/app/raw_handoff_guard.py") -Raw -Encoding UTF8
+  $worker = Get-Content (Join-Path $root "ai-service/app/worker.py") -Raw -Encoding UTF8
+  $tests = Get-Content (Join-Path $root "ai-service/tests/test_raw_handoff_guard_v05100.py") -Raw -Encoding UTF8
+  $frontend = Get-Content (Join-Path $root "frontend/src/main.jsx") -Raw -Encoding UTF8
+  if ($guard -notmatch 'class RawHandoffCrossingGuard' -or $guard -notmatch 'def duplicate_of' -or $guard -notmatch 'former_owner' -or $guard -notmatch 'min_handoff_iou') { throw "V0.5.100 raw-token guard missing." }
+  if ($worker -notmatch 'AI_VERIFIED_RAW_HANDOFF_GUARD' -or $worker -notmatch 'raw_handoff_suppression' -or $worker -notmatch 'note_passage') { throw "V0.5.100 worker integration missing." }
+  if ($frontend -notmatch 'raw_handoff_duplicate_suppressed' -or $tests -notmatch 'test_two_independent_close_vehicles_stay_counted_without_shared_raw_id') { throw "V0.5.100 telemetry or convoy regression missing." }
+}
+
+
+Invoke-Step "V0.5.101 deferred HumanGuard raw-ID admission safety contract" {
+  $worker = Get-Content (Join-Path $root "ai-service/app/worker.py") -Raw -Encoding UTF8
+  $tests = Get-Content (Join-Path $root "ai-service/tests/test_guard_transaction.py") -Raw -Encoding UTF8
+  $method = ($worker -split '    def _commit_guard_crossing\(', 2)[1]
+  if ($method -notmatch 'getattr\(self, "_raw_handoff_guard_enabled", False\)') { throw "V0.5.101 deferred guard optional initialization missing." }
+  if ($tests -notmatch 'test_v05101_partial_worker_without_guard' -or $tests -notmatch 'test_v05101_failed_dispatcher_does_not_poison_raw_handoff_history') { throw "V0.5.101 raw-ID admission regressions missing." }
+}
+
 Invoke-Step "Backend syntax check" {
   docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 -v "${root}:/src" -w /src/backend python:3.14.7-slim python -m compileall -q app tests alembic
 }

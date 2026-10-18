@@ -1462,3 +1462,52 @@ def test_v0559_registry_stop_returns_settled_terminal_status() -> None:
 
     assert calls == ["stop", ("join", 1.0)]
     assert result["status"] == state.status == "stopped"
+
+
+def test_v05101_partial_worker_without_guard_does_not_raise_on_deferred_commit() -> None:
+    # Legacy _worker() intentionally uses __new__, without running __init__.
+    worker = _worker()
+    assert not hasattr(worker, "_raw_handoff_guard_enabled")
+    pending = _pending()
+    worker._pending_guard_crossings[pending.track_id] = pending
+    worker._commit_guard_crossing(object(), pending)
+    assert len(worker._event_dispatcher.payloads) == 1
+    assert worker.state.human_guard_deferred_commits == 1
+
+
+def test_v05101_enabled_raw_handoff_notes_deferred_commit_once_after_admission() -> None:
+    worker = _worker()
+    order = []
+    class Guard:
+        def note_passage(self, *args):
+            order.append(("guard", args))
+    class Dispatcher:
+        def submit(self, payload):
+            order.append(("dispatch", payload))
+    worker._raw_handoff_guard_enabled = True
+    worker._raw_handoff_guard = Guard()
+    worker._event_dispatcher = Dispatcher()
+    pending = _pending()
+    pending.observed_frame_index = 522
+    worker._pending_guard_crossings[pending.track_id] = pending
+    worker._commit_guard_crossing(object(), pending)
+    assert [stage for stage, _ in order] == ["dispatch", "guard"]
+    assert order[1][1] == (77, 522, "in", .51, .62)
+
+
+def test_v05101_failed_dispatcher_does_not_poison_raw_handoff_history() -> None:
+    import pytest
+    worker = _worker()
+    notes = []
+    worker._raw_handoff_guard_enabled = True
+    worker._raw_handoff_guard = SimpleNamespace(note_passage=lambda *args: notes.append(args))
+    def fail(_payload):
+        raise RuntimeError("Dispatcher admission closed")
+    worker._event_dispatcher.submit = fail
+    pending = _pending()
+    worker._pending_guard_crossings[pending.track_id] = pending
+    with pytest.raises(RuntimeError, match="admission closed"):
+        worker._commit_guard_crossing(object(), pending)
+    assert notes == []
+    assert worker._guard_crossing_proposals_this_frame == []
+    assert worker.state.human_guard_deferred_commits == 0
