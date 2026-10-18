@@ -776,9 +776,11 @@ class VerifiedAnchorSpanRescuer:
         and direction.
         """
         age = int(frame_index) - int(pending.end.frame_index)
+        state = self._tracks.get(int(track_id))
         if (
             age < 0
             or age > self.clock_reconcile_max_gap_frames
+            or (state is not None and pending.end.frame_index <= state.last_count_frame)
             or pending.same_direction_candidate
             or pending.approach_span
             or pending.opposite_observations
@@ -816,7 +818,8 @@ class VerifiedAnchorSpanRescuer:
         if hint is None:
             return None
         age = current - int(hint.end_frame)
-        if age < 0 or age > self.clock_reconcile_max_gap_frames:
+        if (age < 0 or age > self.clock_reconcile_max_gap_frames
+                or (state is not None and hint.end_frame <= state.last_count_frame)):
             self._clock_hints.pop(tid, None)
             return None
         if hint.direction != str(direction):
@@ -1179,11 +1182,19 @@ class VerifiedAnchorSpanRescuer:
         if source == target:
             return
         source_hint = self._clock_hints.pop(source, None)
-        target_hint = self._clock_hints.get(target)
-        if source_hint is not None and (
-            target_hint is None or source_hint.end_frame > target_hint.end_frame
-        ):
-            self._clock_hints[target] = source_hint
+        target_hint = self._clock_hints.pop(target, None)
+        # Geometry completed before either alias's latest accepted passage
+        # belongs to an older cycle. Filter both hints before choosing one,
+        # including when a source has no remaining observation state.
+        accepted_cutoff = max(
+            (state.last_count_frame for state in (self._tracks.get(source), self._tracks.get(target))
+             if state is not None),
+            default=-10_000,
+        )
+        eligible_hints = [hint for hint in (target_hint, source_hint)
+                          if hint is not None and hint.end_frame > accepted_cutoff]
+        if eligible_hints:
+            self._clock_hints[target] = max(eligible_hints, key=lambda hint: hint.end_frame)
         src = self._tracks.pop(source, None)
         if src is None:
             return

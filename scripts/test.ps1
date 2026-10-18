@@ -2379,6 +2379,19 @@ if ($observedAudit -notmatch 'raw_id_handoffs' -or $observedAudit -notmatch 'ide
 }
 Write-Host '[OK] Observed track review V0.5.97 contract' -ForegroundColor Green
 
+Write-Host "`n[Traffic AI] Passage-owned clock hints V0.5.98 contract" -ForegroundColor Cyan
+$clockOwnerSource = Get-Content (Join-Path $root "ai-service/app/counting.py") -Raw -Encoding UTF8
+$clockOwnerTests = Get-Content (Join-Path $root "ai-service/tests/test_v0598_clock_hint_ownership.py") -Raw -Encoding UTF8
+$clockOwnerMigration = Get-Content (Join-Path $root "backend/alembic/versions/0112_clock_owner_v0598.py") -Raw -Encoding UTF8
+if ($clockOwnerSource -notmatch 'pending.end.frame_index <= state.last_count_frame' -or
+    $clockOwnerSource -notmatch 'hint.end_frame <= state.last_count_frame' -or
+    $clockOwnerSource -notmatch 'hint.end_frame > accepted_cutoff' -or
+    $clockOwnerTests -notmatch 'reconciliation_crossing_frame_for' -or
+    $clockOwnerMigration -notmatch '0111_count_review_v0597') {
+  throw 'V0.5.98 missing accepted-passage ownership for pending, retained or merged clocks.'
+}
+Write-Host '[OK] Passage-owned clock hints V0.5.98 contract' -ForegroundColor Green
+
 # Check daemon readiness before the first Docker-dependent test.
 . (Join-Path $PSScriptRoot "docker-engine.ps1")
 & (Join-Path $PSScriptRoot "tests/test-docker-engine-v0595.ps1")

@@ -1,3 +1,68 @@
+# V0.5.98 — Kiểm chứng quyền sở hữu clock hint qua alias merge
+
+Baseline: full source .97 SHA256 `932a350a97f92d11d0d9f6f51ab0a2db5a413b7d67ef7487819b1ac23752d4f4`, 320 file. Scope sửa đúng ba thân hàm `VerifiedAnchorSpanRescuer._store_clock_hint_if_safe`, `reconciliation_crossing_frame_for`, `merge_track`. Không đổi các thân hàm khác, signature/global/class statement của counting.py; bảy file thuật toán trọng yếu còn lại giữ nguyên bytes. Metadata active tăng .98, thêm migration/test và contract kiểm tra source.
+
+## Input #70 và đối chiếu #69
+
+`traffic-ai-benchmark-70-session-197.zip`: đủ bảy member an toàn, CRC tốt, sáu member dữ liệu khớp toàn bộ SHA/size manifest. Gzip được đọc tới EOF: 326.296.835 byte, SHA256 `311b137a92ea11da58383f5d6dfc95ea0a9df8ed66bc22d9ca5e9c3e8a55f7d5`, 23.650 frame liên tục. RAR ảnh và trace được đọc local, không thay file đầu vào.
+
+149 GT tương đương trên thời gian/frame/hướng/loại/note; config giống từng byte. Cả 150 event #69 và #70 giống nhau trên time/frame/track/class/direction/method/xy/confidence: không thêm/bớt/đổi crossing. Matcher thật tính lại đúng report #70: 149 GT / 150 AI / 143 khớp / 6 lọt / 7 dư, F1 0.956522, strict match 138. Đây số liệu export người dùng, không phải inference .98.
+
+167 proposal tương ứng 167 receipt = 150 created + 17 deduplicated. Delivery drain complete, pending/dropped 0; không có bằng chứng mất lượt do gửi backend. Raw/canonical IDs, rectangles, anchors/centers, primary/stable class và velocity của các gate frame giống #69; class_override, playback lag, lịch/refiner audit và counter phụ có khác. Không tuyên bố trace byte-exact giữa hai phiên.
+
+Ảnh giao diện hiển thị V0.5.97; trace không ghi build/version hash để độc lập chứng minh bytes runtime. Các ca lọt/dư còn lại vẫn cần bằng chứng vật lý, không tự sửa GT hoặc loại event bằng timecode. Track 296297 có proposal IN sau handoff gap18, rồi proposal OUT tại 754.6878 s bị backend gộp `same-track-direction-flip`; trusted span clock lúc IN là None, nên không quy lỗi đó cho hint vừa sửa. Proposal và receipt chưa tự chứng minh identity vật lý của phương tiện. Các track gần miss 237/406 đi IN; miss 392 có lịch sử canonical bị gián đoạn nhưng chưa đủ chứng minh auto merge an toàn.
+
+## Tái lập lỗi và thay đổi
+
+Dùng chính `CountingLine` và `VerifiedAnchorSpanRescuer` thật, không inject hint giả: update track 1 tại (500,470)/frame10, (500,530)/13, (500,540)/20 với commit=False tạo hint IN 11.5 từ span kết thúc 13. Track 2 nhận OUT/frame18 qua mark_counted; merge 1→2; reconciliation cho IN/frame22 ở .97 vẫn trả 11.5 dù span cũ đã kết thúc trước lượt được nhận.
+
+.98 yêu cầu endpoint của hint/pending span phải **lớn hơn** latest accepted passage frame. Khi merge, tính cutoff từ cả source và target, loại hint cũ ở cả hai phía rồi chọn hint hợp lệ có endpoint mới nhất; giữ ưu tiên target khi bằng endpoint. Kiểm tra tồn tại cả lúc lưu, đọc và gộp hint. Không so crossing_frame nội suy với confirmation frame vì chúng là hai clock khác nhau.
+
+Bộ 16 regression mới có stale source/target và hai hướng merge, endpoint bằng cutoff, hint mới và cũ cùng có, pending span, hint hết hạn, alias thiếu state, self-merge lặp, mismatch hướng không tiêu thụ hint, truy vấn không nhận count/tăng rescue telemetry và lượt IN thật sau khi loại hint cũ vẫn đếm được. Case dương bắt buộc endpoint 13 sau xác nhận 12 vẫn trả geometric clock 11.5. Bản cũ chạy thật **12 đạt / 4 lỗi**; bản .98 **16 đạt / 0 lỗi**. Các 16 ca này đã nằm trong tổng test bên dưới, không cộng lại. Proof độc lập bốn ca ban đầu có 1 lỗi baseline → 0 lỗi .98 và không được cộng vào test sản phẩm.
+
+## QA thực thi
+
+| Nhóm | Đạt |
+|---|---:|
+| AI offline / worker helpers | 720 |
+| Backend offline | 135 |
+| Scripts stdlib unittest | 95 |
+| Benchmark-gate standalone | 5 |
+| Backup-worker standalone | 4 |
+| Node built-in | 43 |
+| Tổng | 1002 |
+
+0 lỗi. Giữ nguyên 1007 identities/thân AST Python lịch sử; thêm 16 thành 1023 definitions. Bảy file Node cũ/43 tests byte-exact; 79 thân hàm Assert lịch sử không đổi. 63 test HTTP/ORM chưa thực thi là đúng danh sách cũ (3 AI, 60 backend); 1 native PowerShell runner skip riêng vì không có pwsh, không tính là đạt. Baseline .97 có 986 test được chạy lại riêng, không cộng vào 1002.
+
+322 file source, 216 Python parse/compile, 31 PowerShell UTF-8 CRLF không BOM; text khác LF. 797 internal imports, 1101 literal PowerShell predicates, 121 cặp UI/runtime; Babel 20 JS/JSX và 47 relative import/export symbols. 320 code/config hashes đóng băng; hai tài liệu được duyệt độc lập trước archive audit. Toàn bộ 320 đường dẫn baseline được giữ.
+
+38 release checks đạt: 17 thực thi Git/artifact cục bộ, 14 static, 4 simulation, 3 Bash syntax. Không push GitHub hoặc tạo Release thật. Replay matcher .97/.98 trên cùng input #70 cho full output giống nhau, input không đổi; đây replay matcher dữ liệu đã lưu, không phải chạy lại counter/model toàn pipeline.
+
+Runtime sẵn có Python 3.12.14 / Node 24.19.0, khác pin Python 3.14.7 / Node >=26.10.0 / npm12.2.0. Không cài thêm dependency. Chưa thực thi native PowerShell/Docker .98, full pytest HTTP/ORM, PostgreSQL/migration live, npm install/audit/Vite production build, browser hoặc GPU/full-video inference. Không chứng minh mức giảm lọt/dư hay F1 .98 từ các phép kiểm này. Cache test .96 tiếp tục tách khỏi source với 20 lệnh Docker Python; ZIP dùng UTC build timestamp mới và kiểm các Python member đổi bytes không trùng timestamp baseline.
+
+## Chạy trên máy người dùng
+
+Giữ .env/.git/models/video/snapshots/volumes/data khi chép source. Migration metadata `0112_clock_owner_v0598` parent `0111_count_review_v0597`, chỉ nâng schema_version .98 / downgrade .97. Không tạo lại Admin.
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+
+# Test
+.\scripts\test.ps1
+
+# Khởi động
+.\scripts\start.ps1
+
+# Tự test, commit, push GitHub, tạo tag v0.5.98 và Release
+.\scripts\publish.ps1
+```
+
+Để đo .98: chạy AI một lần, tạo benchmark cho phiên mới rồi sao chép GT #70 nếu cùng clip/vạch. Các phần dưới là lịch sử, không phải các phép chạy .98 mới.
+
+---
+
 # V0.5.97 — Kiểm chứng rà soát hình học và đổi raw ID
 
 Baseline là ZIP .96 SHA256 `bb4609315117077df430f2382a126abf57fd6365e138369b2b106b6e4256ed27`, 313 file. V0.5.97 thêm bằng chứng đọc từ trace và giao diện xem video trước/sau; không đổi thuật toán detector, tracking, counting, class policy, Human Guard, rescuer, dedup, matcher hoặc GT.

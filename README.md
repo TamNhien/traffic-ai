@@ -1,3 +1,42 @@
+# Traffic AI V0.5.98 — Giữ đúng lượt sở hữu mốc thời gian crossing
+
+Sửa lỗi mốc thời gian của một đoạn quỹ đạo cũ còn đi theo alias sau khi gộp track vào một track đã nhận lượt cắt vạch mới hơn. Lỗi này có thể kéo timestamp của event về lượt trước và gây sai ghép benchmark. Bộ đếm không được tự tạo thêm event từ timestamp hint.
+
+Ví dụ tái hiện bằng API thật: track 1 có hint IN tại frame 11.5 từ đoạn quỹ đạo kết thúc frame 13; track 2 đã nhận OUT ở frame 18. Bản cũ gộp 1→2 rồi vẫn trả hint 11.5 khi hỏi IN ở frame 22. Bản .98 loại hint đã hết vòng đời này.
+
+Kiểm tra dựa vào frame **kết thúc đoạn quỹ đạo**, theo cùng điều kiện đang dùng cho pending span; không so thẳng timestamp nội suy với frame xác nhận. Vì vậy đoạn kết thúc frame 13 vẫn hợp lệ sau xác nhận frame 12, dù điểm cắt nội suy là frame 11.5. Hint hợp lệ và lượt xe quay lại vẫn có kiểm thử bảo vệ.
+
+## Kiểm thử và dữ liệu mới
+
+**1.002 kiểm thử offline/Node đạt, 0 lỗi**. Có 16 regression mới dùng hình học và các API rescuer thật: bản .97 đạt 12/sai 4; bản .98 đạt 16/16. Giữ nguyên toàn bộ test cũ và 79 contract Assert. Chỉ sửa ba hàm quản lý clock hint trong counting.py; các ngưỡng geometry, tracking, Human Guard, class policy, dedup và matcher được giữ nguyên.
+
+Đã kiểm đầy đủ export #70/session 197 và đối chiếu #69/196: cùng 149 GT, config và đủ 150 event trên các trường source; cả hai đều **143 khớp / 6 lọt / 7 dư, F1 95.6522%**. Có thay đổi ở scheduling/class-refiner audit, nên không coi toàn bộ trace giống nhau. Lỗi hint vừa sửa được tái lập độc lập, chưa được chứng minh là nguyên nhân sáu lượt lọt hoặc bảy lượt dư trong clip này.
+
+Chưa chạy Docker/PowerShell native hoặc inference đầy đủ .98 tại môi trường đóng gói. Chi tiết kiểm chứng và giới hạn nằm trong VERIFICATION.md.
+
+## Cập nhật và đo bản .98
+
+Giải nén chép đè source, giữ .env, .git, models, video, snapshots, volumes và dữ liệu hiện có. Migration metadata mới `0112_clock_owner_v0598`, parent `0111_count_review_v0597`. Không tạo lại Admin.
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+
+# Test
+.\scripts\test.ps1
+
+# Khởi động
+.\scripts\start.ps1
+
+# Tự test, commit, push GitHub, tạo tag v0.5.98 và Release
+.\scripts\publish.ps1
+```
+
+Mở https://traffic-ai.test:8443 rồi Ctrl+F5. Để đo thay đổi timestamp .98, chạy AI **một lần**, tạo benchmark cho phiên mới rồi sao chép GT từ #70 nếu vẫn cùng clip/vạch. Đối chiếu lại #70 chỉ chấm dữ liệu đã lưu của phiên 197; thao tác đó không chạy lại AI. Các phần dưới là lịch sử giữ nguyên.
+
+---
+
 # Traffic AI V0.5.97 — Rà soát track chồng lấp và đổi ID
 
 Bản này bổ sung bằng chứng quỹ đạo cho các ca AI đếm dư, sai hướng và sai loại. Sau khi cập nhật source và khởi động, chọn Benchmark #69, bấm **Đối chiếu lại**, rồi mở **Track chồng lấp và đổi ID** trong ca cần xem. Các nút Đầu/Cuối hoặc Trước/Sau đưa video tới đúng các quan sát đã lưu trong trace phiên 196; không cần tạo thêm benchmark để đọc lại bằng chứng này.

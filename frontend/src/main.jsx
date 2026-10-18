@@ -10,7 +10,7 @@ import { buildPassageCycleReview } from './benchmark-passage-cycles.js'
 import { buildHumanGuardAuditView } from './human-guard-audit.js'
 import { buildObservedTrackAuditView } from './observed-track-audit.js'
 
-const APP_VERSION = '0.5.97'
+const APP_VERSION = '0.5.98'
 const vehicleLabels = {
   motorcycle: 'Xe máy', bicycle: 'Xe đạp', car: 'Ô tô', bus: 'Xe buýt', truck: 'Xe tải', other: 'Khác'
 }
