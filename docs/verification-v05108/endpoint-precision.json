@@ -1,0 +1,807 @@
+{
+  "format": "traffic-ai-finite-endpoint-counterfactual",
+  "version": 2,
+  "benchmark_id": 78,
+  "session_id": 205,
+  "observed_ai_total": 148,
+  "observed_gt_total": 149,
+  "observed_matched": 143,
+  "observed_missed": 6,
+  "observed_extra": 5,
+  "flagged_event_count": 0,
+  "flagged_previously_matched": 0,
+  "flagged_previously_unmatched": 0,
+  "candidates": [],
+  "runtime_provenance": {
+    "status": "verified-schema",
+    "runtime_version": "0.5.107",
+    "worker_source_sha256": "5c65884ca1cef9462f85ddac38e7cac3068d85b99360d16cd3a546562c25b46c"
+  },
+  "actual_suppression_count": 2,
+  "runtime_suppression_evidence": {
+    "status": "recorded",
+    "guard_enabled": true,
+    "observed_suppression_rows": 2,
+    "consistent_suppression_rows": 2,
+    "final_suppression_counter": 2,
+    "counter_observations": 23650,
+    "verified_trace_frames": 23650,
+    "issues": [],
+    "suppressions": [
+      {
+        "tracking_id": 191795,
+        "raw_tracking_id": 191795,
+        "observed_frame_index": 12989,
+        "observed_time_seconds": 519.52,
+        "source_frame_index": 12986,
+        "source_time_seconds": 519.4182969201004,
+        "direction": "out",
+        "vehicle_type": "motorcycle",
+        "crossing_method": "interpolated",
+        "evidence_status": "recorded-consistent",
+        "evidence_issues": [],
+        "policy": {
+          "kind": "finite_endpoint_center_uncertain",
+          "projection": 0.055067,
+          "center_signed": 0.035349,
+          "direction": "out",
+          "method": "interpolated",
+          "edge_fraction": 0.08,
+          "stable_center_side": 0.04
+        },
+        "physical_identity_proven": false
+      },
+      {
+        "tracking_id": 345897,
+        "raw_tracking_id": 369724,
+        "observed_frame_index": 20301,
+        "observed_time_seconds": 812.0,
+        "source_frame_index": 20299,
+        "source_time_seconds": 811.9252006786242,
+        "direction": "out",
+        "vehicle_type": "motorcycle",
+        "crossing_method": "interpolated",
+        "evidence_status": "recorded-consistent",
+        "evidence_issues": [],
+        "policy": {
+          "kind": "finite_endpoint_center_uncertain",
+          "projection": 0.07634,
+          "center_signed": -0.010357,
+          "direction": "out",
+          "method": "interpolated",
+          "edge_fraction": 0.08,
+          "stable_center_side": 0.04
+        },
+        "physical_identity_proven": false
+      }
+    ]
+  },
+  "event_evidence": [
+    {
+      "ai_event_id": 14898,
+      "tracking_id": 2,
+      "source_time_seconds": 0.3995,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 12
+    },
+    {
+      "ai_event_id": 14901,
+      "tracking_id": 5799,
+      "source_time_seconds": 20.2295,
+      "status": "pending-producer-evidence",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": null
+    },
+    {
+      "ai_event_id": 14902,
+      "tracking_id": 6398,
+      "source_time_seconds": 20.73,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 520
+    },
+    {
+      "ai_event_id": 14904,
+      "tracking_id": 13756,
+      "source_time_seconds": 50.4213,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 1263
+    },
+    {
+      "ai_event_id": 14906,
+      "tracking_id": 14,
+      "source_time_seconds": 58.8927,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 1475
+    },
+    {
+      "ai_event_id": 14908,
+      "tracking_id": 20690,
+      "source_time_seconds": 69.4394,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 1739
+    },
+    {
+      "ai_event_id": 14909,
+      "tracking_id": 21545,
+      "source_time_seconds": 69.7164,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 1746
+    },
+    {
+      "ai_event_id": 14910,
+      "tracking_id": 22152,
+      "source_time_seconds": 73.1508,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 1831
+    },
+    {
+      "ai_event_id": 14911,
+      "tracking_id": 19471,
+      "source_time_seconds": 75.5216,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 1890
+    },
+    {
+      "ai_event_id": 14912,
+      "tracking_id": 23657,
+      "source_time_seconds": 75.6577,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 1894
+    },
+    {
+      "ai_event_id": 14914,
+      "tracking_id": 18458,
+      "source_time_seconds": 79.4188,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 1988
+    },
+    {
+      "ai_event_id": 14915,
+      "tracking_id": 24240,
+      "source_time_seconds": 81.9454,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 2051
+    },
+    {
+      "ai_event_id": 14916,
+      "tracking_id": 17464,
+      "source_time_seconds": 88.9171,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 2225
+    },
+    {
+      "ai_event_id": 14918,
+      "tracking_id": 29762,
+      "source_time_seconds": 93.4345,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 2338
+    },
+    {
+      "ai_event_id": 14919,
+      "tracking_id": 31813,
+      "source_time_seconds": 97.0063,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 2427
+    },
+    {
+      "ai_event_id": 14920,
+      "tracking_id": 33415,
+      "source_time_seconds": 103.8657,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 2599
+    },
+    {
+      "ai_event_id": 14922,
+      "tracking_id": 40123,
+      "source_time_seconds": 118.3173,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 2961
+    },
+    {
+      "ai_event_id": 14923,
+      "tracking_id": 48091,
+      "source_time_seconds": 145.1139,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 3630
+    },
+    {
+      "ai_event_id": 14928,
+      "tracking_id": 64781,
+      "source_time_seconds": 187.1445,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 4681
+    },
+    {
+      "ai_event_id": 14929,
+      "tracking_id": 71246,
+      "source_time_seconds": 203.7085,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 5095
+    },
+    {
+      "ai_event_id": 14930,
+      "tracking_id": 74010,
+      "source_time_seconds": 209.2711,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 5235
+    },
+    {
+      "ai_event_id": 14933,
+      "tracking_id": 84245,
+      "source_time_seconds": 233.1102,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 5831
+    },
+    {
+      "ai_event_id": 14935,
+      "tracking_id": 84351,
+      "source_time_seconds": 236.2984,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 5910
+    },
+    {
+      "ai_event_id": 14939,
+      "tracking_id": 89821,
+      "source_time_seconds": 249.5177,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 6240
+    },
+    {
+      "ai_event_id": 14940,
+      "tracking_id": 86667,
+      "source_time_seconds": 250.5291,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 6265
+    },
+    {
+      "ai_event_id": 14941,
+      "tracking_id": 92066,
+      "source_time_seconds": 253.1184,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 6330
+    },
+    {
+      "ai_event_id": 14943,
+      "tracking_id": 98268,
+      "source_time_seconds": 264.354,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 6611
+    },
+    {
+      "ai_event_id": 14944,
+      "tracking_id": 95080,
+      "source_time_seconds": 266.1513,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 6656
+    },
+    {
+      "ai_event_id": 14945,
+      "tracking_id": 102794,
+      "source_time_seconds": 278.8306,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 6973
+    },
+    {
+      "ai_event_id": 14946,
+      "tracking_id": 25767,
+      "source_time_seconds": 289.6156,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 7243
+    },
+    {
+      "ai_event_id": 14947,
+      "tracking_id": 110284,
+      "source_time_seconds": 292.864,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 7324
+    },
+    {
+      "ai_event_id": 14948,
+      "tracking_id": 114109,
+      "source_time_seconds": 300.2371,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 7508
+    },
+    {
+      "ai_event_id": 14949,
+      "tracking_id": 115767,
+      "source_time_seconds": 306.2096,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 7657
+    },
+    {
+      "ai_event_id": 14950,
+      "tracking_id": 117099,
+      "source_time_seconds": 309.5334,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 7740
+    },
+    {
+      "ai_event_id": 14951,
+      "tracking_id": 117580,
+      "source_time_seconds": 312.6564,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 7818
+    },
+    {
+      "ai_event_id": 14952,
+      "tracking_id": 120399,
+      "source_time_seconds": 314.8825,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 7875
+    },
+    {
+      "ai_event_id": 14953,
+      "tracking_id": 123616,
+      "source_time_seconds": 323.031,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 8079
+    },
+    {
+      "ai_event_id": 14954,
+      "tracking_id": 124424,
+      "source_time_seconds": 324.25,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 8108
+    },
+    {
+      "ai_event_id": 14956,
+      "tracking_id": 131479,
+      "source_time_seconds": 348.5389,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 8716
+    },
+    {
+      "ai_event_id": 14957,
+      "tracking_id": 132613,
+      "source_time_seconds": 350.0962,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 8755
+    },
+    {
+      "ai_event_id": 14959,
+      "tracking_id": 136058,
+      "source_time_seconds": 360.8858,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 9024
+    },
+    {
+      "ai_event_id": 14960,
+      "tracking_id": 137086,
+      "source_time_seconds": 363.5107,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 9091
+    },
+    {
+      "ai_event_id": 14961,
+      "tracking_id": 139604,
+      "source_time_seconds": 372.1548,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 9306
+    },
+    {
+      "ai_event_id": 14962,
+      "tracking_id": 136058,
+      "source_time_seconds": 374.1199,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 9355
+    },
+    {
+      "ai_event_id": 14966,
+      "tracking_id": 143399,
+      "source_time_seconds": 397.0209,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 9929
+    },
+    {
+      "ai_event_id": 14967,
+      "tracking_id": 145288,
+      "source_time_seconds": 399.6559,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 9994
+    },
+    {
+      "ai_event_id": 14970,
+      "tracking_id": 157032,
+      "source_time_seconds": 431.4333,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 10788
+    },
+    {
+      "ai_event_id": 14971,
+      "tracking_id": 165019,
+      "source_time_seconds": 452.3593,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 11311
+    },
+    {
+      "ai_event_id": 14972,
+      "tracking_id": 166075,
+      "source_time_seconds": 456.4795,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 11414
+    },
+    {
+      "ai_event_id": 14973,
+      "tracking_id": 166810,
+      "source_time_seconds": 458.8873,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 11474
+    },
+    {
+      "ai_event_id": 14974,
+      "tracking_id": 48646,
+      "source_time_seconds": 469.0782,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 11730
+    },
+    {
+      "ai_event_id": 14976,
+      "tracking_id": 175996,
+      "source_time_seconds": 485.5047,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 12140
+    },
+    {
+      "ai_event_id": 14980,
+      "tracking_id": 192389,
+      "source_time_seconds": 519.654,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 12993
+    },
+    {
+      "ai_event_id": 14986,
+      "tracking_id": 206612,
+      "source_time_seconds": 583.6607,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 14594
+    },
+    {
+      "ai_event_id": 14987,
+      "tracking_id": 228358,
+      "source_time_seconds": 595.7978,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 14897
+    },
+    {
+      "ai_event_id": 14989,
+      "tracking_id": 242505,
+      "source_time_seconds": 621.8985,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 15549
+    },
+    {
+      "ai_event_id": 14991,
+      "tracking_id": 251681,
+      "source_time_seconds": 639.7107,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 15996
+    },
+    {
+      "ai_event_id": 14993,
+      "tracking_id": 261259,
+      "source_time_seconds": 653.7738,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 16347
+    },
+    {
+      "ai_event_id": 14997,
+      "tracking_id": 279300,
+      "source_time_seconds": 681.4272,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 17038
+    },
+    {
+      "ai_event_id": 14998,
+      "tracking_id": 278227,
+      "source_time_seconds": 683.4301,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 17088
+    },
+    {
+      "ai_event_id": 14999,
+      "tracking_id": 279679,
+      "source_time_seconds": 684.8515,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 17123
+    },
+    {
+      "ai_event_id": 15000,
+      "tracking_id": 284887,
+      "source_time_seconds": 692.5468,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 17316
+    },
+    {
+      "ai_event_id": 15001,
+      "tracking_id": 293305,
+      "source_time_seconds": 702.9342,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 17575
+    },
+    {
+      "ai_event_id": 15002,
+      "tracking_id": 294438,
+      "source_time_seconds": 706.5567,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 17667
+    },
+    {
+      "ai_event_id": 15003,
+      "tracking_id": 296995,
+      "source_time_seconds": 707.6008,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 17692
+    },
+    {
+      "ai_event_id": 15004,
+      "tracking_id": 302899,
+      "source_time_seconds": 717.1098,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 17930
+    },
+    {
+      "ai_event_id": 15006,
+      "tracking_id": 318473,
+      "source_time_seconds": 744.2188,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 18608
+    },
+    {
+      "ai_event_id": 15007,
+      "tracking_id": 328328,
+      "source_time_seconds": 752.4845,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 18814
+    },
+    {
+      "ai_event_id": 15009,
+      "tracking_id": 333097,
+      "source_time_seconds": 756.2052,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 18907
+    },
+    {
+      "ai_event_id": 15010,
+      "tracking_id": 330951,
+      "source_time_seconds": 756.7512,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 18921
+    },
+    {
+      "ai_event_id": 15012,
+      "tracking_id": 338857,
+      "source_time_seconds": 772.9065,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 19325
+    },
+    {
+      "ai_event_id": 15013,
+      "tracking_id": 345591,
+      "source_time_seconds": 782.3688,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 19562
+    },
+    {
+      "ai_event_id": 15014,
+      "tracking_id": 352216,
+      "source_time_seconds": 788.2221,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 19708
+    },
+    {
+      "ai_event_id": 15016,
+      "tracking_id": 357270,
+      "source_time_seconds": 793.677,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 19844
+    },
+    {
+      "ai_event_id": 15018,
+      "tracking_id": 365295,
+      "source_time_seconds": 806.6684,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 20170
+    },
+    {
+      "ai_event_id": 15022,
+      "tracking_id": 345897,
+      "source_time_seconds": 816.9224,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 20425
+    },
+    {
+      "ai_event_id": 15023,
+      "tracking_id": 372198,
+      "source_time_seconds": 818.2478,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 20458
+    },
+    {
+      "ai_event_id": 15025,
+      "tracking_id": 377804,
+      "source_time_seconds": 832.3922,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 20813
+    },
+    {
+      "ai_event_id": 15027,
+      "tracking_id": 382234,
+      "source_time_seconds": 834.6656,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 20869
+    },
+    {
+      "ai_event_id": 15028,
+      "tracking_id": 383094,
+      "source_time_seconds": 837.7549,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 20946
+    },
+    {
+      "ai_event_id": 15029,
+      "tracking_id": 385878,
+      "source_time_seconds": 841.5698,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 21041
+    },
+    {
+      "ai_event_id": 15032,
+      "tracking_id": 403237,
+      "source_time_seconds": 864.4775,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 21614
+    },
+    {
+      "ai_event_id": 15033,
+      "tracking_id": 391451,
+      "source_time_seconds": 872.4633,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 21815
+    },
+    {
+      "ai_event_id": 15035,
+      "tracking_id": 417435,
+      "source_time_seconds": 887.6543,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 22194
+    },
+    {
+      "ai_event_id": 15036,
+      "tracking_id": 424336,
+      "source_time_seconds": 898.2451,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 22458
+    },
+    {
+      "ai_event_id": 15040,
+      "tracking_id": 434630,
+      "source_time_seconds": 912.0916,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 22805
+    },
+    {
+      "ai_event_id": 15041,
+      "tracking_id": 430162,
+      "source_time_seconds": 913.1769,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 22831
+    },
+    {
+      "ai_event_id": 15042,
+      "tracking_id": 437836,
+      "source_time_seconds": 917.4893,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 22939
+    },
+    {
+      "ai_event_id": 15043,
+      "tracking_id": 403237,
+      "source_time_seconds": 921.61,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 23042
+    },
+    {
+      "ai_event_id": 15045,
+      "tracking_id": 453155,
+      "source_time_seconds": 938.0896,
+      "status": "exact-clock",
+      "candidate_record_count": 1,
+      "gate_evidence_frame": 23454
+    }
+  ],
+  "event_evidence_status_counts": {
+    "exact-clock": 89,
+    "pending-producer-evidence": 1
+  },
+  "unknown_event_evidence_count": 1,
+  "disclaimer": "Read-only audit. Remaining persisted-event candidates are a past-trace approximation; producer suppressions are separate recorded decisions. Missing evidence is unknown, not zero. No new inference, identity proof, or score/GT/event mutation. Re-run the identical clip to verify counting changes."
+}

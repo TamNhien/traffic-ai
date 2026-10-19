@@ -1,3 +1,69 @@
+# Traffic AI V0.5.108 — Audit các lần chặn endpoint thực tế
+
+Lệnh `audit-endpoint-precision.ps1` trước đây chỉ duyệt sự kiện **đã lưu vào DB**.
+Vì đề xuất bị bộ lọc chặn không được lưu thành event, audit trên phiên mới có thể
+báo `0 candidates` dù worker đã chặn hai đề xuất. Đây là lỗi báo cáo, không phải
+bằng chứng bộ lọc không hoạt động.
+
+Bản này đọc quyết định producer trực tiếp từ trace đã kiểm tra toàn vẹn, trình
+bày riêng **đã chặn trong runtime** và **ứng viên mô phỏng từ event đã lưu**.
+Bằng chứng gắn với từng lượt cắt vạch theo track, hướng, loại, phương pháp và
+clock của event; trường hợp thiếu hoặc mâu thuẫn được ghi rõ, không đoán theo
+mốc gần nhất rồi coi là xác nhận.
+
+## Kết quả trên dữ liệu bạn gửi
+
+Benchmark #78 / Session #205: GT **149**, AI **148**, khớp timecode **143**,
+lọt **6**, dư **5**, F1 **96,30%**. Trace xác nhận runtime **0.5.107**, bộ lọc bật,
+23.650 frame và fingerprint đúng source .107 đính kèm.
+
+- Hai lần chặn thực tế: track 191795 tại **519,418s** và track 345897 tại
+  **811,925s** (clock cắt vạch; frame xác nhận đến sau).
+- Audit cũ báo 0 trên #78 vì cả hai không có event DB. Audit mới hiển thị hai
+  quyết định này và số ứng viên còn lại riêng biệt.
+- Trong 90 event nội suy hai bánh cần đối chiếu: 89 có clock chính xác;
+  1 event (14901 tại 20,2295s) chỉ có bằng chứng proposal đang chờ HumanGuard,
+  nên audit ghi **unknown**, không kết luận thiếu lượt đếm hay lỗi DB.
+- Ảnh camera trong RAR thuộc Session #205, trace trùng hash với benchmark.
+  Gần 812,577s có xe đang chạy cạnh xe đỗ và một lần đổi raw ID; bằng chứng
+  này chưa đủ để tự xóa lượt xe đang chạy hoặc gộp các xe khác nhau.
+
+**Phạm vi:** sửa audit, không thay detector/model, quy tắc đếm, GT, matcher,
+ngưỡng ghép thời gian hoặc dữ liệu cũ. Van chở hàng vẫn là **xe tải**. Xe quay
+lại cắt vạch vẫn được tính lượt mới. Không khẳng định F1 sẽ tăng với .108.
+Migration `0122_endpoint_audit_v05108` chỉ cập nhật version metadata.
+
+## Lệnh PowerShell
+
+Giải nén full source vào thư mục dự án, giữ `.env`, `.git`, models, video,
+snapshots, dữ liệu và Docker volumes đang có.
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+
+# Test
+.\scripts\test.ps1
+
+# Khởi động
+.\scripts\start.ps1
+
+# Audit lại phiên đã có (không cần chạy lại AI)
+.\scripts\audit-endpoint-precision.ps1 `
+  -Export ".\traffic-ai-benchmark-78-session-205.zip" `
+  -OutputDirectory ".\endpoint-precision-audit-v108"
+
+# Tự test, commit, push, tạo tag v0.5.108 và GitHub Release
+.\scripts\publish.ps1
+```
+
+Kết quả kiểm thử thực tế và giới hạn môi trường ở đầu `VERIFICATION.md` và
+`docs/verification-v05108/`. Cần chạy `test.ps1` trên Windows để kiểm tra Docker,
+PostgreSQL và môi trường triển khai đầy đủ.
+
+---
+
 # Traffic AI V0.5.107 — Fix Windows Docker endpoint regression runner
 
 **Bug fixed:** `scripts/test.ps1` launched `python -m pytest` inside a fresh

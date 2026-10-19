@@ -1,0 +1,33 @@
+{
+  "version": "0.5.108",
+  "total_passed": 1103,
+  "total_failed": 0,
+  "excluded_http_orm_tests": 64,
+  "native_powershell_skipped": 1,
+  "suites": {
+    "ai_real_functions_and_endpoint_unittest": 747,
+    "backend_pure_helpers": 134,
+    "scripts_stdlib_unittest": 166,
+    "benchmark_gate_real_test_functions": 5,
+    "backup_worker_real_test_functions": 4,
+    "frontend_node_tests": 47
+  },
+  "additional_checks": {
+    "new_endpoint_tests_standalone_python_S": 24,
+    "new_endpoint_tests_counted_in_scripts_suite": true,
+    "version_contract": "pass",
+    "python_ast_compile_files": 245,
+    "babel_js_jsx_parse_files": 14,
+    "source_static_contracts": 1310,
+    "baseline_source_paths_preserved": 385,
+    "baseline_python_test_names_preserved": 1097
+  },
+  "limitations": [
+    "This is NOT a full pytest/application run. Minimal pytest approx/raises and tmp_path/monkeypatch adapters used for real function tests.",
+    "AI uses real app.worker import with a fail-closed httpx2.Client placeholder explicitly mocked by dispatcher tests.",
+    "Backend selected route helpers are AST-extracted from actual source; HTTP/ORM and PostgreSQL not run.",
+    "Python3.12.14, NumPy2.3.5, Pydantic2.14.0, Node24.19.0 differ from production pins.",
+    "Windows PowerShell, Docker image builds, PostgreSQL migration/live transaction, npm install/Vite bundle, CUDA/full-video inference and GitHub publish not run."
+  ],
+  "audit_evidence_scope": "Latest root/endpoint review: benchmark78 has2 actual suppressions;89 exact event evidence records and1 pending/unknown, not an inference result from108."
+}

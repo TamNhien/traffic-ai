@@ -1,3 +1,77 @@
+# Verification — Traffic AI V0.5.108
+
+## Evidence and scope
+
+- Authoritative baseline: attached `traffic-ai-v0.5.107-full-source(1).zip`,
+  385 members; SHA256 `53c8c93a7ca941e28bf736c2d061bfbee100ad54019e3922d6da0dcf95fd4c4b`.
+- Benchmark #78 / Session #205: all manifest member hashes, sizes, ZIP CRC,
+  certified closed trace and 23,650 frames checked. Trace runtime .107 composite
+  source fingerprint `5c65884ca1cef9462f85ddac38e7cac3068d85b99360d16cd3a546562c25b46c`
+  exactly matches the source bytes from the attached baseline.
+- RAR has 163 camera JPEGs and Session #205 trace. Its trace hash equals the
+  benchmark's certified uncompressed trace. No camera pictures are distributed.
+- Actual supplied score remains 149 GT / 148 AI / 143 temporal matches /
+  6 missed / 5 extra / F1 0.962963, strict matches 138. This is the user's .107
+  run, not an inference result generated with .108.
+- Baseline endpoint CLI reports 0 candidates on #78. Certified producer trace
+  records 2 endpoint suppressions: geometric clocks 519.4182969201s and
+  811.9252006786s; confirmation frames 12989 and 20301. The final cumulative
+  endpoint counter is 2. Successfully suppressed proposals have no DB event,
+  so a scan restricted to events cannot report these decisions.
+- .108 fixes that audit omission, adds precise per-passage clock evidence and
+  explicit unknown/inconsistent statuses. The historical `flagged_*` keys
+  still concern persisted-event counterfactual candidates; actual runtime
+  suppressions are a separate result. Runtime counting code is unchanged.
+- Final #78 audit: 2 recorded suppressions, 0 remaining candidates; 89 exact
+  persisted-event clock links and 1 explicitly unknown pending-producer link
+  (event 14901 / track 5799 / 20.2295s). The stored event exists; unknown refers
+  only to audit confirmation evidence. Its original HumanGuard-pending center
+  is not replaced with a later center.
+- Cargo van remains truck, and return crossings remain separate passages.
+  Geometry/GT proximity alone does not authorize suppressing the moving rider
+  at 812.577s or changing GT. Remaining class/count errors are not resolved by
+  this reporting change. Migration 0122 updates version metadata only.
+
+## Actual executed results
+
+| Runnable suite | Passed |
+|---|---:|
+| AI pure/worker functions plus endpoint unittest | 747 |
+| Backend pure functions and isolated helpers | 134 |
+| Script stdlib unittest, including 24 new endpoint cases | 166 |
+| Benchmark release gate functions | 5 |
+| Backup worker mocked-command functions | 4 |
+| Frontend Node | 47 |
+| **Total (no duplicate counting of new cases)** | **1,103** |
+
+Zero failures; 64 HTTP/ORM cases excluded by the offline harness and 1 native
+PowerShell case skipped. The new 24 tests also passed under `python -S`.
+Combined script discovery caught an `app` namespace collision; loading the
+policy directly from its source file fixes this and the combined suite passes.
+All 245 Python sources compile; 1,310 static contract checks, 817 local import
+symbols, version/single-migration-head and Babel parsing of 14 frontend files
+pass. All 385 original source paths, 1,097 historical Python test names and
+PowerShell test functions are preserved. Static checks are not runtime tests.
+
+## Verification approach
+
+Actual new regression results, full source contract checks, historical test
+retention and the #78 CLI output are included in `docs/verification-v05108/`.
+The available environment uses Python 3.12.14 and Node.js 24.19.0; it has no
+pytest, FastAPI, SQLAlchemy, HTTPX2, PowerShell, Docker or GPU inference runtime.
+The broad offline harness executes real pure test functions and worker methods
+(with a test-only HTTP Client placeholder, mocked by relevant dispatcher tests),
+plus AST-extracted backend helpers. It is not a substitute for the complete
+pytest/application suite. No compatibility shim is shipped with the source.
+
+Not run: full Windows `scripts/test.ps1`, Docker image builds, live HTTP/ORM,
+PostgreSQL migration against persistent data, npm install/production bundle,
+CUDA/full-video inference, or GitHub push/release. Run the Windows commands in
+README.md; the existing publish script runs tests, commits, pushes and creates
+release tag v0.5.108 when invoked by the user.
+
+---
+
 # Verification — Traffic AI V0.5.107
 
 - Fix: `scripts/test.ps1` no longer invokes `pytest` in the dependency-free

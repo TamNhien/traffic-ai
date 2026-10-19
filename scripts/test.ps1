@@ -2505,6 +2505,12 @@ Invoke-Step "V0.5.107 pytest-free endpoint runner contract (stdlib-only)" {
   if ($LASTEXITCODE -ne 0) { throw 'V0.5.107 endpoint runner contract failed.' }
 }
 
+Invoke-Step "V0.5.108 endpoint suppression evidence audit (stdlib-only)" {
+  docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 -v "${root}:/src" -w /src python:3.14.7-slim `
+    python -S -m unittest discover -s scripts/tests -p test_endpoint_audit_v05108.py -v
+  if ($LASTEXITCODE -ne 0) { throw 'V0.5.108 endpoint suppression audit tests failed.' }
+}
+
 Invoke-Step "V0.5.92 verified crossing-cycle witness audit (stdlib-only)" {
   docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 -v "${root}:/src" -w /src python:3.14.7-slim `
     python -m unittest discover -s scripts/tests -p test_audit_crossing_cycles_v0592.py -v

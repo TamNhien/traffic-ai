@@ -61,7 +61,7 @@ def digest_file(path):
 def metadata(ident, archive, automatic=False):
     return {'id':ident, 'database':DB, 'created_at':utc(), 'bytes':archive.stat().st_size,
             'sha256':digest_file(archive), 'format':'postgresql-custom', 'pg_major':18,
-            'automatic':automatic, 'version':'0.5.107'}
+            'automatic':automatic, 'version':'0.5.108'}
 
 
 def schedule():
@@ -198,7 +198,7 @@ def work(job_path):
 def main():
     for directory in (ROOT, ARCHIVES, JOBS, ROOT/'incoming'):
         directory.mkdir(parents=True, exist_ok=True)
-    print('Traffic AI backup-worker V0.5.107 ready', flush=True)
+    print('Traffic AI backup-worker V0.5.108 ready', flush=True)
     # Persist schedule across container restarts; a failed automatic run is retried after 15 min.
     retry_after = 0.0
     while True:
