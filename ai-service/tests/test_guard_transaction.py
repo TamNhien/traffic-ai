@@ -1163,6 +1163,7 @@ def test_v0558_session_trace_header_contains_no_synthetic_observation_or_secrets
     assert header == {
         "kind": "session_metadata", "audit_only": True, "camera_id": 1, "session_id": 2,
         "source_fps": 25.0, "source_frame_count": 23650, "frame_policy": "all-frames",
+        "endpoint_precision_guard_enabled": False,
         **__import__("app.trace_identity", fromlist=["metadata"]).metadata(),
     }
     assert "source_time_seconds" not in header and "frame_index" not in header

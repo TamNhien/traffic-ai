@@ -43,7 +43,7 @@ class TraceIdentityTests(unittest.TestCase):
     def test_source_hash_is_stable_and_sha256(self):
         first = IDENTITY.metadata()
         self.assertEqual(first, IDENTITY.metadata())
-        self.assertEqual(first['ai_runtime_version'],'0.5.105')
+        self.assertEqual(first['ai_runtime_version'],(ROOT/'VERSION').read_text(encoding='utf-8').strip())
         self.assertRegex(first['worker_source_sha256'],r'^[a-f0-9]{64}$')
         self.assertEqual(first['gate_decision_scope'],'per-gate-track-v1')
 

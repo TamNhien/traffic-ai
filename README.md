@@ -1,3 +1,100 @@
+# Traffic AI V0.5.107 — Fix Windows Docker endpoint regression runner
+
+**Bug fixed:** `scripts/test.ps1` launched `python -m pytest` inside a fresh
+`python:3.14.7-slim` container with no installed pytest, causing a guaranteed
+`No module named pytest` failure in V0.5.106 before backend/AI integration tests.
+
+**Change:** the three existing endpoint-guard unit tests now use Python's built-in
+`unittest` framework, and the dedicated Docker command uses `python -S -m unittest`
+without installing third-party packages. Pytest still collects and runs these
+`unittest.TestCase` tests during the AI service suite. New regression assertions
+verify the slim runner's commands and execute the tests with site packages disabled.
+This change is only to the testing workflow. The V0.5.106 endpoint precision
+counting policy, the experiment toggle, and all persisted camera/GT/DB values remain
+unchanged. Migration `0121_test_runner_v05107` updates only version metadata.
+
+**Windows PowerShell** (after safely replacing source and preserving `.env`, models,
+videos and PostgreSQL volumes):
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+.\scripts\test.ps1
+.\scripts\start.ps1
+# Publish only after validating the full test and runtime:
+.\scripts\publish.ps1
+```
+
+**Limitations:** a host run of the full PowerShell/Docker/GPU suite must be
+verified separately. No new inference or F1 improvement is claimed.
+
+---
+
+# Traffic AI V0.5.106 — Finite Endpoint Precision Experiment
+
+## Why this version can change counts
+
+Benchmark #77 / Session #204 was produced by **attested V0.5.105 runtime** (23,650 frames).
+Ground Truth = 149, AI = 149, matches = 143, missed = 6, extra = 6, F1 = 96.0%.
+Previous releases since V0.5.102 mostly changed audit/provenance, not the counting policy.
+
+This version **changes the worker's submission decision** for one narrowly defined case on local VIDEO:
+interpolated two-wheel crossings within the first 8% of the finite line, with an
+unconfirmed destination-side body-center observation. Direct, rescued, truck,
+car, bus, RTSP and crossings near the opposite line endpoint are unaffected.
+The gate still closes its counted passage to prevent the same borderline frame
+from being submitted repeatedly; no event is submitted for the rejected proposal.
+
+**Experimental setting, enabled by default on local videos:**
+`AI_FINITE_ENDPOINT_PRECISION_GUARD=1`. Set `=0` in `.env` and restart
+with `./scripts/start.ps1` to restore V0.5.105 behavior; the existing `.env`
+file is not overwritten by the source package. The selected setting is recorded
+in the session metadata and the suppression count appears in the camera UI.
+
+## Verified offline counterfactual, NOT a new inference score
+
+A read-only replay of benchmark #77 identifies 2 *candidate* rejected events:
+- **519.418s**, motorcycle OUT, interpolated, track 191795, projection 0.0551;
+- **811.925s**, motorcycle OUT, interpolated, track 345897, projection 0.0763.
+
+Both are unmatched under the supplied GT, while 0 previously matched events
+are flagged by the narrow policy. A less cautious both-endpoint variant would
+also flag 3 matched events and was rejected. This is a historical trace
+counterfactual **only**: counts/score/identity are not modified and the real
+F1 impact requires replaying the same clip under V0.5.106.
+
+**Known limit:** the bicycle GT at 591.091s has zero road tracks in its 50-frame
+window despite detections, so this precision filter will NOT repair that miss.
+It may require inspecting video timestamps, road ROI, detector/GT annotation.
+Do not silently add an event or change GT to inflate F1.
+
+## Windows commands
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+.\scripts\test.ps1
+.\scripts\start.ps1
+# Read-only old benchmark counterfactual:
+.\scripts\audit-endpoint-precision.ps1 `
+  -Export '.\traffic-ai-benchmark-77-session-204.zip' `
+  -OutputDirectory '.\endpoint-precision-audit'
+# Compare new benchmark export after replay:
+.\scripts\compare-benchmark-exports.ps1 `
+  -Prior '.\traffic-ai-benchmark-77-session-204.zip' `
+  -Current '.\traffic-ai-benchmark-78-session-205.zip' `
+  -OutputDirectory '.\comparison-v106'
+# Only after verification:
+.\scripts\publish.ps1
+```
+
+The new file's benchmark/session ID must be replaced with the *actual* export
+IDs; Session #205 is only an example. Keep `.env`, models, data, PostgreSQL
+volumes and camera video when replacing the extracted source. Migration
+`0120_endpoint_precision_v05106` changes schema-version metadata only.
+
+---
+
 # V0.5.105 — Runtime Trace Provenance & Session-Safe Audit
 
 **Issue established:** Screenshot shows Benchmark #76 / Session #203 running V0.5.104,

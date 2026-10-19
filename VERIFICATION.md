@@ -1,3 +1,55 @@
+# Verification — Traffic AI V0.5.107
+
+- Fix: `scripts/test.ps1` no longer invokes `pytest` in the dependency-free
+  `python:3.14.7-slim` endpoint regression container.
+- The same three regression cases now use `unittest.TestCase`, compatible with
+  both stdlib `unittest` and the existing AI `pytest` suite.
+- Added `scripts/tests/test_endpoint_test_runner_v05107.py`, which verifies
+  the PowerShell runner and executes endpoint tests with Python `-S`.
+- No change to the detector, counting engine, endpoint policy, GT, database
+  event handling or worker telemetry. Migration is release metadata only.
+- Tests and checks for this build: see `docs/verification-v05107/`.
+- Host PowerShell, Windows Docker Compose, persistent PostgreSQL migration,
+  CUDA inference and full-video GT/F1 performance remain to be checked on
+  the user's machine.
+
+---
+
+# Verification — Traffic AI V0.5.106
+
+## Source and benchmark evidence
+- Input source: V0.5.105 full-source ZIP (all existing files preserved).
+- Input verified export: Benchmark #77 / Session #204, closed 23,650-frame trace,
+  session header `ai_runtime_version=0.5.105` and source digest present.
+- Read-only edge-policy audit: 2 previously unmatched candidates at 519.418s
+  and 811.925s, **0 previously matched candidates**. This is not an accuracy
+  result from model inference with the new version.
+- Experimental worker precision condition is **enabled by default on local video**;
+  can be disabled using `AI_FINITE_ENDPOINT_PRECISION_GUARD=0` in `.env`.
+- Runtime session metadata contains the effective switch. Production data/GT
+  and benchmark events are not changed by the audit. No full video inference
+  performed in this environment.
+
+## Actual tests executed in isolated Linux workspace
+- AI pytest: **750 passed** with a test-only `httpx2` alias to installed `httpx`
+  (no alias distributed; production must use pinned dependency).
+- Backend pytest: **195 passed** under a test-only SQLite DB URL and HTTPX alias.
+- Frontend Node: **47 passed**.
+- Python script unittest discovery: **140 passed, 1 skipped** (141 total).
+- New endpoint unit tests (3) included in AI suite; endpoint release checks (4)
+  included in script suite.
+- `scripts/version-contract.py` passed; new migration head
+  `0120_endpoint_precision_v05106` is consistent. Python compileall passed.
+- Benchmark #77 audit produces a JSON and Markdown candidate report without
+  rewriting the input ZIP.
+
+**Not verified:** Windows Docker builds, original PowerShell `test.ps1`, CUDA,
+real model run, persistent PostgreSQL migration, live GitHub publish and
+actual post-change F1. Test on the original clip and compare benchmarks before
+claiming a precision improvement; rollback if Recall decreases.
+
+---
+
 # V0.5.105 — Verified runtime trace identity and wrong-session safety
 
 ## Supplied data / limitation

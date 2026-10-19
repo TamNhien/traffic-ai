@@ -38,6 +38,7 @@ from app.counting import (
 )
 from app.dedup import single_heavy_vehicle_plan, stable_tracking_order
 from app.raw_handoff_guard import RawHandoffCrossingGuard
+from app.finite_endpoint_guard import endpoint_precision_rejection
 from app.trace_identity import metadata as trace_runtime_metadata
 from app.flow_calibration import FlowCalibrator
 from app.gate_roi import gate_roi_for_line, road_zone_roi
@@ -100,6 +101,13 @@ class PipelineWorker(threading.Thread):
         # A two-wheel raw token crossing under two canonical owners can create
         # two events for one passage. Only direct, evidence-backed handoffs on
         # local video activate the strict guard; RTSP remains unaffected.
+        # Precision experiment: affects only local video, bounded interpolated
+        # two-wheel crossings close to the finite line start endpoint. Disable
+        # instantly with AI_FINITE_ENDPOINT_PRECISION_GUARD=0 for A/B.
+        self._endpoint_precision_guard_enabled = (
+            payload.source_type == 'video'
+            and os.getenv('AI_FINITE_ENDPOINT_PRECISION_GUARD', '1').strip().lower() not in {'0', 'false', 'off'}
+        )
         self._raw_handoff_guard = RawHandoffCrossingGuard()
         self._raw_handoff_guard_enabled = (
             payload.source_type == "video"
@@ -1629,6 +1637,7 @@ class PipelineWorker(threading.Thread):
                     "camera_id": self.payload.camera_id, "session_id": self.payload.session_id,
                     "source_fps": self.state.source_fps, "source_frame_count": source_frame_count,
                     "frame_policy": self.state.frame_policy,
+                    "endpoint_precision_guard_enabled": getattr(self, "_endpoint_precision_guard_enabled", False),
                     **trace_runtime_metadata(),
                 })
             self.state.status = "warming"
@@ -2395,6 +2404,28 @@ class PipelineWorker(threading.Thread):
                                     )
                                     continue
 
+                            # V0.5.106: the geometry gate may accept a borderline
+                            # interpolated anchor crossing right at the finite line start
+                            # endpoint while the body center has not established
+                            # a destination-side passage. Treat that evidence as
+                            # inconclusive, never as a second physical identity.
+                            # Keep the counter's passage gate closed (as the
+                            # raw-handoff guard does) so the event isn't replayed.
+                            if getattr(self, '_endpoint_precision_guard_enabled', False):
+                                endpoint_rejection = endpoint_precision_rejection(
+                                    ((line_a[0] / width, line_a[1] / height),
+                                     (line_b[0] / width, line_b[1] / height)),
+                                    ((crossing_x, crossing_y) if crossing_x is not None and crossing_y is not None else None),
+                                    center_signed, direction, event_label, crossing_method,
+                                )
+                                if endpoint_rejection is not None:
+                                    gate_trace_track['endpoint_precision_suppression'] = endpoint_rejection
+                                    gate_trace_track['crossing_clock_audit']['producer_decision'] = (
+                                        'finite_endpoint_center_uncertain_suppressed'
+                                    )
+                                    self.state.endpoint_precision_suppressed += 1
+                                    continue
+
                             if event_label in TWO_WHEEL_LABELS:
                                 action, _ = self._observe_human_guard(
                                     track_id, frame_index, analysis_frame, rect, event_label, event_confidence,
@@ -2650,6 +2681,7 @@ class PipelineWorker(threading.Thread):
                         "two_wheel_ultra_spatial_signature_duplicates": self.state.two_wheel_ultra_spatial_signature_duplicates,
                         "heavy_stitch_recoveries": self.state.heavy_stitch_recoveries,
                         "raw_handoff_duplicate_suppressed": self.state.raw_handoff_duplicate_suppressed,
+                        "endpoint_precision_suppressed": self.state.endpoint_precision_suppressed,
                         "raw_id_discontinuities": self.state.raw_id_discontinuities,
                         "short_gap_alias_rejections": self.state.short_gap_alias_rejections,
                         "four_wheel_duplicate_suppressed": self.state.four_wheel_duplicate_suppressed,
@@ -3357,7 +3389,7 @@ class PipelineWorker(threading.Thread):
         rt = f"x{self.state.realtime_factor:.2f}" if self.state.source_fps > 0 else "live"
         cv2.putText(
             frame,
-            f"DET {self.state.detections_current_frame} | UNTRACKED {self.state.untracked_detections} | TRACK {self.state.active_tracks} | ROAD {self.state.road_tracks_current_frame} | TOTAL {self.state.total_count} | IN {self.state.in_count} | OUT {self.state.out_count} | FPS {self.state.fps:.1f} ({rt}) | {self.state.inference_ms:.0f}ms | {'HYBRID' if self.hybrid_mode else 'DIRECT'} {Path(self.detector_model_name).name} | ROI {self.detection_roi_mode.upper()} | DIRECT-X {self.state.direct_crossings} | INTERP {self.state.interpolated_crossings} | RESCUE {self.state.rescued_crossings} | ROAD-REJECT {counter.rejected_outside_road} | CONFIRM-REJECT {counter.rejected_unconfirmed_side} | COOL-REJECT {counter.rejected_cooldown} | COOL-REL {counter.adaptive_cooldown_releases} | FAST-CONF {counter.fast_confirm_rescues} | BRACKET+ {counter.bracket_confirm_rescues} | LATE-CONF {counter.late_geometry_confirms} | RESCUE-X {counter.rejected_rescue_validation} | LONG-RESCUE-X {counter.rejected_long_gap_rescue} | CLASS-R {self.state.class_refine_checks} | GEN-R {self.state.general_refine_checks} | CONS+ {self.state.class_consensus_rescues} | BIKE+ {self.state.bicycle_class_rescues} | BIKE-CTX {self.state.bicycle_context_rescues} | BIKE-T {self.state.bicycle_context_temporal_rescues} | BIKE-W+ {self.state.bicycle_context_weak_motor_rescues} | BIKE-M+ {self.state.bicycle_context_competitive_rescues} | BIKE-NM+ {self.state.bicycle_context_near_margin_rescues} | 2W-C+ {self.state.two_wheel_center_rescues} | 2W-SIG2 {self.state.two_wheel_spatial_signature_duplicates} | 2W-ULTRA {self.state.two_wheel_ultra_spatial_signature_duplicates} | TRUCK+ {self.state.truck_class_rescues} | LOCK→CAR {self.state.truck_lock_demotion_rescues} | TRUCK-SEEN {self.state.truck_tracks_seen} | TRUCK-X {self.state.truck_crossing_tracks} | HEAVY-A {self.state.heavy_anchor_tracks} | HEAVY-C+ {self.state.heavy_center_rescues} | HEAVY-STITCH {self.state.heavy_stitch_recoveries} | RAW-ID-RESET {self.state.raw_id_discontinuities} | RAW-HANDOFF-X {self.state.raw_handoff_duplicate_suppressed} | ALIAS-REJECT {self.state.short_gap_alias_rejections} | 4W-DUP {self.state.four_wheel_duplicate_suppressed} | START+ {self.state.video_start_rescues} | TIME-SYNC {self.state.crossing_time_corrections} | TIME-CLAMP {self.state.crossing_time_clamps} | REPLAY {'DET' if self.state.deterministic_video_replay else 'LIVE'} | HUMAN-X {self.state.human_guard_rejections} | RIDER+ {self.state.rider_guard_rescues} | GUARD-PENDING {self.state.human_guard_pending_crossings} | ROAD-EDGE+ {counter.road_edge_rescues}",
+            f"DET {self.state.detections_current_frame} | UNTRACKED {self.state.untracked_detections} | TRACK {self.state.active_tracks} | ROAD {self.state.road_tracks_current_frame} | TOTAL {self.state.total_count} | IN {self.state.in_count} | OUT {self.state.out_count} | FPS {self.state.fps:.1f} ({rt}) | {self.state.inference_ms:.0f}ms | {'HYBRID' if self.hybrid_mode else 'DIRECT'} {Path(self.detector_model_name).name} | ROI {self.detection_roi_mode.upper()} | DIRECT-X {self.state.direct_crossings} | INTERP {self.state.interpolated_crossings} | RESCUE {self.state.rescued_crossings} | ROAD-REJECT {counter.rejected_outside_road} | CONFIRM-REJECT {counter.rejected_unconfirmed_side} | COOL-REJECT {counter.rejected_cooldown} | COOL-REL {counter.adaptive_cooldown_releases} | FAST-CONF {counter.fast_confirm_rescues} | BRACKET+ {counter.bracket_confirm_rescues} | LATE-CONF {counter.late_geometry_confirms} | RESCUE-X {counter.rejected_rescue_validation} | LONG-RESCUE-X {counter.rejected_long_gap_rescue} | CLASS-R {self.state.class_refine_checks} | GEN-R {self.state.general_refine_checks} | CONS+ {self.state.class_consensus_rescues} | BIKE+ {self.state.bicycle_class_rescues} | BIKE-CTX {self.state.bicycle_context_rescues} | BIKE-T {self.state.bicycle_context_temporal_rescues} | BIKE-W+ {self.state.bicycle_context_weak_motor_rescues} | BIKE-M+ {self.state.bicycle_context_competitive_rescues} | BIKE-NM+ {self.state.bicycle_context_near_margin_rescues} | 2W-C+ {self.state.two_wheel_center_rescues} | 2W-SIG2 {self.state.two_wheel_spatial_signature_duplicates} | 2W-ULTRA {self.state.two_wheel_ultra_spatial_signature_duplicates} | TRUCK+ {self.state.truck_class_rescues} | LOCK→CAR {self.state.truck_lock_demotion_rescues} | TRUCK-SEEN {self.state.truck_tracks_seen} | TRUCK-X {self.state.truck_crossing_tracks} | HEAVY-A {self.state.heavy_anchor_tracks} | HEAVY-C+ {self.state.heavy_center_rescues} | HEAVY-STITCH {self.state.heavy_stitch_recoveries} | RAW-ID-RESET {self.state.raw_id_discontinuities} | ENDPOINT-X {self.state.endpoint_precision_suppressed}| RAW-HANDOFF-X {self.state.raw_handoff_duplicate_suppressed} | ALIAS-REJECT {self.state.short_gap_alias_rejections} | 4W-DUP {self.state.four_wheel_duplicate_suppressed} | START+ {self.state.video_start_rescues} | TIME-SYNC {self.state.crossing_time_corrections} | TIME-CLAMP {self.state.crossing_time_clamps} | REPLAY {'DET' if self.state.deterministic_video_replay else 'LIVE'} | HUMAN-X {self.state.human_guard_rejections} | RIDER+ {self.state.rider_guard_rescues} | GUARD-PENDING {self.state.human_guard_pending_crossings} | ROAD-EDGE+ {counter.road_edge_rescues}",
             (20, 32),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.62,

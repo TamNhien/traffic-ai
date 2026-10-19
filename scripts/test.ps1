@@ -2486,6 +2486,25 @@ Invoke-Step "V0.5.105 runtime trace identity + expected-session audit (stdlib-on
   if ($LASTEXITCODE -ne 0) { throw 'V0.5.105 runtime provenance regression tests failed.' }
 }
 
+Invoke-Step "V0.5.106 finite endpoint precision regression (stdlib-only)" {
+  $guard = Get-Content (Join-Path $root 'ai-service/app/finite_endpoint_guard.py') -Raw -Encoding UTF8
+  $worker = Get-Content (Join-Path $root 'ai-service/app/worker.py') -Raw -Encoding UTF8
+  if ($guard -notmatch 'endpoint_precision_rejection' -or
+      $worker -notmatch 'finite_endpoint_center_uncertain_suppressed' -or
+      -not (Test-Path (Join-Path $root 'scripts/audit-endpoint-precision.ps1'))) {
+    throw 'V0.5.106 finite endpoint guard or audit missing.'
+  }
+  docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 -v "${root}:/src" -w /src/ai-service python:3.14.7-slim `
+    python -S -m unittest discover -s tests -p test_finite_endpoint_guard_v05106.py -v
+  if ($LASTEXITCODE -ne 0) { throw 'V0.5.106 endpoint precision tests failed.' }
+}
+
+Invoke-Step "V0.5.107 pytest-free endpoint runner contract (stdlib-only)" {
+  docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 -v "${root}:/src" -w /src python:3.14.7-slim `
+    python -m unittest discover -s scripts/tests -p test_endpoint_test_runner_v05107.py -v
+  if ($LASTEXITCODE -ne 0) { throw 'V0.5.107 endpoint runner contract failed.' }
+}
+
 Invoke-Step "V0.5.92 verified crossing-cycle witness audit (stdlib-only)" {
   docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 -v "${root}:/src" -w /src python:3.14.7-slim `
     python -m unittest discover -s scripts/tests -p test_audit_crossing_cycles_v0592.py -v
