@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import gzip
+import threading
 from bisect import bisect_left, bisect_right
 from collections import deque
 from hashlib import sha256
@@ -19,6 +20,8 @@ from uuid import uuid4
 SNAPSHOT_ROOT = Path(os.getenv("SNAPSHOT_DIR", "/tmp/traffic-ai-snapshots"))
 TRACE_ROOT = SNAPSHOT_ROOT / "benchmark-traces"
 TRACE_EXPORT_MAX_BYTES = 128 * 1024 * 1024
+TRACE_LAZY_SOURCE_MAX_BYTES = 512 * 1024 * 1024
+_TRACE_RECOVERY_LOCK = threading.Lock()
 
 
 def trace_path(session_id: int) -> Path:
@@ -126,6 +129,61 @@ def closed_compressed_trace(session_id: int) -> tuple[Path, dict] | None:
         return target, metadata
     except (OSError, ValueError, TypeError):
         return None
+
+
+
+def _finished_trace_has_footer(session_id: int) -> bool:
+    """Cheap completeness preflight: never compress an active/incomplete trace."""
+    try:
+        path = trace_path(session_id)
+        size = path.stat().st_size
+        if not 0 < size <= TRACE_LAZY_SOURCE_MAX_BYTES:
+            return False
+        with path.open('rb') as stream:
+            header = stream.readline(8192)
+            if len(header) >= 8192:
+                return False
+            if stream.seekable():
+                stream.seek(max(0, size-8192))
+            tail = stream.read().splitlines()
+        if not tail:
+            return False
+        metadata = json.loads(header)
+        footer = json.loads(tail[-1])
+        return (metadata.get('kind') == 'session_metadata'
+                and metadata.get('session_id') == int(session_id)
+                and footer.get('kind') == 'delivery_summary'
+                and footer.get('session_id') == int(session_id)
+                and footer.get('delivery_drain_complete') is True
+                and footer.get('pending_events') == 0)
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def ensure_closed_compressed_trace(session_id: int) -> tuple[Path, dict] | None:
+    """V0.5.110: bounded on-demand gzip repair for an already closed raw trace.
+
+    The close-time gzip artifact can be unavailable after transient failures.
+    Publish atomically only when the raw JSONL has a terminal delivery footer;
+    the existing source-signature check catches modification during compression.
+    No count/GT/crossing data are changed. Endpoint stays read-only for users.
+    """
+    artifact = closed_compressed_trace(session_id)
+    if artifact is not None:
+        return artifact
+    if os.getenv('AI_TRACE_LAZY_RECOVERY', '1') != '1':
+        return None
+    with _TRACE_RECOVERY_LOCK:
+        artifact = closed_compressed_trace(session_id)
+        if artifact is not None:
+            return artifact
+        if not _finished_trace_has_footer(session_id):
+            return None
+        try:
+            publish_compressed_trace(session_id)
+        except (OSError, ValueError):
+            return None
+        return closed_compressed_trace(session_id)
 
 
 def publish_closed_trace(camera_id: int, session_id: int, *, snapshot_root: Path) -> dict | None:

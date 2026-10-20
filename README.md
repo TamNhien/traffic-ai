@@ -1761,3 +1761,55 @@ VERSION/frontend/API health/start message đồng bộ0.5.67. Alembic head 0081_
 Docker/CI/packageManager giữ npm12.2.0 và Node26.10.0. npm12.2.0 được đối chiếu [official npm CLI latest](https://github.com/npm/cli/releases/latest) ngày09/10/2026. PowerShell scripts UTF-8 no-BOM/CRLF; source/config text khác LF.
 
 Kết quả cụ thể và phạm vi thực thi nằm trong **VERIFICATION.md**. Offline assertions dùng algorithm modules thực và worker/backend helper trích AST; frontend kiểm bằng Babel/Node VM và JSX có kiểm soát. Môi trường hiện tại không chạy full dependency-pinned pytest, HTTP/ORM/database, native PowerShell, Docker, Vite/browser/GPU/model replay. Không có F1/class accuracy .66 được đo từ clip.
+
+## V0.5.110 — Closed trace recovery and complete benchmark evidence
+
+The Benchmark #80 / Session #207 diagnostic ZIP omitted its trace (`too_large`), although the camera RAR still contained a 413 MB closed JSONL. Version 0.5.110 adds **two integrity-preserving recovery paths**:
+
+1. **Automatic:** the AI Service gzip download route can atomically rebuild a missing compressed artifact from a session's already completed JSONL. It requires the exact session header, a complete terminal delivery footer, a stable file signature, a raw input at most 512 MiB and compressed transport at most 128 MiB. It does not run on an active/incomplete trace. Set `AI_TRACE_LAZY_RECOVERY=0` in `.env` to disable on-demand recovery. If the trace is unavailable on the AI Service or compression still fails, use the second path.
+2. **Offline:** `scripts/recover-benchmark-trace.ps1` reconstructs a **derived** benchmark ZIP from the original export plus a matching camera RAR (7-Zip required), or an extracted `session_<ID>_benchmark-trace.jsonl`. The tool verifies the original manifest, matching session, complete consecutive frames, metadata, terminal delivery, SHA-256, size caps and ZIP CRC. It copies the original `report.json`, `ground-truth.json`, `events.json`, `session.json` and `config.json` **byte for byte** and refuses overwriting the original export. The manifest explicitly labels the result *derived evidence*, not a certificate issued by the AI Service.
+
+Example after placing the benchmark and camera RAR beside the source:
+
+```powershell
+.\scripts\recover-benchmark-trace.ps1 `
+  -Export '.\traffic-ai-benchmark-80-session-207.zip' `
+  -CameraRar '.\camera_1(20261020-145251).rar' `
+  -Output '.\traffic-ai-benchmark-80-session-207-recovered.zip'
+
+.\scripts\audit-gate-coverage.ps1 `
+  -Export '.\traffic-ai-benchmark-80-session-207-recovered.zip' `
+  -ExpectedSession 207 -RequireProvenance `
+  -OutputDirectory '.\gate-coverage-audit'
+```
+
+For an already extracted JSONL, substitute `-TraceJsonl '.\session_207_benchmark-trace.jsonl'` for `-CameraRar`. Windows requires Python 3 on PATH; RAR extraction requires 7-Zip on PATH or installed under Program Files. No Python RAR package is installed or bundled by this release.
+
+**Accuracy:** this update **does not alter** detector/tracker/road-zone/crossing logic or GT assignment. Session #207 remains GT 149 / AI 148 / matched 143 / missed 6 / extra 5 / F1 96.3%. Recovered evidence enables trustworthy case-specific diagnosis; it does not add or suppress counts. Review `docs/verification-v05110/benchmark80-analysis.md` and compare a future full-clip replay before changing any gate policy.
+
+
+## V0.5.111 — Local benchmark ZIP path diagnostics
+
+V0.5.111 fixes ambiguous input errors from `audit-gate-coverage.ps1` and
+`scripts/benchmark-gate.py`. A missing file, a folder instead of a ZIP,
+an invalid or partially downloaded ZIP, permission errors, and read I/O errors
+now have distinct actionable messages. The PowerShell wrapper resolves
+`-Export` to the actual local file and prevents a missing path from being
+passed through to the Python verifier. This is a **read-only CLI diagnostics**
+release: detector, matching window, tracker, counting and ground truth
+are unchanged.
+
+On Windows after downloading the attached ZIP into the Traffic AI project:
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+$zip = '.\traffic-ai-benchmark-80-session-207-recovered-v110.zip'
+Test-Path -LiteralPath $zip -PathType Leaf
+Get-Item -LiteralPath $zip | Select-Object FullName, Length
+.\scripts\audit-gate-coverage.ps1 -Export $zip -ExpectedSession 207 -RequireProvenance -OutputDirectory '.\gate-coverage-audit'
+```
+
+If the ZIP is in Downloads, supply its **absolute path** via `-Export` or copy
+it to the project first. The original recovered archive has 11 unmatched
+cases and 23,650 trace frames (runtime 0.5.109); this release does not claim
+new inference or change the benchmark.

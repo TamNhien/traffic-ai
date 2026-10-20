@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.runtime import registry
-from app.benchmark_trace import closed_compressed_trace, diagnose_trace, trace_path
+from app.benchmark_trace import ensure_closed_compressed_trace, diagnose_trace, trace_path
 from app.schemas import AnnotationBulkAcceptRequest, AnnotationSaveRequest, BenchmarkTraceDiagnoseRequest, DatasetAutoLabelRequest, DatasetExtractRequest, DatasetPrepareRequest, DatasetPurgeRequest, PipelineStart, SourceValidationRequest, TrainingStartRequest
 from app.sources import inspect_source, list_video_sources, read_source_preview, resolve_video_path
 from app.training import auto_label, dataset_stats, extract_frames, prepare_dataset, purge_dataset, reset_dataset_labels, training_registry
@@ -18,7 +18,7 @@ from app.annotation import accept_safe_annotations, get_annotation, get_annotati
 
 from app.trace_identity import TRACE_RUNTIME_VERSION
 
-APP_VERSION = '0.5.109'
+APP_VERSION = '0.5.111'
 if TRACE_RUNTIME_VERSION != APP_VERSION:
     raise RuntimeError('AI runtime/version trace drift; rebuild ai-service')
 app = FastAPI(title='Traffic AI Service', version=APP_VERSION)
@@ -105,7 +105,7 @@ def benchmark_trace_download(session_id: int) -> FileResponse:
 
 @app.get('/benchmark-traces/{session_id}/download-gzip')
 def benchmark_trace_download_gzip(session_id: int) -> FileResponse:
-    artifact = closed_compressed_trace(session_id)
+    artifact = ensure_closed_compressed_trace(session_id)
     if artifact is None:
         raise HTTPException(status_code=404, detail='Compressed benchmark trace chưa được đóng hoặc không còn hợp lệ')
     path, metadata = artifact

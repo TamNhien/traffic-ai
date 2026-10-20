@@ -269,7 +269,7 @@ def test_v0559_gzip_route_serves_closed_attachment_without_http_inflation(tmp_pa
         return SimpleNamespace(path=path, **options)
 
     namespace = {"trace_path":benchmark_trace.trace_path,
-                 "closed_compressed_trace":benchmark_trace.closed_compressed_trace,
+                 "ensure_closed_compressed_trace":benchmark_trace.ensure_closed_compressed_trace,
                  "FileResponse":file_response, "HTTPException":HTTPError}
     exec(compile(ast.fix_missing_locations(ast.Module(body=functions, type_ignores=[])), str(path), "exec"), namespace)
     raw = namespace["benchmark_trace_download"](27)

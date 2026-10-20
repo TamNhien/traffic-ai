@@ -2517,6 +2517,29 @@ Invoke-Step "V0.5.109 road / finite gate telemetry regression (stdlib-only)" {
   if ($LASTEXITCODE -ne 0) { throw 'V0.5.109 road eligibility tests failed.' }
 }
 
+Invoke-Step "V0.5.111 local benchmark ZIP path diagnostics (stdlib-only)" {
+  $auditScript = Get-Content (Join-Path $root 'scripts/audit-gate-coverage.ps1') -Raw -Encoding UTF8
+  $gateScript = Get-Content (Join-Path $root 'scripts/benchmark-gate.py') -Raw -Encoding UTF8
+  if ($auditScript -notmatch 'Get-Item -LiteralPath \$Export' -or
+      $gateScript -notmatch 'Benchmark ZIP not found:') {
+    throw 'V0.5.111 local export preflight contract missing.'
+  }
+  docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 -v "${root}:/src" -w /src python:3.14.7-slim `
+    python -S -m unittest discover -s scripts/tests -p test_benchmark_zip_preflight_v05111.py -v
+  if ($LASTEXITCODE -ne 0) { throw 'V0.5.111 local benchmark ZIP preflight regression failed.' }
+}
+
+Invoke-Step "V0.5.110 full benchmark trace recovery (stdlib-only)" {
+  $script = Get-Content (Join-Path $root 'scripts/recover-benchmark-trace.py') -Raw -Encoding UTF8
+  $aiTrace = Get-Content (Join-Path $root 'ai-service/app/benchmark_trace.py') -Raw -Encoding UTF8
+  $main = Get-Content (Join-Path $root 'ai-service/app/main.py') -Raw -Encoding UTF8
+  if ($script -notmatch 'DERIVED EVIDENCE' -or $aiTrace -notmatch 'ensure_closed_compressed_trace' -or
+      $main -notmatch 'ensure_closed_compressed_trace') { throw 'V0.5.110 bounded trace recovery contract missing.' }
+  docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 -v "${root}:/src" -w /src python:3.14.7-slim `
+    python -S -m unittest discover -s scripts/tests -p test_recover_benchmark_trace_v05110.py -v
+  if ($LASTEXITCODE -ne 0) { throw 'V0.5.110 recovery regression tests failed.' }
+}
+
 Invoke-Step "V0.5.92 verified crossing-cycle witness audit (stdlib-only)" {
   docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 -v "${root}:/src" -w /src python:3.14.7-slim `
     python -m unittest discover -s scripts/tests -p test_audit_crossing_cycles_v0592.py -v

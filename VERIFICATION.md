@@ -998,3 +998,27 @@ Xem `docs/session-186-alias-handoff-v0585.md`. Nhóm sự kiện tại 606 giây
   GitHub Actions on the remote runner.
 - Before publishing, run `scripts/test.ps1`, then `scripts/start.ps1` on
   Windows, and compare a fresh GT benchmark. Retain Docker volumes and `.env`.
+
+## V0.5.110 — Trace recovery verification (2026-10-20)
+
+- Full source based on V0.5.109. `VERSION`, AI/runtime fingerprint, API, UI, backup worker and Alembic head `0124_trace_recovery_v05110` aligned. No GT or event database schema changes.
+- **761/761 AI tests** passed using a temporary outside-source `httpx2`→`httpx` compatibility import (the official `httpx2` Python package is not installed in this environment). See `docs/verification-v05110/ai-compat-tests.log`. The temporary shim is **not included** in the release.
+- **195/195 backend tests** passed under the same isolated compatibility setup and SQLite. See `docs/verification-v05110/backend-compat-tests.log`.
+- **179 script tests** run, **178 passed + 1 skipped** (PowerShell native harness unavailable on Linux), including 8 new recovery tests. See `docs/verification-v05110/scripts-full.log`.
+- **47/47 frontend Node tests** passed. **4/4 backup-worker tests** passed.
+- API trace gzip repair: 5 targeted tests passed (closed/incomplete/mismatched/oversized/concurrent). Complete `test_benchmark_trace.py` and road telemetry regression: **27/27 passed**.
+- Production frontend build **not verified here**: `vite` is not installed in the container (`npm run build` failed before compilation). No Docker runtime is available here; Docker Compose build, PowerShell full `test.ps1`, PostgreSQL and GPU inference remain to be verified on the user's Windows PC.
+- Original Benchmark #80 / Session #207 ZIP was missing its trace with `reason=too_large`. Recovered all 23,650 frames (raw 413,128,306 bytes → gzip 24,087,359 bytes). New derived ZIP passes ZIP CRC, `benchmark-gate.py`, `audit-gate-coverage.py -ExpectedSession 207 -RequireProvenance`; original report, GT, events, session and config each match byte-for-byte. Detailed case review: `docs/verification-v05110/benchmark80-analysis.md`.
+- Runtime auto-repair is covered by unit tests; **not** end-to-end validated against a live AI Service and API on Windows. F1 remains 96.3%; no algorithm accuracy claim.
+
+
+## V0.5.111 — Local ZIP preflight / explicit errors
+
+- Root source: V0.5.110. New migration `0125_zip_preflight_v05111` (settings-only version bump).
+- The exact supplied recovered Benchmark #80 is a valid 7-member archive; local Linux replay of
+  `audit-gate-coverage.py --expected-session 207 --require-provenance` succeeded
+  (23,650 frames; 11 gate cases; runtime 0.5.109).
+- `scripts/benchmark-gate.py` and `audit-gate-coverage.ps1` distinguish
+  absent local file, directories, invalid/truncated ZIP and permission errors.
+- This release does not modify vehicle counts, trace data, Ground Truth or worker policy.
+- Execute `scripts/test.ps1` on Windows with Docker to verify deployment-specific behavior.

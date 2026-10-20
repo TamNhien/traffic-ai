@@ -35,8 +35,19 @@ def _load_json(archive: zipfile.ZipFile, filename: str):
 
 
 def load_evidence(filepath: str | Path) -> tuple[dict, dict]:
+    # V0.5.111: distinguish a missing local download from an invalid ZIP.
+    # This happens *before* trace/session validation and never alters evidence.
+    source = Path(filepath).expanduser()
+    display_path = str(source.resolve())
+    if not source.is_file():
+        if source.exists():
+            raise BenchmarkEvidenceError(f'Benchmark ZIP path is not a file: {display_path}')
+        raise BenchmarkEvidenceError(
+            f'Benchmark ZIP not found: {display_path}. Download/copy the recovered ZIP '
+            'to this path, or pass its full absolute path to -Export.'
+        )
     try:
-        with zipfile.ZipFile(filepath) as archive:
+        with zipfile.ZipFile(source) as archive:
             if len(archive.namelist()) != len(set(archive.namelist())):
                 raise BenchmarkEvidenceError('Duplicate ZIP member names are not allowed')
             if any(name not in archive.namelist() for name in REQUIRED):
@@ -52,8 +63,22 @@ def load_evidence(filepath: str | Path) -> tuple[dict, dict]:
                         or record.get('bytes') != len(raw)):
                     raise BenchmarkEvidenceError(f'Integrity/manifest mismatch: {name}')
                 data[name] = obj
-    except (zipfile.BadZipFile, KeyError, OSError) as exc:
-        raise BenchmarkEvidenceError('Cannot read benchmark export ZIP') from exc
+    except zipfile.BadZipFile as exc:
+        raise BenchmarkEvidenceError(
+            f'Invalid/truncated benchmark ZIP: {display_path}. Re-download the recovered ZIP.'
+        ) from exc
+    except PermissionError as exc:
+        raise BenchmarkEvidenceError(
+            f'Access denied reading benchmark ZIP: {display_path}. Close applications locking the file.'
+        ) from exc
+    except KeyError as exc:
+        raise BenchmarkEvidenceError(
+            f'Benchmark ZIP is missing a required member: {exc}'
+        ) from exc
+    except OSError as exc:
+        raise BenchmarkEvidenceError(
+            f'I/O error reading benchmark ZIP: {display_path} ({exc.__class__.__name__}).'
+        ) from exc
     report = data['report.json']
     if not isinstance(report, dict) or report.get('report_readiness', {}).get('scoring_available') is not True:
         raise BenchmarkEvidenceError('Benchmark has no completed Ground Truth; refusing to score')
