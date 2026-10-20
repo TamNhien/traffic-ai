@@ -1,3 +1,86 @@
+# Traffic AI V0.5.109 — Road Zone / Finite-Gate Eligibility Evidence
+
+## Why this update
+
+At benchmark #79 / Session #206 the screenshot shows 149 GT, 148 AI, 143 matched,
+6 missed, 5 unmatched, F1 96.3%. This is the user's already-completed V0.5.108 run,
+not a measured V0.5.109 inference result. The supplied test/publish log for V0.5.108
+is successful; there is no failing test to conceal or bypass.
+
+Earlier trace analysis called `road_tracks=0` evidence of no roadway detections.
+This conclusion was too strong: `road_tracks` is strict Road Zone polygon membership,
+whereas actual primary counting decisions also consider a small configured anchor
+margin, the observed path and corridor probes. This release repairs that telemetry
+mismatch, without loosening the gate or adding synthetic vehicle events.
+
+## V0.5.109 changes
+
+- New `road_gate_diagnostics.py` computes strict Road Zone membership, anchor-only
+  margin membership and normalized distance to the **finite** counting segment;
+  it does NOT count vehicles.
+- AI state + verified replay trace expose per-frame
+  `road_margin_eligible_tracks`, `road_margin_only_tracks`, and
+  `near_gate_eligible_tracks`. Per-track `road_gate_probe` evidence is optional
+  and does not change `primary_gate_decision` or crossing clocks.
+- Dashboard warnings use the **margin-aware** anchor indicator when present;
+  older sessions safely fall back to the original `road_tracks_current_frame`.
+  Diagnostic panel shows all counts separately. These numbers refer to currently
+  observed anchors, not validated passage events.
+- `audit-gate-coverage.ps1` appends margin/near-gate evidence when present.
+  Older exports show `null` for absent fields, rather than misreporting `0`.
+- Six new dependency-free AI unit tests, four source-integration tests and a
+  Windows Docker stdlib step prevent regressions. Migration
+  `0123_road_probe_v05109` updates release metadata only.
+
+**No GT changes; no event/DB edits; no detector, tracker, model weights, Road Zone
+geometry, time tolerance, gate admission, endpoint guard, HumanGuard or dedup
+policy changes.** On an unchanged clip an identical count is expected.
+
+## Run on Windows
+
+Protect `.env`, `.git`, models, camera videos, PostgreSQL volumes and backups;
+extract the ZIP over the source (or first stage it in a separate folder).
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+.\scripts\test.ps1
+.\scripts\start.ps1
+```
+
+For the older #77 benchmark, the new fields are correctly unknown:
+
+```powershell
+.\scripts\audit-gate-coverage.ps1 `
+  -Export ".\traffic-ai-benchmark-77-session-204.zip" `
+  -ExpectedSession 204 `
+  -OutputDirectory ".\gate-coverage-audit"
+```
+
+For **new** frame-level diagnostics, run AI with V0.5.109 first, export a
+new benchmark ZIP for that session, and audit that ZIP instead.
+
+After `test.ps1` and app validation succeed, publish by running:
+
+```powershell
+.\scripts\publish.ps1
+```
+
+The publisher tests, commits, pushes, tags and creates the GitHub Release.
+The deliverable ZIP itself does not push or publish anything.
+
+## Accuracy next steps
+
+A matched/extra timecode alone does not identify a physical vehicle. In
+particular the historical bicycle-IN GT near 591.091 seconds had zero **strict**
+road tracks in a 1-second review window. Whether there were margin-eligible
+anchors cannot be reconstructed from pre-V0.5.109 telemetry; do not assume
+this is a detector failure or automatically insert a count. Continuous video
+and verified new benchmark trace are required to calibrate targeted recovery
+without increasing false positives. See VERIFICATION.md for evidence scope.
+
+---
+
 # Traffic AI V0.5.108 — Audit các lần chặn endpoint thực tế
 
 Lệnh `audit-endpoint-precision.ps1` trước đây chỉ duyệt sự kiện **đã lưu vào DB**.

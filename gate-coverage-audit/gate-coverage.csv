@@ -1,13 +1,12 @@
-﻿time_s,kind,case_id,direction,vehicle_type,near_gate_tracks,finite_segment_span_candidates,unique_track_count,nearest_track_id,nearest_distance,nearest_projection,gate_decision_provenance,nearest_primary_decisions,nearest_secondary_rejections,road_tracks_zero_frames
-54.296,extra,14607,out,motorcycle,1,0,12,15369,0.009465,0.6024,per-track-present,"{""no-opposite-side-observation"": 38, ""passage-not-rearmed"": 1, ""rescue-validation"": 1}",{},0
-59.446,missed,11036,in,motorcycle,2,1,13,14,0.002893,0.1195,per-track-present,"{""inside-dead-band"": 1, ""no-opposite-side-observation"": 25, ""passage-not-rearmed"": 3, ""primary-accepted"": 1, ""unconfirmed-destination-side"": 1}",{},0
-237.042,missed,11066,out,motorcycle,1,1,13,84351,0.005015,0.2723,per-track-present,"{""inside-dead-band"": 1, ""no-opposite-side-observation"": 18, ""passage-not-rearmed"": 1, ""primary-accepted"": 1}",{},0
-289.824,missed,11078,in,motorcycle,1,1,14,25767,0.003577,0.5636,per-track-present,"{""inside-dead-band"": 2, ""no-opposite-side-observation"": 32, ""passage-not-rearmed"": 1, ""primary-accepted"": 1}",{},0
-292.864,extra,14649,out,motorcycle,2,1,14,110284,0.002655,0.1408,per-track-present,"{""inside-dead-band"": 2, ""no-opposite-side-observation"": 44, ""passage-not-rearmed"": 3, ""primary-accepted"": 1}",{},0
-392.179,missed,11095,out,motorcycle,1,1,13,143964,0.004258,0.8092,per-track-present,"{""inside-dead-band"": 1, ""no-opposite-side-observation"": 33}",{},0
-406.488,missed,11100,out,motorcycle,1,1,11,149041,0.001189,0.1483,per-track-present,"{""inside-dead-band"": 2, ""no-opposite-side-observation"": 35, ""passage-not-rearmed"": 2, ""rescue-validation"": 1, ""unconfirmed-destination-side"": 1}",{},0
-519.418,extra,14682,out,motorcycle,2,1,11,191795,0.000704,0.0371,per-track-present,"{""inside-dead-band"": 3, ""no-opposite-side-observation"": 35, ""passage-not-rearmed"": 7, ""primary-accepted"": 1}",{},0
-591.091,missed,11120,in,bicycle,0,0,8,,,,not-recorded-in-export,{},{},50
-808.0,extra,14722,out,motorcycle,2,2,15,368014,0.020421,0.6415,per-track-present,"{""cooldown"": 1, ""no-opposite-side-observation"": 7, ""passage-not-rearmed"": 4, ""primary-accepted"": 1}","{""cooldown"": 2}",0
-811.925,extra,14724,out,motorcycle,2,2,13,345897,0.000796,0.075,per-track-present,"{""inside-dead-band"": 2, ""no-opposite-side-observation"": 32, ""passage-not-rearmed"": 8, ""primary-accepted"": 1}",{},0
-882.29,extra,14737,in,truck,1,1,9,286434,0.002776,0.3896,per-track-present,"{""inside-dead-band"": 2, ""no-opposite-side-observation"": 42, ""passage-not-rearmed"": 4, ""primary-accepted"": 1}",{},0
+﻿time_s,kind,case_id,direction,vehicle_type,near_gate_tracks,finite_segment_span_candidates,unique_track_count,nearest_track_id,nearest_distance,nearest_projection,gate_decision_provenance,nearest_primary_decisions,nearest_secondary_rejections,road_tracks_zero_frames,road_margin_eligible_zero_frames,near_gate_eligible_zero_frames,near_gate_eligible_max_in_window
+54.296,extra,15053,out,motorcycle,1,0,12,15369,0.009465,0.6024,per-track-present,"{""no-opposite-side-observation"": 38, ""passage-not-rearmed"": 1, ""rescue-validation"": 1}",{},0,,,
+59.446,missed,11483,in,motorcycle,2,1,13,14,0.002893,0.1195,per-track-present,"{""inside-dead-band"": 1, ""no-opposite-side-observation"": 25, ""passage-not-rearmed"": 3, ""primary-accepted"": 1, ""unconfirmed-destination-side"": 1}",{},0,,,
+237.042,missed,11513,out,motorcycle,1,1,13,84351,0.005015,0.2723,per-track-present,"{""inside-dead-band"": 1, ""no-opposite-side-observation"": 18, ""passage-not-rearmed"": 1, ""primary-accepted"": 1}",{},0,,,
+289.824,missed,11525,in,motorcycle,1,1,14,25767,0.003577,0.5636,per-track-present,"{""inside-dead-band"": 2, ""no-opposite-side-observation"": 32, ""passage-not-rearmed"": 1, ""primary-accepted"": 1}",{},0,,,
+292.864,extra,15095,out,motorcycle,2,1,14,110284,0.002655,0.1408,per-track-present,"{""inside-dead-band"": 2, ""no-opposite-side-observation"": 44, ""passage-not-rearmed"": 3, ""primary-accepted"": 1}",{},0,,,
+392.179,missed,11542,out,motorcycle,1,1,13,143964,0.004258,0.8092,per-track-present,"{""inside-dead-band"": 1, ""no-opposite-side-observation"": 33}",{},0,,,
+406.488,missed,11547,out,motorcycle,1,1,11,149041,0.001189,0.1483,per-track-present,"{""inside-dead-band"": 2, ""no-opposite-side-observation"": 35, ""passage-not-rearmed"": 2, ""rescue-validation"": 1, ""unconfirmed-destination-side"": 1}",{},0,,,
+591.091,missed,11567,in,bicycle,0,0,8,,,,not-recorded-in-export,{},{},50,,,
+808.0,extra,15167,out,motorcycle,2,2,15,368014,0.020421,0.6415,per-track-present,"{""cooldown"": 1, ""no-opposite-side-observation"": 7, ""passage-not-rearmed"": 4, ""primary-accepted"": 1}","{""cooldown"": 2}",0,,,
+812.577,extra,15169,out,motorcycle,2,2,12,345897,0.000796,0.075,per-track-present,"{""inside-dead-band"": 2, ""no-opposite-side-observation"": 39, ""passage-not-rearmed"": 8, ""primary-accepted"": 1}",{},0,,,
+882.29,extra,15182,in,truck,1,1,9,286434,0.002776,0.3896,per-track-present,"{""inside-dead-band"": 2, ""no-opposite-side-observation"": 42, ""passage-not-rearmed"": 4, ""primary-accepted"": 1}",{},0,,,

@@ -1,3 +1,50 @@
+# Verification — Traffic AI V0.5.109
+
+## Source and customer evidence
+
+- Source baseline: provided `traffic-ai-v0.5.108-full-source(1).zip`, 400 archive
+  members. Original source files preserved; new code is additive.
+- User screenshot for Benchmark #79 / Session #206 shows: 149 GT / 148 AI /
+  143 timecode matches / 6 unmatched GT / 5 unmatched AI / F1 ~96.3%.
+  **No #79 benchmark ZIP or continuous video was attached in this turn.**
+- Provided `test.ps1` and publication log: backend 195 passed, AI 750 passed,
+  frontend 47 passed, Docker builds completed and GitHub Release v0.5.108
+  succeeded. The isolated logged `[ERROR]` text comes from negative unit-test
+  fixtures and is followed by `ok`, not failing release steps.
+- The camera RAR contains 163 frames as JPG, but not all 23,650 video frames.
+- Historical #77 benchmark (not the #79 run) was re-audited: 12 cases, 23,650
+  verified frames, 149 GT / 149 AI / 143 matched / 6 missed / 6 extra;
+  margin/near-gate fields in this older trace were **null (unknown)**.
+
+## Checks executed here
+
+| Suite | Verified result | Caveat |
+|---|---:|---|
+| AI pytest (including 6 new pure regressions) | 756 passed | Test-only `httpx2` alias to installed `httpx`, not distributed |
+| Backend pytest | 195 passed | SQLite in-memory override + test-only `httpx2` alias; not live PostgreSQL |
+| JavaScript frontend Node tests | 47 passed | Did not rebuild production Vite bundle here |
+| Script unittest discovery (including 4 new contracts) | 170 passed, 1 skipped | Native PowerShell case unavailable on Linux |
+| Python compileall | passed | Syntax only |
+| Source version / single Alembic head | passed | `0.5.109`, `0123_road_probe_v05109` |
+| Real verified #77 gate audit | passed | read-only, historical V0.5.105 trace |
+
+**Aggregate: 1,168 tests passed and 1 skipped** (independent test suites;
+production inference not included). An initial local run outside the AI service
+cwd failed import discovery (`app` not found), and a run without the project's
+pinned `httpx2` failed collection; both are environment setup errors, not
+release test failures. Five early AST-fixture regressions were corrected by
+making the new per-track probe conditional; the final AI run is green.
+
+Not verified here: original Windows `test.ps1` as a whole, live Docker/HTTPS,
+PostgreSQL migration on the user volume, Vite production build, CUDA inference,
+full video replay, #79 event-level comparison or any V0.5.109 F1 improvement.
+
+The new diagnostic does not confer counting permission. A strict Road Zone count
+of zero may coexist with margin-observed anchors. A margin-observed anchor is
+not proof of two-sided crossing, semantic class, or independent physical identity.
+
+---
+
 # Verification — Traffic AI V0.5.108
 
 ## Evidence and scope

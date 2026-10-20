@@ -30,6 +30,9 @@ class PipelineState:
     active_tracks: int = 0
     untracked_detections: int = 0
     road_tracks_current_frame: int = 0
+    road_margin_eligible_tracks_current_frame: int = 0
+    road_margin_only_tracks_current_frame: int = 0
+    near_gate_eligible_tracks_current_frame: int = 0
     suppressed_class_duplicates_current_frame: int = 0
     class_refine_checks: int = 0
     class_refine_target_matches: int = 0

@@ -145,6 +145,8 @@ def build_report(export: Path, *, window: float = 1.0, near_radius: float = .035
         raw_cases.sort(key=lambda c:(c['time_s'],c['kind']))
         observations=[[] for _ in raw_cases]
         frame_exposures=[[] for _ in raw_cases]
+        margin_exposures=[[] for _ in raw_cases]
+        near_exposures=[[] for _ in raw_cases]
         geometry=None
         last_frame=0
         session_meta = None
@@ -182,6 +184,14 @@ def build_report(export: Path, *, window: float = 1.0, near_radius: float = .035
                 line_points=geometry['line']
                 width=int(geometry['frame_width']);height=int(geometry['frame_height'])
                 for idx in targets:
+                    # New read-only V0.5.109 telemetry. Missing in historical
+                    # sessions: preserve None, never turn absence into zero.
+                    margin=d.get('road_margin_eligible_tracks')
+                    near=d.get('near_gate_eligible_tracks')
+                    if isinstance(margin,int) and not isinstance(margin,bool) and margin>=0:
+                        margin_exposures[idx].append(margin)
+                    if isinstance(near,int) and not isinstance(near,bool) and near>=0:
+                        near_exposures[idx].append(near)
                     road_tracks=d.get('road_tracks')
                     if isinstance(road_tracks,int) and not isinstance(road_tracks,bool) and road_tracks>=0:
                         frame_exposures[idx].append(road_tracks)
@@ -221,7 +231,12 @@ def build_report(export: Path, *, window: float = 1.0, near_radius: float = .035
     if session_meta.get('gate_decision_scope') == 'per-gate-track-v1' and not has_attestation:
         raise ValueError('Inconsistent declared runtime provenance')
     result=[case_witnesses(c,items,near_radius=near_radius) for c,items in zip(raw_cases,observations)]
-    for case, exposures in zip(result,frame_exposures):
+    for case, exposures, margin_samples, near_samples in zip(result,frame_exposures,margin_exposures,near_exposures):
+        case['road_margin_eligible_min_in_window'] = min(margin_samples) if margin_samples else None
+        case['road_margin_eligible_max_in_window'] = max(margin_samples) if margin_samples else None
+        case['road_margin_eligible_zero_frames'] = sum(n==0 for n in margin_samples) if margin_samples else None
+        case['near_gate_eligible_max_in_window'] = max(near_samples) if near_samples else None
+        case['near_gate_eligible_zero_frames'] = sum(n==0 for n in near_samples) if near_samples else None
         case['verified_window_frames'] = len(exposures)
         case['road_tracks_min_in_window'] = min(exposures) if exposures else None
         case['road_tracks_max_in_window'] = max(exposures) if exposures else None
@@ -248,7 +263,7 @@ def build_report(export: Path, *, window: float = 1.0, near_radius: float = .035
 def write_report(report: dict, folder: Path) -> None:
     folder.mkdir(parents=True,exist_ok=True)
     (folder/'gate-coverage.json').write_text(json.dumps(report,ensure_ascii=False,indent=2,allow_nan=False)+'\n',encoding='utf-8')
-    headings=['time_s','kind','case_id','direction','vehicle_type','near_gate_tracks','finite_segment_span_candidates','unique_track_count','nearest_track_id','nearest_distance','nearest_projection','gate_decision_provenance','nearest_primary_decisions','nearest_secondary_rejections','road_tracks_zero_frames']
+    headings=['time_s','kind','case_id','direction','vehicle_type','near_gate_tracks','finite_segment_span_candidates','unique_track_count','nearest_track_id','nearest_distance','nearest_projection','gate_decision_provenance','nearest_primary_decisions','nearest_secondary_rejections','road_tracks_zero_frames','road_margin_eligible_zero_frames','near_gate_eligible_zero_frames','near_gate_eligible_max_in_window']
     with (folder/'gate-coverage.csv').open('w',encoding='utf-8-sig',newline='') as dest:
         writer=csv.DictWriter(dest,fieldnames=headings);writer.writeheader()
         for item in report['cases']:
@@ -259,7 +274,10 @@ def write_report(report: dict, folder: Path) -> None:
                 'gate_decision_provenance':item['gate_decision_provenance'],
                 'nearest_primary_decisions':json.dumps(top.get('primary_gate_decisions',{}),ensure_ascii=False),
                 'nearest_secondary_rejections':json.dumps(top.get('secondary_gate_rejections',{}),ensure_ascii=False),
-                'road_tracks_zero_frames':item.get('road_tracks_zero_frames',0)})
+                'road_tracks_zero_frames':item.get('road_tracks_zero_frames',0),
+                'road_margin_eligible_zero_frames':item.get('road_margin_eligible_zero_frames'),
+                'near_gate_eligible_zero_frames':item.get('near_gate_eligible_zero_frames'),
+                'near_gate_eligible_max_in_window':item.get('near_gate_eligible_max_in_window')})
     runtime_info=report.get('runtime_provenance', {
         'status':'legacy-unattested','runtime_version':None,'evidence_track_observations':0})
     md=[f'# Gate coverage audit — Benchmark #{report["benchmark_id"]} / Session #{report["session_id"]}',
@@ -276,7 +294,7 @@ def write_report(report: dict, folder: Path) -> None:
         if not summary:
             summary = 'not in legacy trace'
         md.append(f'| {row["time_s"]:.3f} | {row["kind"]} | {row["case_id"]} | {row["near_gate_tracks"]} | {row["finite_segment_span_candidates"]} | {neighbor} | {summary} |')
-    md +=['','Gate decisions appear only in traces generated by V0.5.104 or newer. A geometric span or counter rejection is NOT proof of the correct physical vehicle. No automatic re-count or GT edits.','']
+    md +=['','V0.5.109+: strict ROAD and margin-eligible road tracks are separated; missing metrics in older traces are unknown (null), NOT zero.', '','Gate decisions appear only in traces generated by V0.5.104 or newer. A geometric span or counter rejection is NOT proof of the correct physical vehicle. No automatic re-count or GT edits.','']
     (folder/'gate-coverage.md').write_text('\n'.join(md),encoding='utf-8')
 
 

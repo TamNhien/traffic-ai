@@ -39,6 +39,7 @@ from app.counting import (
 from app.dedup import single_heavy_vehicle_plan, stable_tracking_order
 from app.raw_handoff_guard import RawHandoffCrossingGuard
 from app.finite_endpoint_guard import endpoint_precision_rejection
+from app.road_gate_diagnostics import road_gate_probe
 from app.trace_identity import metadata as trace_runtime_metadata
 from app.flow_calibration import FlowCalibrator
 from app.gate_roi import gate_roi_for_line, road_zone_roi
@@ -1903,6 +1904,9 @@ class PipelineWorker(threading.Thread):
                 self.state.active_tracks = 0
                 self.state.untracked_detections = 0
                 self.state.road_tracks_current_frame = 0
+                self.state.road_margin_eligible_tracks_current_frame = 0
+                self.state.road_margin_only_tracks_current_frame = 0
+                self.state.near_gate_eligible_tracks_current_frame = 0
                 self.state.suppressed_class_duplicates_current_frame = 0
                 if boxes is not None and boxes.id is not None:
                     xyxy = boxes.xyxy.cpu().tolist()
@@ -1989,8 +1993,19 @@ class PipelineWorker(threading.Thread):
                             self._heavy_anchor_tracks.add(int(track_id))
                             self.state.heavy_anchor_tracks = len(self._heavy_anchor_tracks)
                         self.state.active_tracks += 1
-                        if counter.road_zone is not None and counter.road_zone.contains(anchor, width, height):
-                            self.state.road_tracks_current_frame += 1
+                        road_probe = road_gate_probe(
+                            anchor, counter.line, counter.road_zone, width, height,
+                            margin_ratio=counter.road_anchor_margin_ratio,
+                        )
+                        if road_probe is not None:
+                            if road_probe['strict_road'] and counter.road_zone is not None:
+                                self.state.road_tracks_current_frame += 1
+                            if road_probe['margin_eligible']:
+                                self.state.road_margin_eligible_tracks_current_frame += 1
+                            if road_probe['margin_only']:
+                                self.state.road_margin_only_tracks_current_frame += 1
+                            if road_probe['near_eligible_gate']:
+                                self.state.near_gate_eligible_tracks_current_frame += 1
                         self._seen_track_ids.add(track_id)
                         active_track_ids_this_frame.add(int(track_id))
                         self._flow_calibrator.add(track_id, anchor, width, height, frame_index)
@@ -2076,6 +2091,8 @@ class PipelineWorker(threading.Thread):
                             "final_gate_decision": "pending-human-guard",
                             "secondary_gate_rejection": None,
                         }
+                        if 'road_probe' in locals() and road_probe is not None:
+                            gate_trace_track['road_gate_probe'] = road_probe
                         gate_trace_tracks.append(gate_trace_track)
 
                         # V0.5.24 Rider-aware Human Guard 2.0 compatibility is preserved.
@@ -2615,6 +2632,9 @@ class PipelineWorker(threading.Thread):
                         "detections": self.state.detections_current_frame,
                         "tracks": self.state.active_tracks,
                         "road_tracks": self.state.road_tracks_current_frame,
+                        "road_margin_eligible_tracks": self.state.road_margin_eligible_tracks_current_frame,
+                        "road_margin_only_tracks": self.state.road_margin_only_tracks_current_frame,
+                        "near_gate_eligible_tracks": self.state.near_gate_eligible_tracks_current_frame,
                         "untracked": self.state.untracked_detections,
                         "total_count": self.state.total_count,
                         "crossing_events": len(pending_crossing_events) + (
