@@ -1,10 +1,10 @@
-"""Read-only worker source identity and trace schema contract (V0.5.111)."""
+"""Read-only worker source identity and trace schema contract (V0.5.114)."""
 from __future__ import annotations
 
 from hashlib import sha256
 from pathlib import Path
 
-TRACE_RUNTIME_VERSION = '0.5.111'
+TRACE_RUNTIME_VERSION = '0.5.114'
 TRACE_GATE_DECISION_SCHEMA = 1
 
 

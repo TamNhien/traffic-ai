@@ -1,3 +1,100 @@
+# Traffic AI V0.5.114 — Verified Review Export Docker Mount Fix
+
+## Fix reported by user
+
+Running `scripts/export-benchmark-review-frames.ps1` in V0.5.113 failed:
+`[ERROR] Review frame export: [Errno 2] No such file or directory: '/opt/benchmark-gate.py'`.
+The container was able to load the mounted `review-tool.py` and `benchmark-forensics.py`,
+but `benchmark-forensics.py` dynamically imports a **second verifier** named
+`benchmark-gate.py` from the same directory. This verifier was not mounted inside
+`ai-service` and is not copied into that Docker image by its Dockerfile.
+
+V0.5.114 changes the PowerShell exporter to explicitly mount
+`scripts/benchmark-gate.py` at `/opt/benchmark-gate.py` **read-only**, alongside
+`benchmark-forensics.py` and the frame exporter. A preflight check now refuses
+missing verifier scripts **before starting Docker**. Both original benchmark and
+video are read-only mounts; GT, AI events, database, count policy and source
+video are unchanged. No extra host Python, OpenCV or `pip install` is required.
+
+Four new regression tests cover the complete three-file dependency chain,
+read-only mounts and native relative imports. `scripts/test.ps1` runs them
+as a stdlib-only isolated Docker step. Migration `0128_review_mount_v05114`
+is **metadata only**; it changes only the schema-version setting.
+
+### Standard Windows commands
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+.\scripts\test.ps1
+.\scripts\start.ps1
+```
+
+### Retry frame review export
+
+Ensure the full benchmark ZIP and original video are located in the specified paths.
+Check file existence with `Test-Path -LiteralPath ... -PathType Leaf` before running.
+The exporter requires the source video from the benchmark; no JPG/RAR substitute
+proves continuous crossing motion.
+
+```powershell
+.\scripts\export-benchmark-review-frames.ps1 `
+  -Export ".\traffic-ai-benchmark-81-session-208.zip" `
+  -Video ".\videos\clip1.mp4" `
+  -ExpectedSession 208 `
+  -OutputDirectory ".\benchmark-review-frames-81"
+```
+
+After checking output, compress `benchmark-review-frames-81` and share it for
+manual review. Do not automatically relabel GT or treat extracted frames as
+training labels. Publish using `.\scripts\publish.ps1` **only after** Windows
+`test.ps1` and application checks succeed.
+
+**Baseline, not a V0.5.114 score:** Benchmark #81 / Session #208: GT 149,
+AI 148, matched 143, missed 6, extra 5, F1 96.3%. This update addresses an
+exporter packaging error, **not** detector/tracker or crossing accuracy.
+
+---
+
+# Traffic AI V0.5.113 — Vite Security Maintenance
+
+## Fix the failing Windows `scripts/test.ps1` pipeline
+
+The provided V0.5.112 Windows test log completed backend (195 tests), AI service
+(761 tests) and frontend unit tests (47 tests), but the frontend audit gate
+failed on `vite@8.3.0` with a **high-severity** advisory related to
+`launch-editor`. npm recommends upgrading to `vite@8.3.5`.
+
+V0.5.113 updates the exact Vite devDependency to `8.3.5`, changes the pinned
+version asserted by `Assert-TechnologyVersionsContract`, and adds five
+stdlib-only regressions run by `scripts/test.ps1` **before** installing frontend
+packages. `npm audit --audit-level=high` remains mandatory in `test.ps1`, the
+frontend multi-stage Dockerfile and GitHub Actions CI. It is not bypassed.
+
+The project ignores `frontend/package-lock.json` and generates one through
+`npm install` during Windows/Docker test. No fictitious lockfile is included;
+transitive dependencies and the registry's current advisories must be checked
+by `npm audit` on the target machine. If the registry reports new advisories,
+fix their causes instead of using `npm audit fix --force` blindly.
+
+The release is **dependency/security maintenance only**. It changes no model,
+detector, tracker, counting admission, GT, crossing time, database records,
+backend APIs or PostgreSQL schema. Alembic migration
+`0127_vite_security_v05113` updates the schema version metadata only.
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+.\scripts\test.ps1
+.\scripts\start.ps1
+```
+
+Run `./scripts/publish.ps1` (PowerShell: `.\scripts\publish.ps1`) only after
+the full Windows audit/build and application checks succeed. Keep `.env`, videos,
+models, database volumes and backups when updating source.
+
+---
+
 # Traffic AI V0.5.109 — Road Zone / Finite-Gate Eligibility Evidence
 
 ## Why this update
@@ -1813,3 +1910,43 @@ If the ZIP is in Downloads, supply its **absolute path** via `-Export` or copy
 it to the project first. The original recovered archive has 11 unmatched
 cases and 23,650 trace frames (runtime 0.5.109); this release does not claim
 new inference or change the benchmark.
+
+## V0.5.112 — Verified benchmark error-frame review pack
+
+This release adds `scripts/export-benchmark-review-frames.ps1` and a Python
+review-frame exporter. The previously verified GT and AI results from
+Benchmark #81 / Session #208 remain **149 GT / 148 AI / 143 matched / 6 missed /
+5 extra / F1 96.3%**. This update does not change detector weights, tracking,
+counting admission, or benchmark matching.
+
+The exporter checks the complete benchmark trace and validates the supplied
+**original continuous video** against the attested FPS, frame count and source
+aspect ratio. These metadata checks do **not** establish byte-level video
+identity: the user must confirm that the chosen video is the source used by
+the benchmark. It exports five near-event images for each of the 11 unmatched
+cases (unless clamped at the beginning/end of the video), with the counting
+line superimposed and a JSON review manifest. No automatic GT correction,
+training annotation, YOLO label, or new count is generated.
+
+Run this from the project root, with Docker Desktop using the Linux engine:
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+.\scripts\export-benchmark-review-frames.ps1 `
+  -Export '.\traffic-ai-benchmark-81-session-208.zip' `
+  -Video '.\videos\clip1.mp4' `
+  -ExpectedSession 208 `
+  -OutputDirectory '.\benchmark-review-frames-81'
+```
+
+Adjust `-Video` if the original MP4 is in a different directory. Output
+contains `review-manifest.json`, `README.md`, and `missed_*`/`extra_*`
+folders with sampled JPG frames. **Manual review is required before using any
+frames for model fine-tuning.** Verify identity, direction and actual crossing
+by watching the surrounding continuous video. A saved JPEG is not proof of
+physical identity or an independent crossing. There is no reason to re-run
+inference just to extract review frames.
+
+The exporter runs in the existing AI Service Docker image, so Windows does not
+need another Python/OpenCV installation. Use a fresh output folder for each
+attempt to prevent accidental mixing of evidence across sessions.

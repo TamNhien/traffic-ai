@@ -1,3 +1,91 @@
+# Verification — Traffic AI V0.5.114
+
+## Root cause / fix
+
+The AI image only bundles `ai-service/app`; the review-frame PowerShell command
+mounted `export-benchmark-review-frames.py` and `benchmark-forensics.py` but
+not the latter's sibling dependency `benchmark-gate.py`. The exact reported
+`/opt/benchmark-gate.py` missing-file failure follows from this omission.
+
+- Added the missing read-only bind mount and explicit verifier file preflight.
+- Added 4 new regression tests, invoked by the default PowerShell test workflow.
+- Updated all release versions to 0.5.114 and added metadata-only Alembic head
+  `0128_review_mount_v05114`.
+- No change to AI recognition, crossings, Ground Truth, PostgreSQL data, or model.
+
+## Verification in this environment
+
+| Verification | Result | Evidence / limit |
+|---|---|---|
+| New verifier mount regressions | **4 passed** | `python -S -m unittest discover -s scripts/tests -p test_review_frame_verifier_mount_v05114.py` |
+| Existing frame export regressions | **7 passed** | `python -S -m unittest discover -s scripts/tests -p test_review_frame_export_v05112.py` |
+| All script Python tests via pytest | **207 passed, 1 skipped** | `python -m pytest -q scripts/tests`; 97 passing subtests; skip is Windows PowerShell native harness |
+| Frontend unit tests | **47 passed** | `node --test frontend/tests/*.test.js` |
+| Real Benchmark #81 / Session #208 verifier | **verified 11 cases** | `verified_cases` using the actual user-supplied ZIP with all three sibling files present |
+| Python release metadata/migrations | **passed** | `python scripts/version-contract.py` |
+| Windows PowerShell `test.ps1` / Docker container execution | **not run** | Docker and PowerShell unavailable here; verify on target Windows host |
+| Original video frame extraction | **not run** | Video `clip1.mp4` not supplied to this environment |
+| npm online security audit and production build | **not run** | Not required for isolated exporter fix; must pass on Windows |
+
+The isolated `unittest` discovery across *every* script test with `python -S`
+can fail because `test_benchmark_gate.py` intentionally needs `pytest`.
+The complete script test suite was therefore validated with installed `pytest`
+and passes. Docker's production `test.ps1` calls the unit-only portions in its
+own isolated environment and runs benchmark-gate tests separately.
+
+---
+
+# Verification — Traffic AI V0.5.113
+
+## Input and issue
+
+- Based on the user's Windows V0.5.112 `scripts/test.ps1` log, not a newly run
+  benchmark: backend 195 passed, AI 761 passed, frontend 47 passed.
+- Frontend audit failed with 1 high-severity vulnerability: installed Vite
+  version `8.3.0` and its `launch-editor` dependency chain; npm proposed
+  Vite `8.3.5`. The `Frontend build` step did not finish.
+- The user did not attach a fresh benchmark/video in this turn. No claim is
+  made about better inference or reduced count error.
+
+## Applied change
+
+- Exact pin `vite=8.3.5` in `frontend/package.json`, updated Windows
+  technology-version contract, added release metadata migration 0127.
+- Added dependency-free five-case regression in test.ps1. Kept npm audit at
+  high severity in Docker, local Windows scripts and CI.
+- Existing package-lock.json is deliberately not distributed (project gitignore);
+  no fabricated transitive dependency hashes.
+
+## Validation
+
+| Test | Verified locally | Conditions |
+|---|---:|---|
+| Python version/migration chain | passed | `scripts/version-contract.py` |
+| New security regressions (stdlib-only) | 5 passed | `python -S -m unittest` |
+| Script unittest discovery | 198 passed, 1 skipped | one native PowerShell test not runnable on Linux |
+| AI service pytest | 761 passed | temporary `httpx2`->`httpx` shim outside source |
+| Backend pytest | 195 passed | SQLite test DB + same local shim |
+| Frontend Node tests | 47 passed | `node --test`, no third-party modules required |
+| Benchmark gate pytest | 5 passed | isolated test fixtures |
+| Backup worker pytest | 4 passed | isolated test fixtures |
+| Python compileall | passed | backend, AI service and scripts |
+| Source completeness and ZIP CRC | passed | checked after archive assembly |
+| npm audit / Vite production build | **not run here** | npm registry resolution returned `EAI_AGAIN` |
+| Windows Docker compose, live PostgreSQL, GPU inference | **not run here** | must verify on user's Windows host |
+
+**Total independent test cases:** 1,210 passed and 1 skipped
+(761 AI + 195 backend + 47 frontend + 198 script unittest + 5 benchmark gate
++ 4 backup worker); one test-only HTTPX compatibility shim used in AI/backend
+runs and **not included** in the ZIP. Negative regression fixture output may
+contain `[ERROR]`/`[FAIL]` text even when its test is marked `ok`.
+
+Before production deployment, rerun `./scripts/test.ps1` in Windows PowerShell;
+this will fetch `vite@8.3.5`, perform the official online npm high-severity audit,
+and build the final frontend image. No performance or counting improvement is
+claimed in this release.
+
+---
+
 # Verification — Traffic AI V0.5.109
 
 ## Source and customer evidence
@@ -1022,3 +1110,24 @@ Xem `docs/session-186-alias-handoff-v0585.md`. Nhóm sự kiện tại 606 giây
   absent local file, directories, invalid/truncated ZIP and permission errors.
 - This release does not modify vehicle counts, trace data, Ground Truth or worker policy.
 - Execute `scripts/test.ps1` on Windows with Docker to verify deployment-specific behavior.
+
+## V0.5.112 — Verified benchmark review-frame exporter
+
+- Source baseline: full V0.5.111 ZIP (426 files).
+- Benchmark: #81 / Session #208, complete verified trace 23,650 frames,
+  271,208 tracked gate decisions, runtime provenance `0.5.111`.
+- Scored results: 149 GT, 148 AI, 143 matched, 6 missed, 5 extra; F1 96.3%.
+- Added review tool + Docker PowerShell wrapper + seven stdlib-only regression
+  tests. The new tool selects samples from the local original MP4 after a
+  session/FPS/frame-count/aspect-ratio preflight. It does **not** train or
+  relabel anything and cannot establish byte-identity of the video.
+- Existing AI: 761 tests passed offline under installed compatibility module
+  for `httpx2`; module is external and NOT shipped in the source archive.
+- Existing backend: 195 passed with SQLite in-memory override and external
+  HTTPX compatibility; no PostgreSQL integration was run here.
+- Existing frontend: 47 node tests passed with installed Node.js v22.16.0.
+- New exporter tests: 7 passed with `python -S` (stdlib-only / simulated OpenCV
+  container). The exporter has **not** been tested against the actual original
+  clip1.mp4 because it was not uploaded as a continuous MP4.
+- Full Docker startup, GPU inference and Windows native PowerShell still need
+  verification on the user's workstation. No new Recall/Precision/F1 is claimed.

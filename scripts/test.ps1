@@ -196,7 +196,7 @@ function Assert-TechnologyVersionsContract {
     @{ Path = "ai-service\requirements.txt"; Needle = "httpx2==2.13.0" },
     @{ Path = "frontend\package.json"; Needle = '"react": "19.3.0"' },
     @{ Path = "frontend\package.json"; Needle = '"react-dom": "19.3.0"' },
-    @{ Path = "frontend\package.json"; Needle = '"vite": "8.3.0"' },
+    @{ Path = "frontend\package.json"; Needle = '"vite": "8.3.5"' },
     @{ Path = "frontend\package.json"; Needle = '"@vitejs/plugin-react": "6.1.1"' },
     @{ Path = "docker-compose.yml"; Needle = "postgres:18.6" },
     @{ Path = "docker-compose.yml"; Needle = "nginx:1.31.6-alpine" },
@@ -2515,6 +2515,30 @@ Invoke-Step "V0.5.109 road / finite gate telemetry regression (stdlib-only)" {
   docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 -v "${root}:/src" -w /src/ai-service python:3.14.7-slim `
     python -S -m unittest discover -s tests -p test_road_gate_diagnostics_v05109.py -v
   if ($LASTEXITCODE -ne 0) { throw 'V0.5.109 road eligibility tests failed.' }
+}
+
+Invoke-Step "V0.5.113 frontend Vite security pin (stdlib-only)" {
+  docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 `
+    -v "${root}:/src" -w /src python:3.14.7-slim `
+    python -S -m unittest discover -s scripts/tests -p test_frontend_security_v05113.py -v
+  if ($LASTEXITCODE -ne 0) { throw 'V0.5.113 frontend security pin regression failed.' }
+}
+
+Invoke-Step "V0.5.112 verified benchmark review frames (stdlib-only)" {
+  if (-not (Test-Path (Join-Path $root 'scripts/export-benchmark-review-frames.ps1')) -or
+      -not (Test-Path (Join-Path $root 'scripts/export-benchmark-review-frames.py'))) {
+    throw 'V0.5.112 review frame exporter missing.'
+  }
+  docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 -v "${root}:/src" -w /src python:3.14.7-slim `
+    python -S -m unittest discover -s scripts/tests -p test_review_frame_export_v05112.py -v
+  if ($LASTEXITCODE -ne 0) { throw 'V0.5.112 review frame export tests failed.' }
+}
+
+Invoke-Step "V0.5.114 review exporter transitive verifier mounts (stdlib-only)" {
+  docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 `
+    -v "${root}:/src" -w /src python:3.14.7-slim `
+    python -S -m unittest discover -s scripts/tests -p test_review_frame_verifier_mount_v05114.py -v
+  if ($LASTEXITCODE -ne 0) { throw 'V0.5.114 review mount regression failed.' }
 }
 
 Invoke-Step "V0.5.111 local benchmark ZIP path diagnostics (stdlib-only)" {

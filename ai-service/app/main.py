@@ -18,7 +18,7 @@ from app.annotation import accept_safe_annotations, get_annotation, get_annotati
 
 from app.trace_identity import TRACE_RUNTIME_VERSION
 
-APP_VERSION = '0.5.111'
+APP_VERSION = '0.5.114'
 if TRACE_RUNTIME_VERSION != APP_VERSION:
     raise RuntimeError('AI runtime/version trace drift; rebuild ai-service')
 app = FastAPI(title='Traffic AI Service', version=APP_VERSION)

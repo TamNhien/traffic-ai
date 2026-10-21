@@ -1,0 +1,13 @@
+[ERROR] Verified gate coverage aborted: Benchmark ZIP not found: /tmp/tmpborwdvk5/absent.zip. Download/copy the recovered ZIP to this path, or pass its full absolute path to -Export.
+/usr/lib/python3.13/zipfile/__init__.py:1642: UserWarning: Duplicate name: 'report.json'
+  return self._open_to_write(zinfo, force_zip64=force_zip64)
+[ERROR] Replay evidence cannot be compared: Trace is incomplete: metadata, geometry and delivery summary are required
+[FAIL] Replay persistence consistency gate
+----------------------------------------------------------------------
+Ran 199 tests in 22.976s
+
+OK (skipped=1)
+Benchmark #4 / Session #8: GT 2, AI 2, missed 1, extra 1; trace verified
+Saved /tmp/tmpshxz50fv/reports/cases.json and cases.md
+Session #1 → #2: DB 1 → 2; removed 0, introduced 1, decision flips 0
+Saved /tmp/tmp91ujahn6/out/replay-diff.json and replay-diff.md
