@@ -1,3 +1,68 @@
+# Traffic AI V0.5.116 — Stationary Ownership and Repeated Target Evidence
+
+## Thay đổi chạy thực tế
+
+- **Giữ ID cho xe đang chạy:** bộ nối ID dùng lịch sử đứng yên của chính xe
+  chủ để từ chối ghép một xe hai bánh mới, ở xa, vào ID xe đỗ. Cần ít nhất ba
+  quan sát khác khung, kéo dài ít nhất 12 khung, cùng raw ID và không có chuyển
+  động vượt giới hạn. Cả khoảng nhảy trực tiếp lẫn sai số dự đoán phải vượt
+  giới hạn sẵn có. Không tạo sự kiện đếm thay cho bộ kiểm tra qua vạch.
+- **Xác nhận xe đạp:** nhánh dự phòng tại lần qua vạch yêu cầu crop hẹp hiện
+  tại và hai crop rộng khác khung của cùng nguồn đều ủng hộ xe đạp. Điểm crop
+  rộng hiện tại còn phải thắng điểm detector chính. Bằng chứng xe máy đối
+  nghịch trong lịch sử crop hẹp/rộng sẽ chặn nhánh này. Điểm tin cậy trả về
+  giữ nguyên điểm crop rộng hiện tại, không cộng xác suất từ cùng mô hình.
+- Hai bộ đếm chẩn đoán mới: `stationary_alias_rejections` và
+  `bicycle_context_repeated_target_rescues`. Trace ghi cờ đang áp dụng và
+  fingerprint bao gồm cả `tracking.py` lẫn `classification.py`.
+
+Hai chức năng mặc định bật **chỉ với video**. Có thể tắt riêng bằng
+`AI_STATIONARY_ALIAS_GUARD=0` hoặc `AI_BICYCLE_REPEATED_TARGET_CONTEXT=0` trong
+`.env`, sau đó khởi động lại AI service. Các điều kiện cũ và chế độ stream
+giữ nguyên. Không thay GT, matcher, tolerance, quy ước hướng hoặc chính sách
+van hàng là truck. Một xe quay lại qua vạch vẫn có thể được đếm lần mới.
+
+## Bằng chứng và giới hạn
+
+Đầu vào là full source **V0.5.115** và hồ sơ **Benchmark #83 / Session #210**.
+Điểm đã lưu của bản cũ: **GT149 / AI148 / khớp143 / lọt6 / dư5 / F1 96.3%**.
+Đây chưa phải điểm của V0.5.116.
+
+Phát lại bằng chứng crop trên trace cũ tìm được đúng một quyết định mới đủ
+điều kiện trong 167 quyết định context: xe đạp track196223, frame13355.
+Phát lại resolver/cổng đếm từ box đã ghi được dùng để kiểm tra việc mất ID
+gần giây392. Đây là kiểm thử logic trên dữ liệu đã ghi; cần chạy lại AI trên
+video gốc và tạo benchmark mới để đo lọt/dư/F1 của .116. Các trường hợp chưa
+có bằng chứng an toàn, gồm mảnh ID quanh giây808, chưa được tự động bỏ đếm.
+
+## Cập nhật và chạy trên Windows
+
+Chép đè source, giữ `.env`, `.git`, models, videos, snapshots, database,
+Docker volumes và backups. Migration `0130_target_evidence_v05116` chỉ cập
+nhật metadata phiên bản. Giữ đủ test cũ; `test.ps1` chạy thêm regression .116.
+`publish.ps1` đọc `VERSION`, chạy test rồi commit, push, tạo tag và GitHub
+Release **v0.5.116** theo cấu hình repository có sẵn.
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+
+# Test
+.\scripts\test.ps1
+
+# Khởi động
+.\scripts\start.ps1
+
+# Tự test, commit, push GitHub, tạo tag và Release
+.\scripts\publish.ps1
+```
+
+Xem `VERIFICATION.md` để phân biệt các test offline đã chạy và các bước
+Windows/Docker/GPU/npm cần chạy trên máy đích. Phần dưới là lịch sử các bản cũ.
+
+---
+
 # Traffic AI V0.5.114 — Verified Review Export Docker Mount Fix
 
 ## Fix reported by user
@@ -1950,3 +2015,35 @@ inference just to extract review frames.
 The exporter runs in the existing AI Service Docker image, so Windows does not
 need another Python/OpenCV installation. Use a fresh output folder for each
 attempt to prevent accidental mixing of evidence across sessions.
+
+
+## V0.5.115 — Verified review-track overlays, no inference policy change
+
+Use the **existing** 55 review frames exported from Benchmark #81 / Session #208.
+V0.5.115 adds `scripts/annotate-benchmark-review-frames.ps1`, which joins those
+images to the complete, integrity-checked trace by **exact frame index**, draws
+up to ten nearest observed tracker bounding boxes and their gate-decision labels,
+and writes `review-tracks-upload.zip` to the new output folder. This avoids
+rerunning the 946-second video to generate diagnostic overlays.
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+.\scripts\annotate-benchmark-review-frames.ps1 `
+  -Export ".\traffic-ai-benchmark-81-session-208.zip" `
+  -ReviewDirectory ".\benchmark-review-frames-81" `
+  -ExpectedSession 208 `
+  -OutputDirectory ".\benchmark-review-frames-81-annotated"
+```
+
+Then upload `benchmark-review-frames-81-annotated/review-tracks-upload.zip`
+for manual case-by-case analysis. The tool requires the existing original
+`review-manifest.json` and refuses mismatched sessions/SHA-256, missing
+frames, path traversal, duplicate frames or overwriting previous output.
+Input JPEGs and benchmark ZIP are mounted read-only in Docker.
+
+**Provenance limitation:** a trace box or `primary-accepted` state is a worker
+observation, not proof of vehicle identity or a GT match. The original 149
+GT, 148 AI, 143 matched, 6 missed, 5 extra and F1 96.3% are reference
+numbers from Session #209; there is **no claimed accuracy gain** in 0.5.115.
+The detector, model weights, crossing policy, GT and PostgreSQL data are
+unchanged. Annotation is review-only and generates no YOLO training labels.

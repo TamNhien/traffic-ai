@@ -2735,6 +2735,25 @@ Invoke-Step "V0.5.102 deferred queue-admission transaction contract" {
   if ($tests -notmatch 'test_v05102_rejected_queue_admission_has_zero_counter_side_effects' -or $tests -notmatch 'test_v05102_rejected_queue_does_not_approve_bicycle_context') { throw 'V0.5.102 admission regression tests missing.' }
 }
 
+
+Invoke-Step "V0.5.115 verified review track overlay (stdlib-only)" {
+  docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 `
+    -v "${root}:/src" -w /src python:3.14.7-slim `
+    python -S -m unittest discover -s scripts/tests -p test_review_track_overlay_v05115.py -v
+  if ($LASTEXITCODE -ne 0) { throw 'V0.5.115 track review overlay tests failed.' }
+}
+
+Invoke-Step "V0.5.116 target evidence runtime regressions (stdlib-only)" {
+  docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 `
+    -v "${root}:/src" -w /src/ai-service python:3.14.7-slim `
+    python -S -m unittest discover -s tests -p 'test_*_v05116.py' -v
+  if ($LASTEXITCODE -ne 0) { throw 'V0.5.116 target evidence runtime tests failed.' }
+  docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 `
+    -v "${root}:/src" -w /src python:3.14.7-slim `
+    python -S -m unittest discover -s scripts/tests -p test_policy_fingerprint_v05116.py -v
+  if ($LASTEXITCODE -ne 0) { throw 'V0.5.116 runtime policy fingerprint tests failed.' }
+}
+
 Invoke-Step "Backend syntax check" {
   docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 -v "${root}:/src" -w /src/backend python:3.14.7-slim python -m compileall -q app tests alembic
 }

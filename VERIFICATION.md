@@ -1,3 +1,135 @@
+# Verification — Traffic AI V0.5.116
+
+## Authoritative baseline and protected evidence
+
+This release starts from the supplied V0.5.115 full source, not an older
+workspace snapshot. All 457 delivered baseline paths and all existing Python
+and PowerShell function names must remain present.
+
+| Input | SHA256 |
+|---|---|
+| `traffic-ai-v0.5.115-full-source(1).zip` | `749ec30df8c5381b8d3e92ad2927fdf6e1eb6fee65168ac8969bde5a3960b6ec` |
+| `traffic-ai-benchmark-83-session-210(1).zip` | `0dcc722620fbdd1ae2bf2274edc6bddcf4fb006ac15232059187d7f8290d679f` |
+| `camera_1(20261022-123043).rar` | `05a6ad5c4a1e1c48f51cb3ffe697fcbacfe08b9aa7e16563fced8ef8b5b13a37` |
+| Certified source trace, 413,160,406 bytes | `32e842e704a29c5b2c54fed787852fdc309a4930eacfbec5629a66173dd84558` |
+
+The RAR has 163 JPEGs plus the continuous JSONL trace; the JPEGs do not
+constitute the original continuous video. The .115 trace source identity is
+`a18765beb5c4464ecbe799a64382c368258bb3db90bee1265aba9f2450d8ee0c`.
+Stored #83 metrics remain GT149 / AI148 / matched143 / missed6 / extra5 /
+class mismatches3 / direction mismatches2 / F1 0.962963.
+No benchmark evidence, matcher or tolerance is modified or rescored.
+
+## Runtime fixes and evidence boundaries
+
+**Stationary ownership:** a new two-wheel raw ID could borrow the history of
+a parked rider after a gap of 21 frames. The existing short-gap guard only
+covers 1..12 frames; the large newcomer box also expands the old proximity
+allowance. The new bounded certificate retains the same raw owner's origin,
+minimum footprint, full-episode maximum drift and three distinct observations
+over at least 12 frames. In the 13..normal-gap window, both a large direct jump
+relative to the old owner and a contradictory velocity prediction are needed
+to reject the alias candidate. Established moving headings, same-raw returns
+and four-wheel rules retain their existing behavior. The counter
+`stationary_alias_rejections` counts rejected candidate offers, not recovered
+crossings or proven count improvements.
+
+**Repeated target views:** track196223 at frame13355 was stored as motorcycle.
+Its fresh tight general crop says bicycle0.303955078125; general wide views
+at13345 and13355 say bicycle0.462890625 and0.70068359375, above primary
+motorcycle0.638671875. Previous rules require stronger or independent-source
+agreement, so this is an explicit bounded policy expansion. A new crossing-only
+fallback requires all three same-source views, existing confidence floors,
+a primary-score margin, recent ordinary winning support and no contradictory
+motorcycle evidence. It returns0.70068359375 unchanged. It neither claims
+independent model agreement nor proves physical identity from geometry alone.
+
+Fresh tight opinions are captured from actual model results, cleared each
+frame/alias/passage, and never loaded from audit rows. Counter and override
+commit follow existing Human Guard transaction rules. Default-on flags apply
+only to videos; trace metadata records their effective values. Source
+fingerprints now also cover `classification.py` and `tracking.py`.
+
+The fixed .115 trace sweep covers all 23,650 frames, 167 context decisions and
+1,337 ordinary refiner observations. Reconstructed prior ordinary-support
+tuples match all 167 stored tuples. Exactly one previously rejected decision
+meets the new fallback requirements; the other 166 remain ineligible. This is
+a fixed-output policy counterfactual, not new GPU inference or an accuracy
+measurement. The ID replay similarly checks resolver/primary-gate behavior
+on recorded boxes, not the entire runtime/backend admission chain.
+
+In the causal window 9690..9850, the new guard keeps raw145089 separate from
+parked owner143964. The primary gate then accepts OUT at frame9806, with
+geometric crossing frame9799.848500482003 / source391.953940019s. Guard-off
+does not emit this event; the other primary OUT at9848 remains unchanged.
+This is recorded-box replay, not confirmation that final backend delivery or
+the fresh video's result will match.
+
+The complete resolver-only sweep is broader than that one example: 23,650
+frames / 271,208 observations, stitches1172 to1149,141 rejected candidate
+offers. Eighteen new-token decisions change from stitched to fresh and one
+from fresh to stitched; other ownership changes propagate through subsequent
+observations (80 changed new-token decisions and44,834 observations across
+91 raw IDs). Rounded trace boxes, default resolver parameters and omitted
+runtime duplicate coalescence limit this experiment. These are changes of ID
+ownership, not a measurement of improved counts; other identity changes need
+review on a fresh full run.
+Of the18 stitched-to-fresh cases,12 have a later observation of the old raw
+owner returning near its parked location; six lack enough identity evidence
+to confirm physically. Three certificates span only12..13 frames. No GT
+labels are used to declare these cases correct. These residual risks are
+another reason to inspect the next full-video run rather than project F1.
+
+The rear-fragment case around808s is deferred: dropping its first event alone
+can expose another false return event. Unmatched real riders, cargo vans and
+genuine return passages are not removed to fit GT.
+
+## Validation for this release
+
+The final validation record is below. Offline adapters execute actual test
+functions and the actual worker module with a fail-closed external HTTP-client
+placeholder. They do not simulate successful network I/O or replace policy
+implementations. Backend pure helpers are extracted for isolated execution;
+HTTP/ORM tests require the target dependencies and are reported separately.
+
+| Check executed here | Result | Scope |
+|---|---:|---|
+| AI tests | 807 passed | 758 test functions +49 unittest cases; actual worker import, no inference |
+| Backend pure tests | 134 passed | Isolated real helpers/shadow guard, no HTTP/ORM integration |
+| Script unittest | 211 passed | Includes new policy-fingerprint regression |
+| Benchmark gate / backup worker | 5 /4 passed | Real test functions, isolated fixtures |
+| Frontend Node unit tests | 47 passed | Built-in Node runner |
+| New .116 pure AI cases | 40 passed | Independently rerun with `python -S`; already included in807 |
+| Source contracts | 438 checks passed | 269 Python files, call signatures, imports, state/schema payloads, PowerShell text contracts |
+| Frontend production source syntax | 14 files parsed | Babel syntax/import checks; no Vite bundle |
+| Source retention | 457 paths retained | 1,176 prior test names and2,344 Python function names retained |
+| Versions and migration chain | passed | V0.5.116, one metadata-only Alembic head |
+
+**Total: 1,208 test cases passed, zero failures.** Separately,64 dependency-
+requiring cases were not executed (3 AI and61 backend HTTP/ORM), and1 native
+PowerShell harness was skipped. This is an offline validation report, not a
+claim that the complete dependency-backed pytest/Docker suite ran here.
+All old test function ASTs remain identical except the session-header test,
+whose expected dictionary adds the two default-false effective feature flags.
+All39 PowerShell files retain CRLF/no BOM, and all79 declared `Assert-*`
+functions in `test.ps1` remain invoked. Source CRC, exact member bytes,
+safe unique paths and modified Python archive timestamps are checked at
+packaging; no caches or personal runtime data are included.
+
+Windows PowerShell, Docker Compose, live PostgreSQL, original-video GPU
+inference, online npm audit and Vite production build have not run here.
+The normal Windows `scripts/test.ps1` still runs its full dependency-backed
+checks, with new stdlib-only .116 regressions added. No dependency audit is
+bypassed. Migration `0130_target_evidence_v05116` updates version metadata
+only; its parent is `0129_review_tracks_v05115`.
+
+Run the commands in the current README, process the same original video into
+a fresh session and create a new benchmark to measure .116. Old session210
+results and exports do not change after replacing source. Keep user data,
+`.env`, `.git`, model/video/snapshot files and persistent volumes on update.
+
+---
+
 # Verification — Traffic AI V0.5.114
 
 ## Root cause / fix
@@ -1131,3 +1263,53 @@ Xem `docs/session-186-alias-handoff-v0585.md`. Nhóm sự kiện tại 606 giây
   clip1.mp4 because it was not uploaded as a continuous MP4.
 - Full Docker startup, GPU inference and Windows native PowerShell still need
   verification on the user's workstation. No new Recall/Precision/F1 is claimed.
+
+
+## Verification — V0.5.115 (review track overlays)
+
+- Added `scripts/annotate-benchmark-review-frames.py` and corresponding
+  PowerShell/Docker wrapper, plus 8 stdlib-only regression cases in
+  `scripts/tests/test_review_track_overlay_v05115.py`.
+- Verification checks correct benchmark/session/trace SHA and original frame
+  clock, bounded per-frame tracks, path/symlink safety, nonempty-output refusal,
+  exact trace frames and ZIP integrity. No training labels are generated.
+- Version 0.5.115 / migration `0129_review_tracks_v05115`. No change in AI
+  crossing logic or benchmark scoring.
+- Production video replay and Docker-on-Windows validation require the user's
+  machine; no improvement in the counting F1 score is asserted.
+
+### Local execution results (2026-10-21)
+
+| Suite | Result | Verification |
+|---|---|---|
+| scripts Python unittest | 211 executed: 210 passed, 1 skipped | `verification-logs/v05115-scripts-tests.log` |
+| AI Service pytest | 761 passed | `verification-logs/v05115-ai-tests.log` |
+| Backend pytest | 195 passed | `verification-logs/v05115-backend-tests.log` |
+| Frontend node --test | 47 passed | `verification-logs/v05115-frontend-tests.log` |
+| Benchmark Gate | 5 passed | independent pytest |
+| Backup Worker | 4 passed | independent pytest |
+| Syntax / version / migration | pass | local compileall + version contract |
+| Benchmark #82 (Session #209) | 11 cases / 23,650 frames verified, V0.5.114 trace | `verification-logs/v05115-benchmark82-audit.log` |
+| Original source completeness | pass | archive-file comparison |
+
+**Test environment:** the AI/backend suites used a temporary `httpx2`→`httpx` import alias OUTSIDE the release source. The official Python dependency and Docker GPU runtime were not exercised here. Windows `test.ps1`, full container production build, and continuous-video inference have not been run in this environment. Frontend tests were run via `node --test`, not production Vite build.
+
+**Metric attribution:** 149 GT / 148 AI / 143 matched / 6 missed / 5 extra (F1 96.3%) were observed on V0.5.114, Session #209. V0.5.115 is a review-overlay tool, not a detector or counting accuracy upgrade. No improvement in F1 is claimed.
+
+### Local execution results (2026-10-21)
+
+| Suite | Result | Verification |
+|---|---|---|
+| scripts Python unittest | 211 passed, 1 skipped | `verification-logs/v05115-scripts-tests.log` |
+| AI Service pytest | 761 passed | `verification-logs/v05115-ai-tests.log` |
+| Backend pytest | 195 passed | `verification-logs/v05115-backend-tests.log` |
+| Frontend node --test | 47 passed | `verification-logs/v05115-frontend-tests.log` |
+| Benchmark Gate | 5 passed | independent pytest |
+| Backup Worker | 4 passed | independent pytest |
+| Syntax / version / migration | pass | local compileall + version contract |
+| Benchmark #82 (Session #209) | 11 cases / 23,650 frames verified, V0.5.114 trace | `verification-logs/v05115-benchmark82-audit.log` |
+| Original source completeness | pass | archive-file comparison |
+
+**Test environment:** the AI/backend suites used a temporary `httpx2`→`httpx` import alias OUTSIDE the release source. The official Python dependency and Docker GPU runtime were not exercised here. Windows `test.ps1`, full container production build, and continuous-video inference have not been run in this environment. Frontend tests were run via `node --test`, not production Vite build.
+
+**Metric attribution:** 149 GT / 148 AI / 143 matched / 6 missed / 5 extra (F1 96.3%) were observed on V0.5.114, Session #209. V0.5.115 is a review-overlay tool, not a detector or counting accuracy upgrade. No improvement in F1 is claimed.

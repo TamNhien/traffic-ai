@@ -21,6 +21,7 @@ from app.classification import (
     VehicleClassPolicy,
     contextual_bicycle_decision,
     contextual_bicycle_temporal_decision,
+    contextual_bicycle_repeated_target_decision,
     contextual_bicycle_weak_motor_decision,
     contextual_bicycle_competitive_decision,
     contextual_bicycle_near_margin_decision,
@@ -128,6 +129,7 @@ class PipelineWorker(threading.Thread):
         self._general_refiner_model = None
         self._class_refine_last_check: dict[int, int] = {}
         self._class_refine_last_observation: dict[int, tuple[int, tuple[str, float] | None]] = {}
+        self._class_refine_source_opinions: dict[int, tuple[int, dict[str, tuple[str, float] | None]]] = {}
         self._class_refine_consensus_proof: dict[int, tuple[int, tuple[str, float]]] = {}
         self._class_refine_consensus_source_frame: dict[int, tuple[int, int]] = {}
         self._class_refine_overrides: dict[int, tuple[str, float, int]] = {}
@@ -165,6 +167,10 @@ class PipelineWorker(threading.Thread):
             history_frames=int(os.getenv("AI_FLOW_CALIBRATION_HISTORY_FRAMES", "1200")),
             per_track_points=int(os.getenv("AI_FLOW_CALIBRATION_POINTS_PER_TRACK", "180")),
         )
+        self._stationary_alias_guard_enabled = (
+            payload.source_type == "video"
+            and os.getenv("AI_STATIONARY_ALIAS_GUARD", "1").strip().lower() not in {"0", "false", "no"}
+        )
         self._continuity = TrackContinuityResolver(
             two_wheel_heading_inertia=os.getenv("AI_TWO_WHEEL_HEADING_INERTIA", "1").strip().lower() not in {"0", "false", "no"},
             max_gap_frames=int(os.getenv("AI_STITCH_MAX_GAP", "30")),
@@ -173,6 +179,7 @@ class PipelineWorker(threading.Thread):
             heavy_max_distance_ratio=float(os.getenv("AI_STITCH_HEAVY_DISTANCE_RATIO", "0.18")),
             raw_reuse_jump_ratio=float(os.getenv("AI_STITCH_RAW_REUSE_JUMP_RATIO", "0.18")),
             short_gap_alias_guard=os.getenv("AI_SHORT_GAP_ALIAS_GUARD", "1").strip().lower() not in {"0", "false", "no"},
+            stationary_alias_guard=self._stationary_alias_guard_enabled,
         )
         self.backend_url = os.getenv("BACKEND_INTERNAL_URL", "http://backend:8000/api/internal")
         self.shared_token = os.getenv("AI_SHARED_TOKEN", "")
@@ -219,6 +226,10 @@ class PipelineWorker(threading.Thread):
         self.bicycle_consensus_min_sources = max(1, int(os.getenv("AI_BICYCLE_CONSENSUS_MIN_SOURCES", "2")))
         self.bicycle_consensus_single_source_strong = max(0.0, float(os.getenv("AI_BICYCLE_CONSENSUS_SINGLE_SOURCE_STRONG", "0.88")))
         self.bicycle_context_rescue_enabled = os.getenv("AI_BICYCLE_CONTEXT_RESCUE", "1").strip().lower() not in {"0", "false", "no"}
+        self._bicycle_repeated_target_context_enabled = (
+            payload.source_type == "video"
+            and os.getenv("AI_BICYCLE_REPEATED_TARGET_CONTEXT", "1").strip().lower() not in {"0", "false", "off", "no"}
+        )
         self.bicycle_context_pad_x = max(0.2, float(os.getenv("AI_BICYCLE_CONTEXT_PAD_X", "1.10")))
         self.bicycle_context_pad_y = max(0.2, float(os.getenv("AI_BICYCLE_CONTEXT_PAD_Y", "0.85")))
         self.bicycle_context_dual_conf = max(0.0, min(1.0, float(os.getenv("AI_BICYCLE_CONTEXT_DUAL_CONF", "0.72"))))
@@ -911,6 +922,10 @@ class PipelineWorker(threading.Thread):
         if source == target:
             return
         counter.merge_track(source, target)
+        # A canonical alias is not a fresh target crop for either identity.
+        target_opinions = getattr(self, "_class_refine_source_opinions", {})
+        target_opinions.pop(source, None)
+        target_opinions.pop(target, None)
         if heavy_rescuer is not None:
             heavy_rescuer.merge_track(source, target)
         if anchor_span_rescuer is not None:
@@ -1500,6 +1515,14 @@ class PipelineWorker(threading.Thread):
                 observations.append(general)
                 self._refine_consensus.update(tid, frame_idx, general[0], general[1], "general")
 
+        # Cache actual model returns before any decision/audit aggregation.
+        # This cache lasts only for this processing frame and is never restored
+        # from a diagnostic row or transferred across canonical aliases.
+        target_opinions = getattr(self, "_class_refine_source_opinions", None)
+        if target_opinions is None:
+            target_opinions = self._class_refine_source_opinions = {}
+        target_opinions[tid] = (frame_idx, dict(audit_opinions))
+
         if not observations:
             # An attempted inference costs a slot, but no target opinion is
             # not a new semantic observation. Reading old consensus here would
@@ -1639,6 +1662,8 @@ class PipelineWorker(threading.Thread):
                     "source_fps": self.state.source_fps, "source_frame_count": source_frame_count,
                     "frame_policy": self.state.frame_policy,
                     "endpoint_precision_guard_enabled": getattr(self, "_endpoint_precision_guard_enabled", False),
+                    "bicycle_repeated_target_context_enabled": getattr(self, "_bicycle_repeated_target_context_enabled", False),
+                    "stationary_alias_guard_enabled": getattr(self, "_stationary_alias_guard_enabled", False),
                     **trace_runtime_metadata(),
                 })
             self.state.status = "warming"
@@ -1886,6 +1911,7 @@ class PipelineWorker(threading.Thread):
                 crossing_class_refine_track_ids: set[int] = set()
                 gate_trace_tracks = []
                 self._bicycle_xframe_audit_this_frame = []
+                self._class_refine_source_opinions = {}
                 self._class_refine_decision_audit_this_frame = []
                 self._guard_crossing_proposals_this_frame = []
                 frame_start_deferred_commits = self.state.human_guard_deferred_commits
@@ -1969,6 +1995,7 @@ class PipelineWorker(threading.Thread):
                         )
                         self.state.raw_id_discontinuities = self._continuity.raw_id_discontinuities
                         self.state.short_gap_alias_rejections = self._continuity.short_gap_alias_rejections
+                        self.state.stationary_alias_rejections = getattr(self._continuity, "stationary_alias_rejections", 0)
                         claimed_canonical_ids.add(track_id)
                         if self._raw_handoff_guard_enabled and current_label in TWO_WHEEL_LABELS:
                             self._raw_handoff_guard.observe(raw_track_id, track_id, frame_index, rect)
@@ -2669,6 +2696,7 @@ class PipelineWorker(threading.Thread):
                         "bicycle_context_rescues": self.state.bicycle_context_rescues,
                         "bicycle_context_target_matches": self.state.bicycle_context_target_matches,
                         "bicycle_context_temporal_rescues": self.state.bicycle_context_temporal_rescues,
+                        "bicycle_context_repeated_target_rescues": self.state.bicycle_context_repeated_target_rescues,
                         "bicycle_context_weak_motor_rescues": self.state.bicycle_context_weak_motor_rescues,
                         "bicycle_context_competitive_rescues": self.state.bicycle_context_competitive_rescues,
                         "bicycle_context_near_margin_rescues": self.state.bicycle_context_near_margin_rescues,
@@ -2704,6 +2732,7 @@ class PipelineWorker(threading.Thread):
                         "endpoint_precision_suppressed": self.state.endpoint_precision_suppressed,
                         "raw_id_discontinuities": self.state.raw_id_discontinuities,
                         "short_gap_alias_rejections": self.state.short_gap_alias_rejections,
+                        "stationary_alias_rejections": self.state.stationary_alias_rejections,
                         "four_wheel_duplicate_suppressed": self.state.four_wheel_duplicate_suppressed,
                         "video_start_rescues": self.state.video_start_rescues,
                         "crossing_time_corrections": self.state.crossing_time_corrections,
@@ -3114,6 +3143,7 @@ class PipelineWorker(threading.Thread):
         tid = int(track_id)
         self._bicycle_context_xframe_trail.pop(tid, None)
         self._refine_consensus.consume_through(tid, int(frame_index))
+        getattr(self, "_class_refine_source_opinions", {}).pop(tid, None)
         self._bicycle_context_xframe_last_consumed[tid] = max(
             int(frame_index), self._bicycle_context_xframe_last_consumed.get(tid, -100000),
         )
@@ -3321,6 +3351,40 @@ class PipelineWorker(threading.Thread):
             )
             if decision is not None:
                 rescue_method = "temporal"
+        if decision is None and getattr(self, "_bicycle_repeated_target_context_enabled", False):
+            # Repeated same-model views corroborate geometry, not probability.
+            # Ordinary crop history must remain competitive through this frame;
+            # a recent motor opinion cannot be hidden by the wide crop trail.
+            ordinary_hits, _unused_fused, _unused_strongest, _unused_sources = self._refine_consensus.competitive_support(
+                tid, frame_idx, "bicycle", "motorcycle",
+                min_source_win=self.bicycle_context_xframe_source_win,
+                competing_veto=self.bicycle_context_xframe_motor_veto,
+                include_current_frame=True,
+            )
+            target_cache = getattr(self, "_class_refine_source_opinions", {}).get(tid)
+            tight_opinions = {
+                source: (target_cache[0], opinion[0], opinion[1])
+                for source, opinion in (target_cache[1].items() if target_cache is not None and target_cache[0] == frame_idx else ())
+                if opinion is not None
+            }
+            decision, repeated_audit = contextual_bicycle_repeated_target_decision(
+                [(observed_frame, source, bike, motor)
+                 for (observed_frame, source), (bike, motor) in keyed_observations.items()],
+                tight_opinions, frame_index=frame_idx, detector_confidence=detector_confidence,
+                history_frames=self.bicycle_context_xframe_history,
+                current_wide_confidence=self.bicycle_context_weak_motor_dual_conf,
+                previous_wide_confidence=self.bicycle_context_min_strong,
+                tight_confidence=self.bicycle_context_min_source_conf,
+                min_source_win=self.bicycle_context_xframe_source_win,
+                motorcycle_veto=self.bicycle_context_xframe_motor_veto,
+            )
+            repeated_audit["ordinary_winning_hits"] = ordinary_hits
+            if ordinary_hits <= 0:
+                decision = None
+                repeated_audit.update(accepted=False, reason="ordinary_target_history_reject")
+            context_audit["repeated_target_audit"] = repeated_audit
+            if decision is not None:
+                rescue_method = "repeated_target"
         # Every geometry-proven crossing consumes its trail, including earlier
         # same-frame context rescues that did not enter the cross-frame branch.
         self._consume_bicycle_context_passage(track_id, frame_index)
@@ -3346,7 +3410,7 @@ class PipelineWorker(threading.Thread):
         if decision[0] != "bicycle":
             return
         tid = int(track_id)
-        if method in {"weak_motor", "competitive", "near_margin", "xframe", "temporal"}:
+        if method in {"weak_motor", "competitive", "near_margin", "xframe", "temporal", "repeated_target"}:
             attribute = f"bicycle_context_{method}_rescues"
             setattr(self.state, attribute, getattr(self.state, attribute) + 1)
         if tid not in self._bicycle_context_rescue_tracks:

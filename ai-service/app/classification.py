@@ -579,6 +579,116 @@ def contextual_bicycle_temporal_decision(
 
 
 
+def contextual_bicycle_repeated_target_decision(
+    observations: list[tuple[int, str, float, float]],
+    tight_opinions: dict[str, tuple[int, str, float]],
+    *,
+    frame_index: int,
+    detector_confidence: float,
+    history_frames: int = 18,
+    current_wide_confidence: float = 0.58,
+    previous_wide_confidence: float = 0.34,
+    tight_confidence: float = 0.18,
+    min_source_win: float = 0.015,
+    motorcycle_veto: float = 0.10,
+) -> tuple[tuple[str, float] | None, dict]:
+    """Corroborate a fresh target crop with two distinct wide target views.
+
+    This is a same-source geometry check, not independent model agreement.
+    Return the current wide confidence unchanged; repeated views never fuse
+    into a larger probability. The caller additionally checks ordinary crop
+    history for contradictory motorcycle evidence before using this fallback.
+    """
+    audit = {
+        "accepted": False, "reason": "insufficient_repeated_target_evidence",
+        "same_model_probability_fusion": False, "physical_identity_proven": False,
+    }
+
+    def reject(reason: str):
+        audit["reason"] = reason
+        return None, audit
+
+    def valid_frame(value):
+        return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+    def valid_score(value):
+        return (isinstance(value, (int, float)) and not isinstance(value, bool)
+                and 0.0 <= value <= 1.0 and isfinite(value))
+
+    scores = (detector_confidence, current_wide_confidence, previous_wide_confidence,
+              tight_confidence, min_source_win, motorcycle_veto)
+    if not valid_frame(frame_index) or not valid_frame(history_frames) or history_frames < 1:
+        return reject("invalid_frame_configuration")
+    if not all(valid_score(value) for value in scores):
+        return reject("invalid_confidence_configuration")
+    if not isinstance(observations, (list, tuple)) or not isinstance(tight_opinions, dict):
+        return reject("invalid_evidence")
+
+    keyed: dict[tuple[int, str], tuple[float, float]] = {}
+    for item in observations:
+        if not isinstance(item, (list, tuple)) or len(item) != 4:
+            return reject("invalid_wide_observation")
+        observed_frame, source, bike, motor = item
+        if (not valid_frame(observed_frame) or not isinstance(source, str) or not source
+                or not valid_score(bike) or not valid_score(motor)):
+            return reject("invalid_wide_observation")
+        if observed_frame > frame_index:
+            return reject("future_wide_observation")
+        if observed_frame < frame_index - history_frames:
+            continue
+        key, pair = (observed_frame, source), (float(bike), float(motor))
+        if key in keyed and keyed[key] != pair:
+            return reject("conflicting_wide_observations")
+        keyed[key] = pair
+    if contextual_motorcycle_veto(
+        [(source, bike, motor) for (_frame, source), (bike, motor) in keyed.items()],
+        motorcycle_veto=motorcycle_veto,
+    ):
+        return reject("motorcycle_wide_veto")
+
+    fresh_tight: dict[str, float] = {}
+    for source, item in tight_opinions.items():
+        if (not isinstance(source, str) or not source or not isinstance(item, (list, tuple))
+                or len(item) != 3):
+            return reject("invalid_tight_observation")
+        observed_frame, label, confidence = item
+        if (not valid_frame(observed_frame) or not isinstance(label, str) or label not in VEHICLE_CLASSES
+                or not valid_score(confidence)):
+            return reject("invalid_tight_observation")
+        if observed_frame > frame_index:
+            return reject("future_tight_observation")
+        if observed_frame != frame_index:
+            continue
+        if label == "motorcycle" and confidence > motorcycle_veto:
+            return reject("motorcycle_tight_veto")
+        if label == "bicycle" and confidence >= tight_confidence:
+            fresh_tight[source] = float(confidence)
+
+    for source in sorted(fresh_tight):
+        bike, motor = keyed.get((frame_index, source), (0.0, 0.0))
+        if (bike < current_wide_confidence or bike - motor < min_source_win
+                or bike - detector_confidence < min_source_win):
+            continue
+        prior = [(frame, previous_bike, previous_motor)
+                 for (frame, previous_source), (previous_bike, previous_motor) in keyed.items()
+                 if previous_source == source and frame < frame_index
+                 and previous_bike >= previous_wide_confidence
+                 and previous_bike - previous_motor >= min_source_win]
+        if not prior:
+            continue
+        previous_frame, previous_bike, previous_motor = max(prior)
+        audit.update(
+            accepted=True, reason="accepted", source=source,
+            tight_frame=frame_index, tight_confidence=fresh_tight[source],
+            current_wide_frame=frame_index, current_wide_confidence=bike,
+            current_wide_motorcycle=motor, primary_confidence=float(detector_confidence),
+            previous_wide_frame=previous_frame, previous_wide_confidence=previous_bike,
+            previous_wide_motorcycle=previous_motor,
+        )
+        return ("bicycle", bike), audit
+    return reject("insufficient_repeated_target_evidence")
+
+
 def contextual_bicycle_weak_motor_decision(
     observations: list[tuple[str, float]],
     *,

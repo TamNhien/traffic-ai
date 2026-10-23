@@ -1842,6 +1842,147 @@ def test_v0564_attempted_sample_without_target_does_not_claim_class_evidence() -
     assert "inference_performed" not in audit
 
 
+def _v05116_repeated_target_worker():
+    """Actual worker/accumulator with controlled fresh target-matched model returns."""
+    worker = _class_worker()
+    worker._bicycle_repeated_target_context_enabled = True
+    worker.state.bicycle_context_repeated_target_rescues = 0
+    worker._bicycle_context_xframe_trail[7] = [(13345, "general", .462890625, 0.0)]
+    worker._refine_crossing_label = lambda *_args, **kwargs: (
+        ("bicycle", .303955078125) if kwargs["model"] is worker._general_refiner_model else None
+    )
+    worker._context_two_wheel_from_model = lambda *_args: (
+        (.70068359375, 0.0) if _args[-1] is worker._general_refiner_model else None
+    )
+    return worker
+
+
+def _v05116_sample_target(worker, frame_index=13355):
+    return worker._observe_class_refiner(
+        7, frame_index, object(), (10, 20, 50, 90), "motorcycle", "cpu", False, force=True,
+    )
+
+
+def _v05116_context(worker, frame_index=13355, *, detector_confidence=.638671875, commit=True, trace=None):
+    return worker._refine_bicycle_context(
+        7, frame_index, object(), (10, 20, 50, 90), "cpu", False,
+        detector_confidence, commit=commit, decision_trace=trace,
+    )
+
+
+def test_v05116_raw_source_cache_survives_rejected_ordinary_aggregate_and_same_frame_retry() -> None:
+    worker = _v05116_repeated_target_worker()
+    worker._prefer_refinement_candidate = lambda *_args: None
+    refined, inferred = _v05116_sample_target(worker)
+    assert refined is None and inferred
+    assert worker._class_refine_source_opinions[7] == (
+        13355, {"domain": None, "general": ("bicycle", .303955078125)},
+    )
+    assert _v05116_sample_target(worker) == (None, False)
+    assert worker.state.general_refine_checks == 1
+    assert worker._class_refine_source_opinions[7][0] == 13355
+
+
+def test_v05116_repeated_target_proposal_uses_existing_commit_boundary_and_consumes_evidence() -> None:
+    worker = _v05116_repeated_target_worker()
+    _v05116_sample_target(worker)
+    trace = {}
+    decision = _v05116_context(worker, commit=False, trace=trace)
+    assert decision == ("bicycle", .70068359375)
+    assert trace["method"] == "repeated_target"
+    assert trace["audit"]["commit_status"] == "proposed"
+    assert trace["audit"]["repeated_target_audit"]["ordinary_winning_hits"] == 1
+    assert worker.state.bicycle_context_repeated_target_rescues == 0
+    assert worker._class_refine_overrides == {}
+    assert 7 not in worker._class_refine_source_opinions
+    assert 7 not in worker._bicycle_context_xframe_trail
+    assert _v05116_context(worker) is None
+    assert _v05116_sample_target(worker)[1] is False
+    assert 7 not in worker._class_refine_source_opinions
+    worker._commit_bicycle_context_rescue(7, 13355, decision, trace["method"])
+    assert worker.state.bicycle_context_repeated_target_rescues == 1
+    assert worker.state.bicycle_context_rescues == 1
+    assert worker._class_refine_overrides[7] == ("bicycle", .70068359375, 13355)
+
+
+def test_v05116_feature_disabled_keeps_previous_decision() -> None:
+    worker = _v05116_repeated_target_worker()
+    worker._bicycle_repeated_target_context_enabled = False
+    _v05116_sample_target(worker)
+    assert _v05116_context(worker) is None
+    assert worker.state.bicycle_context_repeated_target_rescues == 0
+
+
+def test_v05116_old_or_future_or_absent_tight_cache_cannot_be_reconstructed_from_audit() -> None:
+    for cache_frame in (None, 13354, 13356):
+        worker = _v05116_repeated_target_worker()
+        _v05116_sample_target(worker)
+        # The diagnostic row remains present, but cannot supply runtime proof.
+        assert worker._class_refine_decision_audit_this_frame
+        if cache_frame is None:
+            worker._class_refine_source_opinions.clear()
+        else:
+            worker._class_refine_source_opinions[7] = (
+                cache_frame, {"general": ("bicycle", .303955078125)},
+            )
+        assert _v05116_context(worker) is None
+        assert worker.state.bicycle_context_repeated_target_rescues == 0
+
+
+def test_v05116_recent_ordinary_motorcycle_veto_survives_favorable_wide_views() -> None:
+    worker = _v05116_repeated_target_worker()
+    # Outside the short wide context window, inside ordinary target history.
+    worker._refine_consensus.update(7, 13280, "motorcycle", .8, "domain")
+    _v05116_sample_target(worker)
+    trace = {}
+    assert _v05116_context(worker, trace=trace) is None
+    audit = trace["audit"]["repeated_target_audit"]
+    assert not audit["accepted"] and audit["reason"] == "ordinary_target_history_reject"
+    assert audit["ordinary_winning_hits"] == 0
+
+
+def test_v05116_repeated_target_cannot_override_higher_primary_motorcycle() -> None:
+    worker = _v05116_repeated_target_worker()
+    _v05116_sample_target(worker)
+    assert _v05116_context(worker, detector_confidence=.99) is None
+    assert worker.state.bicycle_context_repeated_target_rescues == 0
+
+
+def test_v05116_current_other_source_tight_motorcycle_veto_is_preserved() -> None:
+    worker = _v05116_repeated_target_worker()
+    worker._refine_crossing_label = lambda *_args, **kwargs: (
+        ("bicycle", .303955078125) if kwargs["model"] is worker._general_refiner_model else ("motorcycle", .11)
+    )
+    _v05116_sample_target(worker)
+    assert _v05116_context(worker) is None
+    assert worker.state.bicycle_context_repeated_target_rescues == 0
+
+
+def test_v05116_return_crossing_must_earn_new_target_and_distinct_wide_frames() -> None:
+    worker = _v05116_repeated_target_worker()
+    _v05116_sample_target(worker)
+    assert _v05116_context(worker) == ("bicycle", .70068359375)
+    _v05116_sample_target(worker, 13365)
+    assert _v05116_context(worker, 13365) is None
+    # A new passage has a new prior view and a new tight current observation.
+    worker._bicycle_context_xframe_trail[7] = [(13370, "general", .462890625, 0.0)]
+    _v05116_sample_target(worker, 13375)
+    assert _v05116_context(worker, 13375) == ("bicycle", .70068359375)
+    assert worker.state.bicycle_context_repeated_target_rescues == 2
+
+
+def test_v05116_alias_merge_discards_both_tight_source_caches() -> None:
+    worker = _v05116_repeated_target_worker()
+    _v05116_sample_target(worker)
+    worker._class_refine_source_opinions[8] = (13355, {"general": ("bicycle", .9)})
+    worker._labels = SimpleNamespace(merge_track=lambda *_args: None)
+    for name in ("_seen_track_ids", "_truck_crossing_tracks", "_bicycle_tracks_seen",
+                 "_heavy_anchor_tracks", "_heavy_center_rescue_tracks"):
+        setattr(worker, name, set())
+    worker._merge_canonical_track_state(7, 8, SimpleNamespace(merge_track=lambda *_args: None), None)
+    assert worker._class_refine_source_opinions == {}
+
+
 def test_v0564_deterministic_crossing_keeps_stronger_truck_veto_and_two_frame_threshold() -> None:
     for domain, general in ((None, ("car", .79)), (("truck", .91), ("car", .86)), (None, ("car", .86))):
         worker = _v0564_deterministic_class_worker()

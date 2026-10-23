@@ -45,6 +45,7 @@ class PipelineState:
     bicycle_context_rescues: int = 0
     bicycle_context_target_matches: int = 0
     bicycle_context_temporal_rescues: int = 0
+    bicycle_context_repeated_target_rescues: int = 0
     bicycle_context_weak_motor_rescues: int = 0
     bicycle_context_competitive_rescues: int = 0
     bicycle_context_near_margin_rescues: int = 0
@@ -122,6 +123,7 @@ class PipelineState:
     endpoint_precision_suppressed: int = 0
     raw_id_discontinuities: int = 0
     short_gap_alias_rejections: int = 0
+    stationary_alias_rejections: int = 0
     direct_crossings: int = 0
     interpolated_crossings: int = 0
     rescued_crossings: int = 0

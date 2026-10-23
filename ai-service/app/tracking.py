@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import atan2, cos, hypot, nextafter, sin
+from math import atan2, cos, hypot, isfinite, nextafter, sin
 
 Point = tuple[float, float]
 Rect = tuple[float, float, float, float]
@@ -58,6 +58,19 @@ class _IdentityState:
     rect: Rect | None = None
 
 
+@dataclass(slots=True)
+class _StationaryOwnership:
+    """Bounded evidence for one uninterrupted same-raw stationary episode."""
+
+    raw_id: int
+    origin: Point
+    first_frame: int
+    last_frame: int
+    observations: int
+    footprint: float
+    max_drift: float = 0.0
+
+
 class TrackContinuityResolver:
     """Bridge short ByteTrack ID switches using motion prediction."""
 
@@ -70,6 +83,7 @@ class TrackContinuityResolver:
         raw_reuse_jump_ratio: float = 0.18,
         short_gap_alias_guard: bool = True,
         two_wheel_heading_inertia: bool = True,
+        stationary_alias_guard: bool = True,
     ) -> None:
         self.max_gap_frames = max(2, int(max_gap_frames))
         self.max_distance_ratio = max(0.01, float(max_distance_ratio))
@@ -90,8 +104,11 @@ class TrackContinuityResolver:
         self.raw_reuse_jump_ratio = max(0.0, float(raw_reuse_jump_ratio))
         self.raw_id_discontinuities = 0
         self.short_gap_alias_rejections = 0
+        self.stationary_alias_rejections = 0
         self.short_gap_alias_guard = bool(short_gap_alias_guard)
         self.two_wheel_heading_inertia = bool(two_wheel_heading_inertia)
+        self.stationary_alias_guard = bool(stationary_alias_guard)
+        self._stationary_ownership: dict[int, _StationaryOwnership] = {}
         self._raw_to_canonical: dict[int, int] = {}
         # V0.5.84: raw-token observations are NOT interchangeable with the
         # canonical identity's latest position. A canonical may be updated by
@@ -239,6 +256,10 @@ class TrackContinuityResolver:
             if self._opposite_two_wheel_stitch(state, point, rect, family, gap):
                 continue
 
+            if self._stationary_owner_contradiction(candidate_id, state, raw_id, point, rect, family, gap):
+                self.stationary_alias_rejections += 1
+                continue
+
             # V0.5.93: include one-to-three-frame token handoffs in the
             # existing footprint-and-prediction contradiction check. Session
             # #193 shows a one-frame foreground token jumping about 250 pixels into
@@ -329,6 +350,83 @@ class TrackContinuityResolver:
             point, int(frame_index), str(label), int(raw_id), rect=rect,
         )
 
+    @staticmethod
+    def _valid_footprint(point: Point, rect: Rect | None) -> float | None:
+        if rect is None or not all(isfinite(value) for value in (*point, *rect)):
+            return None
+        width, height = rect[2] - rect[0], rect[3] - rect[1]
+        if width <= 0.0 or height <= 0.0:
+            return None
+        return max(20.0, hypot(width, height))
+
+    def _record_stationary_ownership(
+        self, canonical: int, raw_id: int, point: Point, label: str,
+        frame_index: int, rect: Rect | None,
+    ) -> None:
+        """Keep the full episode's drift, even with a dense source clock.
+
+        A fixed sample ring can forget earlier motion or never cover twelve
+        frames at high observation density. This constant-size certificate
+        retains the episode origin and its worst drift instead. Invalid boxes,
+        raw switches and long gaps start independent evidence.
+        """
+        footprint = self._valid_footprint(point, rect)
+        if not self.stationary_alias_guard or _vehicle_family(label) != "two-wheel" or footprint is None:
+            self._stationary_ownership.pop(canonical, None)
+            return
+        episode = self._stationary_ownership.get(canonical)
+        if episode is not None and episode.raw_id == raw_id and 0 < frame_index - episode.last_frame <= self.max_gap_frames:
+            minimum_footprint = min(episode.footprint, footprint)
+            drift = max(episode.max_drift, hypot(point[0] - episode.origin[0], point[1] - episode.origin[1]))
+            if drift <= .25 * minimum_footprint:
+                episode.last_frame = int(frame_index)
+                episode.observations = min(3, episode.observations + 1)
+                episode.footprint = minimum_footprint
+                episode.max_drift = drift
+                return
+        self._stationary_ownership[canonical] = _StationaryOwnership(
+            int(raw_id), point, int(frame_index), int(frame_index), 1, footprint,
+        )
+
+    def _stationary_owner_contradiction(
+        self, candidate_id: int, state: _IdentityState, raw_id: int,
+        point: Point, rect: Rect | None, family: str, gap: int,
+    ) -> bool:
+        """Stop a distant newcomer borrowing a proven parked rider identity.
+
+        Only the previously unprotected 13..normal-gap window is involved.
+        The direct jump uses the OLD owner's size: a large foreground rider's
+        box cannot enlarge a small parked rider's ownership radius. Prediction
+        must independently contradict both footprints, preserving perspective
+        growth and coherent fast motion. Established moving headings and all
+        four-wheel continuity retain their existing rules.
+        """
+        if (
+            not self.stationary_alias_guard or family != "two-wheel"
+            or not 13 <= gap <= self.max_gap_frames or state.last_raw_id == raw_id
+            or candidate_id in self._anchor_velocities
+            or abs(state.velocity[0]) + abs(state.velocity[1]) > .5
+        ):
+            return False
+        episode = self._stationary_ownership.get(candidate_id)
+        current_footprint = self._valid_footprint(point, rect)
+        if (
+            episode is None or current_footprint is None
+            or episode.raw_id != state.last_raw_id or episode.last_frame != state.frame_index
+            or episode.observations < 3 or episode.last_frame - episode.first_frame < 12
+            or episode.max_drift > .25 * episode.footprint
+        ):
+            return False
+        direct_jump = hypot(point[0] - state.point[0], point[1] - state.point[1])
+        predicted_jump = hypot(
+            point[0] - state.point[0] - state.velocity[0] * gap,
+            point[1] - state.point[1] - state.velocity[1] * gap,
+        )
+        return (
+            direct_jump > 1.75 * episode.footprint
+            and predicted_jump > 1.50 * max(episode.footprint, current_footprint)
+        )
+
     def _raw_reuse_is_discontinuous(
         self, previous: _IdentityState, point: Point, frame_index: int,
         width: int, height: int, rect: Rect | None,
@@ -385,9 +483,13 @@ class TrackContinuityResolver:
         self._reserved_negative_ids.update(value for value in (raw_id, canonical_id) if value < 0)
         previous = self._raw_to_canonical.get(raw_id)
         self._raw_to_canonical[raw_id] = canonical_id
+        # A fusion is not same-raw observation evidence. Neither owner may
+        # inherit a stationary certificate assembled by a different identity.
+        self._stationary_ownership.pop(canonical_id, None)
         self._canonical_raw_ids.setdefault(canonical_id, set()).add(raw_id)
         displaced = previous if previous is not None and previous != canonical_id else None
         if displaced is not None:
+            self._stationary_ownership.pop(displaced, None)
             displaced_raws = self._canonical_raw_ids.pop(displaced, set())
             self._canonical_raw_ids.setdefault(canonical_id, set()).update(displaced_raws)
             for candidate_raw, mapped in list(self._raw_to_canonical.items()):
@@ -483,6 +585,7 @@ class TrackContinuityResolver:
                 previous.velocity[1] * 0.45 + observed[1] * 0.55,
             )
         self._states[canonical] = _IdentityState(point, frame_index, str(label), raw_id, velocity, rect)
+        self._record_stationary_ownership(canonical, raw_id, point, label, frame_index, rect)
         speed = abs(velocity[0]) + abs(velocity[1])
         if speed >= 1.5:
             self._set_anchor_heading(canonical, frame_index, velocity, previous)
@@ -578,6 +681,7 @@ class TrackContinuityResolver:
             self._canonical_raw_ids.pop(cid, None)
             self._anchor_velocities.pop(cid, None)
             self._anchor_reversals.pop(cid, None)
+            self._stationary_ownership.pop(cid, None)
         for raw_id, cid in list(self._raw_to_canonical.items()):
             if cid in stale:
                 self._raw_to_canonical.pop(raw_id, None)
