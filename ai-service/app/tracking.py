@@ -125,6 +125,10 @@ class TrackContinuityResolver:
         # synthetic allocation cannot reuse one after its motion state expires.
         self._next_synthetic_canonical_id = -1
         self._reserved_negative_ids: set[int] = set()
+        # Retired fragment identities may still have semantic-cache keys in
+        # the worker. Never allocate those canonical keys again this session.
+        self._retired_canonical_ids: set[int] = set()
+        self._force_fresh_raw_ids: set[int] = set()
         # A reliable heading belongs to the canonical identity, separately from
         # its measured velocity. Deceleration must not move a previously leading
         # contact point back through the box to the stationary bottom fallback.
@@ -161,6 +165,20 @@ class TrackContinuityResolver:
         if raw_id < 0:
             self._reserved_negative_ids.add(raw_id)
         claimed = claimed_canonical_ids or set()
+        if raw_id in self._force_fresh_raw_ids:
+            self._force_fresh_raw_ids.discard(raw_id)
+            previous = self._raw_to_canonical.pop(raw_id, None)
+            if previous is not None:
+                self._canonical_raw_ids.get(previous, set()).discard(raw_id)
+            self._raw_observations.pop(raw_id, None)
+            # The raw's positive token can itself have old semantic state from
+            # an earlier lifecycle, even when the retired child was synthetic.
+            canonical = self._fresh_canonical_id(raw_id, claimed | {raw_id})
+            self._raw_to_canonical[raw_id] = canonical
+            self._canonical_raw_ids[canonical] = {raw_id}
+            self._record_raw_observation(raw_id, point, label, frame_index, rect)
+            self._update_state(canonical, raw_id, point, label, frame_index, rect)
+            return canonical, False
         canonical = self._raw_to_canonical.get(raw_id)
         detached_canonical: int | None = None
         if canonical is not None and canonical not in claimed:
@@ -460,17 +478,48 @@ class TrackContinuityResolver:
         lineage; no gate/class history is transferred by this resolver.
         """
         already_synthetic = self._next_synthetic_canonical_id < raw_id < 0
-        if raw_id not in self._states and raw_id not in claimed and not already_synthetic:
+        if (raw_id not in self._states and raw_id not in claimed and not already_synthetic
+                and raw_id not in self._retired_canonical_ids):
             return raw_id
         mapped_ids = set(self._raw_to_canonical.values())
         candidate = self._next_synthetic_canonical_id
         while (
             candidate in self._reserved_negative_ids or candidate in self._states
-            or candidate in claimed or candidate in mapped_ids
+            or candidate in claimed or candidate in mapped_ids or candidate in self._retired_canonical_ids
         ):
             candidate -= 1
         self._next_synthetic_canonical_id = candidate - 1
         return candidate
+
+    def canonical_for_raw(self, raw_id: int) -> int | None:
+        return self._raw_to_canonical.get(int(raw_id))
+
+    def require_fresh_identity_for_raw(self, raw_id: int) -> None:
+        """Rearmed fragments must not borrow any nearby counted owner."""
+        self._force_fresh_raw_ids.add(int(raw_id))
+
+    def can_discard_fragment_identity(self, raw_id: int, canonical_id: int) -> bool:
+        """Only an exclusive raw owner can be retired without splitting aliases.
+
+        Passage admission belongs to the worker/gates, not this motion class.
+        The caller must also prove that no counting/guard passage was accepted.
+        """
+        raw, canonical = int(raw_id), int(canonical_id)
+        state = self._states.get(canonical)
+        return (self._raw_to_canonical.get(raw) == canonical and state is not None
+                and state.last_raw_id == raw and self._canonical_raw_ids.get(canonical) == {raw})
+
+    def discard_fragment_identity(self, raw_id: int, canonical_id: int) -> bool:
+        if not self.can_discard_fragment_identity(raw_id, canonical_id):
+            return False
+        raw, canonical = int(raw_id), int(canonical_id)
+        self._retired_canonical_ids.add(canonical)
+        self._raw_to_canonical.pop(raw, None)
+        self._raw_observations.pop(raw, None)
+        for mapping in (self._states, self._canonical_raw_ids, self._anchor_velocities,
+                        self._anchor_reversals, self._stationary_ownership):
+            mapping.pop(canonical, None)
+        return True
 
     def alias_raw_id(self, raw_id: int, canonical_id: int) -> int | None:
         """Bind a duplicate raw ID and report any displaced canonical ID.

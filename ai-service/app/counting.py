@@ -515,6 +515,25 @@ class VerifiedAnchorSpanRescuer:
         self._committed_proposals: dict[int, _AnchorSpanProposal] = {}
         self._clock_hints: dict[int, _SpanClockHint] = {}
 
+    def can_discard_uncommitted_track(self, track_id: int) -> bool:
+        tid = int(track_id)
+        state = self._tracks.get(tid)
+        return (tid not in self._last_crossing_frame and tid not in self._committed_proposals
+                and tid not in self._span_proposals
+                and (state is None or (not state.counted_directions and state.last_count_frame <= -10_000
+                                       and state.pending is None)))
+
+    def discard_uncommitted_track(self, track_id: int) -> bool:
+        """Forget pre-passage geometry only; accepted identity is immutable."""
+        tid = int(track_id)
+        if not self.can_discard_uncommitted_track(tid):
+            return False
+        for mapping in (self._tracks, self._clock_hints):
+            mapping.pop(tid, None)
+        self._override_qualified.discard(tid)
+        self._immediate_candidates.discard(tid)
+        return True
+
     def _propose_span(
         self, track_id: int, pending: _AnchorSpanPending, frame_index: int, kind: str,
     ) -> tuple[str, Point]:
@@ -1280,6 +1299,20 @@ class _CenterCrossingCandidate:
 class _CenterPassageRescuer:
     """Keep proposed center geometry separate from accepted passage identity."""
 
+    def can_discard_uncommitted_track(self, track_id: int) -> bool:
+        tid = int(track_id)
+        state = self._tracks.get(tid)
+        return (tid not in self._last_crossing_frame and tid not in self._last_crossing_mode
+                and tid not in self._crossing_candidates and tid not in self._last_committed_rescue
+                and (state is None or (not state.counted_directions and state.last_count_frame <= -10_000)))
+
+    def discard_uncommitted_track(self, track_id: int) -> bool:
+        tid = int(track_id)
+        if not self.can_discard_uncommitted_track(tid):
+            return False
+        self._tracks.pop(tid, None)
+        return True
+
     def capture_passage_state(self, track_id: int) -> tuple[frozenset[str], int, float | None, str | None, bool]:
         tid = int(track_id)
         state = self._tracks.get(tid)
@@ -1821,6 +1854,26 @@ class LineCrossingCounter:
         self._last_crossing_frame: dict[int, float] = {}
         self._last_external_reject_reason: dict[int, str] = {}
         self._passage_rollbacks: dict[int, _PassageRollback] = {}
+
+    def accepted_passage_frame_for(self, track_id: int) -> int | None:
+        state = self._tracks.get(int(track_id))
+        return state.last_count_frame if state is not None and state.counted_directions and state.last_count_frame > -10_000 else None
+
+    def can_discard_uncommitted_track(self, track_id: int) -> bool:
+        tid = int(track_id)
+        state = self._tracks.get(tid)
+        return (tid not in self._last_crossing_frame and tid not in self._last_crossing_point
+                and tid not in self._last_crossing_mode and tid not in self._passage_rollbacks
+                and (state is None or (not state.counted_directions and state.last_count_frame <= -10_000)))
+
+    def discard_uncommitted_track(self, track_id: int) -> bool:
+        tid = int(track_id)
+        if not self.can_discard_uncommitted_track(tid):
+            return False
+        self._tracks.pop(tid, None)
+        self._last_external_reject_reason.pop(tid, None)
+        self._last_origin_rescue.discard(tid)
+        return True
 
     def _capture_passage_rollback(
         self, track_id: int, direction: str, frame_index: int, state: _TrackGateState,

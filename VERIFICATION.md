@@ -1,3 +1,161 @@
+# Verification — Traffic AI V0.5.117
+
+## Authoritative source and customer evidence
+
+Baseline: delivered .116 full-source ZIP,461files, SHA256
+`d72448448cd02b4c603ffcc780063ffa00c35990e5fd32a684d06a23ebf8c8bb`.
+This is the next version of .116, not an older restored workspace project.
+Inputs are read locally without changing their bytes:
+
+| Input | SHA256 |
+|---|---|
+| `traffic-ai-benchmark-84-session-211(1).zip` | `b7a1bfb68c2c7a37ce2e600c59877ea93c2ce69b3542291de7f611acaf7a33d2` |
+| `camera_1(20261023-145231).rar` | `4cc1e9f6775b4492edc74271f3af1549cd7a6bacfa1c9b61a1a00719c9dce66d` |
+| `image(20261023-145253).png` | `20ac78801df1418c189b3f88aa794b19e28d2f17162e5270c8fa867119a49950` |
+| Raw/gzip-decompressed trace,414,726,212bytes | `63da4f2bbbb9303bac9a3fb3015f54945a354012d6b5bed492b922269a4d918a` |
+
+All six manifest members are verified. The RAR contains164JPEGs plus the same
+raw trace, and all23,650 source frames are sequential. The session header
+explicitly identifies **AI V0.5.116** with source fingerprint
+`d94eecd06da9d2efa0ecfc7069dad7ac8e09747f9e0a3d32167eeaffe88533b6`;
+both .116 feature flags are enabled. The .115 screenshot badge is a compiled
+frontend version and does not identify the worker runtime.
+
+Observed #83→#84 with unchanged normalized GT/config: matched143→144,
+missed6→5, extra5→5, class mismatches3→2, strict matches138→140,
+F1 .962963→.966443. OUT145089 at391.9539s is present and196223 at533.9486s
+is bicycle. No prior passage is removed; three canonical IDs and one
+confidence also change. Final .116 counters: repeated-target rescue1 and
+stationary candidate rejections141. These are .116 results, not a .117 score.
+
+## Runtime changes
+
+The new fragment policy requires repeated, same-target nested-box geometry
+and consistent relative motion for a newborn two-wheel child beside a mature
+moving owner with a recent accepted passage. An exclusive child can be
+retired only before any accepted/pending Human Guard passage. Retirement
+discards uncommitted primary/secondary/span state together, keeps the owner
+heading independent, and reserves the old canonical key so semantic caches
+cannot be accidentally reused. Raw fragment observations are held until safe
+separation or lifecycle expiry allows a fresh identity. This is geometry
+evidence, not appearance-based proof of physical identity.
+
+The video-only default flag is `AI_TWO_WHEEL_FRAGMENT_GUARD=1`. State reports
+`two_wheel_fragment_retirements`, `two_wheel_fragment_releases`, and
+`two_wheel_fragment_suppressed_current_frame`; these count identities or
+filtered boxes, not measured removed DB events. Trace records the effective
+flag and bounded evidence. Source fingerprints include `fragment_ownership.py`.
+
+The certificate uses existing observed frame clocks: child age at most5
+frames and at most6 class hits; owner at least8 hits with an accepted passage
+within75 frames. Three distinct samples, gaps at most2 frames, need child
+coverage at least0.90, area at most0.60 of owner, width/height at most0.80,
+and normalized relative-offset drift at most0.06. Owner motion needs three
+raw observations and an observation at least8 frames old with displacement
+at least0.10 of its box diagonal; the child must lie behind that motion.
+No target ID, benchmark timecode or GT mark is an admission condition.
+
+At808s the old newborn368014 belongs to the rear of365295. Its first OUT is
+followed by a false lost-IN and another OUT after borrowing raw IDs; dropping
+only the first event would be unsafe. The recorded-box replay checks this
+whole sequence and preserves the distinct following368646. It uses real
+resolver/counter/rescuers with fixed recorded detections, not new model
+inference or a replacement for backend/Human Guard delivery evaluation.
+
+Final fixed-output sweep: 23,650 frames /271,208 stored observations, exactly
+one certificate:368014→365295 at frame20201 using20199/20200/20201, offset
+drift0.01484583855. It filters53 historical observations and rearms at20277.
+The261-frame actual-policy window20100..20360 reproduces the old seven
+proposals and produces four after the fix: the fake child OUT20201,
+lost-IN20216 and span-OUT20219 disappear. Owner OUT20170 remains; distinct
+following368646 still has OUT (20221→20220), and the812.577 proposal remains.
+Rearm gets fresh synthetic canonical−1, stitched=false. Seven replay checks
+pass. Only one of the three old child proposals became a persisted extra
+event in #84; this is not evidence that three DB false positives are removed.
+
+The full-trace sweep uses fixed historical raw/canonical/class snapshots for
+eligibility, not a re-executed complete runtime. The window executes actual
+worker filter/resolver/primary/span/center/lost-finalization classes with
+constructors extracted from source and default parameters. Historical
+environment overrides are unavailable. It omits duplicate coalescence,
+Human Guard, semantic refiners, event-time selection, HTTP/backend dedup and
+F1; gate_tracks can omit earlier suppressed detections. These limits remain
+even though the selected causal sequence is reproduced.
+
+The UI now compares the compiled UI identity with a ready live AI health
+version from the existing `/api/system/status` poll. Unknown, malformed or
+unready results do not mean mismatch; poll failures clear stale status.
+Manual reload is offered on mismatch. Nginx revalidates `/index.html`,
+including SPA fallback, while hashed asset caching remains unchanged.
+Attachments do not prove whether the old badge came from cache/open tab
+or an older frontend container.
+
+## Remaining evidence boundaries
+
+The old report's five extras are unchanged. The separate812s case is not
+silently removed as part of the808 fix. Snapshot/trace checks at59s,237s and
+406s show real opposing riders; OUT candidates17463/86400/150402 first appear
+already on the post-side at frames1486/5945/10178, with no pre-side anchor or
+center witness in those windows. Existing IN14/84351/149041 are other real
+riders. Flipping them or synthesizing crossings would not be an evidenced
+gate fix. Detector/track recall before the gate needs fresh video inference.
+
+Cargo vans remain truck; genuine return passages can count again. No GT,
+matcher, matching tolerance or near-time vehicle suppression is changed to
+fit the report. No new .117 F1 or promise that all misses/extras are fixed.
+
+## Validation scope
+
+Final validation and packaging counts are recorded below. Actual offline
+test functions, unittest and Node tests run against real policy modules;
+an external fail-closed HTTP client fixture permits actual worker import,
+and backend pure helpers run in isolation. No successful network/ORM/GPU
+behavior is substituted. Existing tests and default dependency-backed checks
+remain enabled, with .117 pure regressions added to `scripts/test.ps1`.
+
+| Check | Result | Scope |
+|---|---:|---|
+| AI tests | 840 passed | 765 test functions +75 unittest cases; actual worker import |
+| Backend pure tests | 134 passed | Real isolated helpers/shadow guard; no HTTP/ORM integration |
+| Script unittest | 212 passed | Includes fragment policy fingerprint coverage |
+| Benchmark gate / backup worker | 5 /4 passed | Isolated real test functions |
+| Frontend Node tests | 54 passed | Includes7 new version-state behavior cases |
+| New pure fragment cases | 26 passed | Also independently run using `python -S`; already included in840 |
+| New actual-worker integration cases | 7 passed | Retirement transaction, pending/accepted vetoes, fresh rearm and heavy-plan masking; included in840 |
+| Recorded-box replay checks | 7 passed | Separate policy evidence; not added to unit-test total |
+| Static source contracts | 442 passed | 272 Python files,204 self/643 direct/60 worker signatures,202 imports,3286 global references |
+| Frontend production source syntax | 15 files parsed | Babel; not a Vite/browser build |
+| Retention | 461 paths retained | 1,226 prior Python test names,2,412 Python functions,8 old Node test files unchanged |
+| Release metadata/migration chain | passed | V0.5.117, single metadata-only head |
+
+**Total: 1,249 test cases passed, zero failures.** Exactly64 pre-existing
+HTTP/ORM-dependent cases were not executed (3 AI +61 backend);1 native
+PowerShell harness was skipped. This is offline validation, not a complete
+pytest/Docker result. Runtime here: Python3.12.14 and Node24.22.1, not the
+target container toolchain. All1,226 prior Python test ASTs remain identical
+except the session-header expectation that adds the new default-false flag;
+no old assertion is weakened. Four trace-isolation tests initially found an
+optional-field compatibility issue, fixed in production code with `getattr`
+and rerun successfully. All39 PowerShell files keep CRLF/no BOM, and all79
+declared `Assert-*` functions in `test.ps1` remain invoked.
+
+Independent review additionally verified class-wobble quarantine, exact
+box-to-finite-segment release distance, fresh synthetic identity even beside
+a tempting counted owner, stale-alias detachment and heavy-plan masking so
+a quarantined car label cannot suppress a real truck. The final tested code
+manifest freezes464 code files; only README/VERIFICATION may change after it.
+Packaging validates all466 source members, safe unique paths, CRC, exact
+source bytes and different archive timestamps for modified Python members.
+
+Full pytest collection, native PowerShell, Docker/Compose, live PostgreSQL,
+Nginx/browser execution, online npm audit/Vite production build and new
+original-video inference were not run here. Migration
+`0131_runtime_status_v05117` is metadata-only, parent
+`0130_target_evidence_v05116`. Keep runtime data/volumes on update and create
+a fresh session/benchmark to measure .117.
+
+---
+
 # Verification — Traffic AI V0.5.116
 
 ## Authoritative baseline and protected evidence

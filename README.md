@@ -1,3 +1,79 @@
+# Traffic AI V0.5.117 — Fragment Ownership and Runtime Versions
+
+## Nâng cấp chạy thực tế
+
+- **Xử lý ID mảnh xe hai bánh:** kiểm tra một box mới, nhỏ, nằm trong box xe
+  đang chạy qua nhiều khung liên tiếp. Chỉ dừng ID mảnh khi nó chưa có lượt
+  đếm/chờ Human Guard và có bằng chứng hình học, chuyển động nhất quán với
+  xe chủ. Không gộp heading hay bằng chứng phân loại của hai ID. Trạng thái
+  đếm chưa hoàn tất được thu hồi đồng bộ để tránh các lượt giả nối tiếp.
+- **Giữ xe tách riêng và lượt quay lại:** ID bị giữ phải có bằng chứng tách
+  riêng an toàn hoặc kết thúc vòng đời trước khi được cấp lịch sử mới; không
+  dùng lại canonical cũ còn cache ngữ nghĩa. Xe đi sau không bị loại chỉ vì
+  gần thời gian với xe trước.
+- **Hiện phiên bản thật:** Dashboard hiển thị riêng phiên bản giao diện đang
+  mở và phiên bản AI đang phản hồi. Nếu hai bản khác nhau, có cảnh báo và nút
+  tải lại thủ công. AI chưa sẵn sàng/thiếu thông tin không tạo cảnh báo lệch.
+  Trang không tự reload khi người dùng đang thao tác.
+
+Bộ lọc mảnh ID mặc định bật **chỉ với video**. Có thể đặt
+`AI_TWO_WHEEL_FRAGMENT_GUARD=0` trong `.env` và khởi động lại AI để so sánh
+với nhánh cũ. Các bộ đếm mới phản ánh ID/box được xử lý, không phải số event
+DB đã được chứng minh loại dư. Đây là chính sách hình học bảo thủ; vẫn cần
+kiểm tra video thật với các xe che khuất hoặc đi sát nhau.
+
+## Kết quả đã xác minh từ lần chạy của bạn
+
+| Chỉ số | #83 / AI .115 | #84 / AI .116 |
+|---|---:|---:|
+| GT | 149 | 149 |
+| AI lưu DB | 148 | 149 |
+| Khớp | 143 | 144 |
+| Lọt | 6 | 5 |
+| Dư | 5 | 5 |
+| Sai loại | 3 | 2 |
+| Khớp đủ loại/hướng | 138 | 140 |
+| F1 | 96.2963% | 96.6443% |
+
+Lượt OUT gần giây392 đã được khôi phục và xe đạp gần giây534 đã đúng loại.
+GT/cấu hình chuẩn hóa của hai hồ sơ giống nhau. Đây là kết quả **AI .116**
+đã chạy, chưa phải điểm của .117. Năm event dư trong báo cáo cũ vẫn giữ
+nguyên. Không thay GT, matcher, tolerance hoặc loại xe để làm đẹp điểm.
+
+Ảnh mới hiện badge .115 nhưng trace phiên211 ghi đúng runtime .116 và
+fingerprint source đã giao. Chưa đủ bằng chứng phân biệt tab/cache cũ với
+frontend container cũ. Dòng phiên bản mới giúp nhận ra tình trạng này;
+`index.html` cũng được yêu cầu kiểm tra lại cache sau mỗi lần mở.
+
+## Cập nhật và chạy trên Windows
+
+Chép đè source nhưng giữ `.env`, `.git`, models, videos, snapshots, database,
+Docker volumes và backups. Migration `0131_runtime_status_v05117` chỉ cập
+nhật metadata phiên bản. Sau khởi động, nhấn **Ctrl+F5** một lần rồi kiểm tra
+dòng phiên bản giao diện/AI trên Dashboard.
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+
+# Test
+.\scripts\test.ps1
+
+# Khởi động
+.\scripts\start.ps1
+
+# Tự test, commit, push GitHub, tạo tag và Release v0.5.117
+.\scripts\publish.ps1
+```
+
+Chạy video trong phiên mới rồi tạo benchmark mới để đo kết quả .117. Thay
+source không viết lại các phiên/benchmark đã lưu. Xem `VERIFICATION.md` để
+biết các test đã chạy và những bước cần xác nhận trên máy Windows/GPU.
+Phần dưới là lịch sử bản trước.
+
+---
+
 # Traffic AI V0.5.116 — Stationary Ownership and Repeated Target Evidence
 
 ## Thay đổi chạy thực tế

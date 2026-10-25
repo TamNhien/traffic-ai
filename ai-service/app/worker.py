@@ -39,6 +39,7 @@ from app.counting import (
 )
 from app.dedup import single_heavy_vehicle_plan, stable_tracking_order
 from app.raw_handoff_guard import RawHandoffCrossingGuard
+from app.fragment_ownership import FragmentObservation, TwoWheelFragmentOwnership
 from app.finite_endpoint_guard import endpoint_precision_rejection
 from app.road_gate_diagnostics import road_gate_probe
 from app.trace_identity import metadata as trace_runtime_metadata
@@ -181,6 +182,12 @@ class PipelineWorker(threading.Thread):
             short_gap_alias_guard=os.getenv("AI_SHORT_GAP_ALIAS_GUARD", "1").strip().lower() not in {"0", "false", "no"},
             stationary_alias_guard=self._stationary_alias_guard_enabled,
         )
+        self._two_wheel_fragment_guard_enabled = (
+            payload.source_type == "video"
+            and os.getenv("AI_TWO_WHEEL_FRAGMENT_GUARD", "1").strip().lower() not in {"0", "false", "off", "no"}
+        )
+        self._two_wheel_fragment_guard = TwoWheelFragmentOwnership()
+        self._two_wheel_fragment_audit_this_frame: list[dict] = []
         self.backend_url = os.getenv("BACKEND_INTERNAL_URL", "http://backend:8000/api/internal")
         self.shared_token = os.getenv("AI_SHARED_TOKEN", "")
         self.model_name = payload.model_path or os.getenv("AI_MODEL_NAME", "yolo26s.pt")
@@ -907,6 +914,61 @@ class PipelineWorker(threading.Thread):
                 return
             if len(source_value) >= 3 and len(target_value) >= 3 and isinstance(source_value[-1], int) and isinstance(target_value[-1], int):
                 mapping[target] = source_value if source_value[-1] >= target_value[-1] else target_value
+
+    def _filter_two_wheel_fragments(
+        self, raw_detections: list[tuple[int, str, tuple[float, float, float, float]]],
+        frame_index: int, width: int, height: int, counter: LineCrossingCounter,
+        heavy_rescuer: HeavyVehicleCrossingRescuer | None,
+        two_wheel_rescuer: TwoWheelCenterCrossingRescuer | None,
+        anchor_span_rescuer: VerifiedAnchorSpanRescuer | None,
+    ) -> set[int]:
+        """Retire an exclusive fragment before any gate consumes this frame.
+
+        All gates and Human Guard are checked before changing any state. Old
+        semantic keys cannot be reused because continuity reserves the retired
+        canonical; no class evidence or heading is transferred to its owner.
+        """
+        if not getattr(self, "_two_wheel_fragment_guard_enabled", False):
+            return set()
+        observations = []
+        pending = self._pending_guard_crossings
+        for raw, label, rect in raw_detections:
+            canonical = self._continuity.canonical_for_raw(raw)
+            _stable, _certainty, hits = self._labels.stable_label(canonical, label) if canonical is not None else (label, 0., 0)
+            observations.append(FragmentObservation(
+                raw, canonical, rect, label, hits,
+                counter.accepted_passage_frame_for(canonical) if canonical is not None else None,
+                canonical in pending if canonical is not None else False,
+            ))
+        filtered, certificates, releases = self._two_wheel_fragment_guard.observe(
+            frame_index, observations, counter.line.denormalize(width, height), width, height,
+        )
+        for release in releases:
+            self._continuity.require_fresh_identity_for_raw(release["raw_track_id"])
+        audit = list(releases)
+        gates = [gate for gate in (counter, heavy_rescuer, two_wheel_rescuer, anchor_span_rescuer) if gate is not None]
+        for proof in certificates:
+            raw, canonical = proof["raw_track_id"], proof["track_id"]
+            if canonical is None or canonical in pending or proof["owner_track_id"] in pending:
+                continue
+            if (not self._continuity.can_discard_fragment_identity(raw, canonical)
+                    or not all(gate.can_discard_uncommitted_track(canonical) for gate in gates)):
+                continue
+            # This worker is the sole mutator of all four gate histories.
+            # The preflight above makes this discard atomic with respect to
+            # passage admission, including lost-track finalization later below.
+            self._continuity.discard_fragment_identity(raw, canonical)
+            for gate in gates:
+                gate.discard_uncommitted_track(canonical)
+            getattr(self, "_class_refine_source_opinions", {}).pop(canonical, None)
+            self._two_wheel_fragment_guard.activate(raw, proof["owner_raw_track_id"], frame_index)
+            filtered.add(raw)
+            audit.append({**proof, "action": "retired_uncommitted_fragment"})
+        self._two_wheel_fragment_audit_this_frame = audit[:16]
+        self.state.two_wheel_fragment_retirements = self._two_wheel_fragment_guard.retirements
+        self.state.two_wheel_fragment_releases = self._two_wheel_fragment_guard.releases
+        self.state.two_wheel_fragment_suppressed_current_frame = sum(raw in filtered for raw, _label, _rect in raw_detections)
+        return filtered
 
     def _merge_canonical_track_state(
         self,
@@ -1664,6 +1726,7 @@ class PipelineWorker(threading.Thread):
                     "endpoint_precision_guard_enabled": getattr(self, "_endpoint_precision_guard_enabled", False),
                     "bicycle_repeated_target_context_enabled": getattr(self, "_bicycle_repeated_target_context_enabled", False),
                     "stationary_alias_guard_enabled": getattr(self, "_stationary_alias_guard_enabled", False),
+                    "two_wheel_fragment_guard_enabled": getattr(self, "_two_wheel_fragment_guard_enabled", False),
                     **trace_runtime_metadata(),
                 })
             self.state.status = "warming"
@@ -1914,6 +1977,8 @@ class PipelineWorker(threading.Thread):
                 self._class_refine_source_opinions = {}
                 self._class_refine_decision_audit_this_frame = []
                 self._guard_crossing_proposals_this_frame = []
+                self._two_wheel_fragment_audit_this_frame = []
+                self.state.two_wheel_fragment_suppressed_current_frame = 0
                 frame_start_deferred_commits = self.state.human_guard_deferred_commits
                 # Expire a provisional passage before any returning detection
                 # can commit it. The observed-frame deadline applies equally to
@@ -1953,6 +2018,28 @@ class PipelineWorker(threading.Thread):
                     # its existing latency profile and event ordering.
                     if deterministic_video:
                         keep_indices = stable_tracking_order(keep_indices, ids, xyxy)
+                    fragment_raws = self._filter_two_wheel_fragments(
+                        [(int(ids[i]), labels[i], (float(xyxy[i][0]) + offset_x, float(xyxy[i][1]) + offset_y,
+                                                  float(xyxy[i][2]) + offset_x, float(xyxy[i][3]) + offset_y))
+                         for i in range(len(ids))],
+                        frame_index, width, height, counter, heavy_rescuer, two_wheel_rescuer, anchor_span_rescuer,
+                    )
+                    if fragment_raws:
+                        # A quarantined class-wobbling CAR must not suppress a
+                        # real TRUCK before it is filtered. Replan from every
+                        # remaining original box, then restore original indices.
+                        remaining = [i for i in range(len(ids)) if int(ids[i]) not in fragment_raws]
+                        remaining_keep, remaining_aliases, suppressed_duplicates = single_heavy_vehicle_plan(
+                            [tuple(map(float, xyxy[i])) for i in remaining],
+                            [labels[i] for i in remaining], [float(confs[i]) for i in remaining],
+                            self.heavy_duplicate_iou,
+                        )
+                        keep_indices = [remaining[i] for i in remaining_keep]
+                        duplicate_aliases = {remaining[i]: [remaining[j] for j in aliases]
+                                             for i, aliases in remaining_aliases.items()}
+                        self.state.suppressed_class_duplicates_current_frame = suppressed_duplicates
+                        if deterministic_video:
+                            keep_indices = stable_tracking_order(keep_indices, ids, xyxy)
                     # V0.5.32 telemetry counts *canonical state merges*, not every
                     # transient raw CAR/TRUCK box pair.  The latter still appears in
                     # suppressed_class_duplicates_current_frame, while this cumulative
@@ -2000,6 +2087,8 @@ class PipelineWorker(threading.Thread):
                         if self._raw_handoff_guard_enabled and current_label in TWO_WHEEL_LABELS:
                             self._raw_handoff_guard.observe(raw_track_id, track_id, frame_index, rect)
                         for duplicate_index in duplicate_aliases.get(item_index, []):
+                            if int(ids[duplicate_index]) in fragment_raws:
+                                continue
                             displaced = self._continuity.alias_raw_id(int(ids[duplicate_index]), track_id)
                             if displaced is not None and int(displaced) != int(track_id):
                                 self._four_wheel_duplicate_pairs.add(tuple(sorted((int(displaced), int(track_id)))))
@@ -2733,6 +2822,10 @@ class PipelineWorker(threading.Thread):
                         "raw_id_discontinuities": self.state.raw_id_discontinuities,
                         "short_gap_alias_rejections": self.state.short_gap_alias_rejections,
                         "stationary_alias_rejections": self.state.stationary_alias_rejections,
+                        "two_wheel_fragment_retirements": self.state.two_wheel_fragment_retirements,
+                        "two_wheel_fragment_releases": self.state.two_wheel_fragment_releases,
+                        "two_wheel_fragment_suppressed_current_frame": self.state.two_wheel_fragment_suppressed_current_frame,
+                        "two_wheel_fragment_audit": getattr(self, "_two_wheel_fragment_audit_this_frame", []),
                         "four_wheel_duplicate_suppressed": self.state.four_wheel_duplicate_suppressed,
                         "video_start_rescues": self.state.video_start_rescues,
                         "crossing_time_corrections": self.state.crossing_time_corrections,

@@ -124,6 +124,9 @@ class PipelineState:
     raw_id_discontinuities: int = 0
     short_gap_alias_rejections: int = 0
     stationary_alias_rejections: int = 0
+    two_wheel_fragment_retirements: int = 0
+    two_wheel_fragment_suppressed_current_frame: int = 0
+    two_wheel_fragment_releases: int = 0
     direct_crossings: int = 0
     interpolated_crossings: int = 0
     rescued_crossings: int = 0

@@ -249,3 +249,6 @@
 /* Evidence controls remain outside the timecode button so each seek is accessible. */
 .observed-track-seek{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
 .observed-track-audit .bicycle-context-record{overflow-wrap:anywhere}
+.runtime-release{margin:0 0 14px;color:#8fa0b5;font-size:12px;text-align:right;overflow-wrap:anywhere}
+.runtime-release-mismatch{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;border-color:rgba(251,191,36,.4);background:rgba(120,53,15,.2);color:#fde68a}
+.runtime-release-mismatch button{background:#243951;border:1px solid #526783;color:#f2f6ff;border-radius:8px;padding:7px 12px;cursor:pointer}

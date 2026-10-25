@@ -2225,3 +2225,172 @@ def test_v0565_actual_truck_resolution_audit_keeps_observation_and_crossing_cloc
     assert audit["source_time_seconds"] == 641.9311 and audit["vehicle_type"] == "truck"
     assert audit["decision_reason"] == "qualified_truck_requires_domain_car" and not audit["demotion_accepted"]
     assert "backend_event_id" not in audit
+
+
+def _v05117_fragment_worker():
+    from app.classification import TrackLabelSmoother
+    from app.counting import (CountingLine, HeavyVehicleCrossingRescuer, LineCrossingCounter,
+                              TwoWheelCenterCrossingRescuer, VerifiedAnchorSpanRescuer)
+    from app.fragment_ownership import TwoWheelFragmentOwnership
+    from app.tracking import TrackContinuityResolver
+
+    worker = PipelineWorker.__new__(PipelineWorker)
+    worker._two_wheel_fragment_guard_enabled = True
+    worker._two_wheel_fragment_guard = TwoWheelFragmentOwnership()
+    worker._two_wheel_fragment_audit_this_frame = []
+    worker._continuity = TrackContinuityResolver()
+    worker._labels = TrackLabelSmoother()
+    worker._pending_guard_crossings = {}
+    worker.heavy_duplicate_iou = .68
+    worker.state = SimpleNamespace(two_wheel_fragment_retirements=0,
+        two_wheel_fragment_releases=0, two_wheel_fragment_suppressed_current_frame=0,
+        suppressed_class_duplicates_current_frame=0)
+    line = CountingLine(0., .5625, 1., .5625)
+    counter = LineCrossingCounter(line)
+    heavy = HeavyVehicleCrossingRescuer(line)
+    two = TwoWheelCenterCrossingRescuer(line)
+    span = VerifiedAnchorSpanRescuer(line)
+    counter.update(10, (150., 500.), 1000, 800, 1)
+    assert counter.update(10, (150., 400.), 1000, 800, 2) == 'out'
+    for frame in range(3, 11):
+        rows = _v05117_fragment_detections(frame, include_child=False)
+        assert not worker._filter_two_wheel_fragments(rows, frame, 1000, 800, counter, heavy, two, span)
+        raw, label, rect = rows[0]
+        point = ((rect[0] + rect[2]) * .5, (rect[1] + rect[3]) * .5)
+        cid, _ = worker._continuity.resolve(raw, point, label, frame, 1000, 800, rect=rect)
+        worker._labels.update(cid, label, .9, frame_index=frame)
+    for frame in (11, 12):
+        rows = _v05117_fragment_detections(frame)
+        assert not worker._filter_two_wheel_fragments(rows, frame, 1000, 800, counter, heavy, two, span)
+        claimed = set()
+        for raw, label, rect in rows:
+            point = ((rect[0] + rect[2]) * .5, (rect[1] + rect[3]) * .5)
+            cid, _ = worker._continuity.resolve(raw, point, label, frame, 1000, 800, claimed, rect=rect)
+            claimed.add(cid)
+            worker._labels.update(cid, label, .9, frame_index=frame)
+            if raw == 20:
+                for gate in (counter, heavy, two, span):
+                    gate.update(cid, point, 1000, 800, frame)
+    return worker, counter, heavy, two, span
+
+
+def _v05117_fragment_detections(frame, include_child=True):
+    rows = [(10, 'motorcycle', (100., 300. - frame * 4, 200., 500. - frame * 4))]
+    if include_child:
+        rows.append((20, 'motorcycle', (130., 420. - frame * 4, 170., 480. - frame * 4)))
+    return rows
+
+
+def test_v05117_worker_retires_all_uncommitted_geometry_without_merging_parent():
+    from dataclasses import asdict
+
+    worker, counter, heavy, two, span = _v05117_fragment_worker()
+    before = asdict(worker._continuity._states[10])
+    heading = worker._continuity.anchor_velocity_for(10)
+    filtered = worker._filter_two_wheel_fragments(
+        _v05117_fragment_detections(13), 13, 1000, 800, counter, heavy, two, span)
+    assert filtered == {20}
+    assert worker.state.two_wheel_fragment_retirements == 1
+    assert worker.state.two_wheel_fragment_suppressed_current_frame == 1
+    assert worker._continuity.canonical_for_raw(20) is None
+    for gate in (counter, heavy, two, span):
+        assert 20 not in gate._tracks
+    assert span.finalize_lost(20, 14) is None
+    assert asdict(worker._continuity._states[10]) == before
+    assert worker._continuity.anchor_velocity_for(10) == heading
+    assert (counter.in_count, counter.out_count) == (0, 1)
+    assert worker._two_wheel_fragment_audit_this_frame[0]['action'] == 'retired_uncommitted_fragment'
+
+
+def test_v05117_worker_never_retires_pending_child_or_owner_transaction():
+    for pending_id in (10, 20):
+        worker, counter, heavy, two, span = _v05117_fragment_worker()
+        worker._pending_guard_crossings[pending_id] = object()
+        assert not worker._filter_two_wheel_fragments(
+            _v05117_fragment_detections(13), 13, 1000, 800, counter, heavy, two, span)
+        assert worker._continuity.canonical_for_raw(20) == 20
+        assert 20 in counter._tracks and 20 in span._tracks
+        assert worker.state.two_wheel_fragment_retirements == 0
+
+
+def test_v05117_worker_preflights_every_secondary_before_any_discard():
+    for refused in ('heavy', 'two', 'span'):
+        worker, counter, heavy, two, span = _v05117_fragment_worker()
+        {'heavy': heavy, 'two': two, 'span': span}[refused].mark_counted(20, 'out', 12)
+        before = list(counter._tracks[20].history)
+        assert not worker._filter_two_wheel_fragments(
+            _v05117_fragment_detections(13), 13, 1000, 800, counter, heavy, two, span)
+        assert worker._continuity.canonical_for_raw(20) == 20
+        assert list(counter._tracks[20].history) == before
+        assert worker.state.two_wheel_fragment_retirements == 0
+
+
+def test_v05117_worker_alias_lineage_is_not_destroyed_by_fragment_certificate():
+    worker, counter, heavy, two, span = _v05117_fragment_worker()
+    worker._continuity.alias_raw_id(21, 20)
+    assert not worker._filter_two_wheel_fragments(
+        _v05117_fragment_detections(13), 13, 1000, 800, counter, heavy, two, span)
+    assert worker._continuity.canonical_for_raw(20) == 20
+    assert worker._continuity.canonical_for_raw(21) == 20
+    assert 20 in counter._tracks
+
+
+def test_v05117_worker_disabled_flag_keeps_previous_path_and_histories():
+    worker, counter, heavy, two, span = _v05117_fragment_worker()
+    worker._two_wheel_fragment_guard_enabled = False
+    assert not worker._filter_two_wheel_fragments(
+        _v05117_fragment_detections(13), 13, 1000, 800, counter, heavy, two, span)
+    assert worker._continuity.canonical_for_raw(20) == 20
+    assert 20 in counter._tracks
+    assert worker.state.two_wheel_fragment_retirements == 0
+
+
+def test_v05117_worker_independent_return_earns_fresh_class_and_can_cross_again():
+    worker, counter, heavy, two, span = _v05117_fragment_worker()
+    assert worker._filter_two_wheel_fragments(
+        _v05117_fragment_detections(13), 13, 1000, 800, counter, heavy, two, span) == {20}
+    rows = [(20, 'motorcycle', (700., 100., 740., 160.))]
+    for frame in (14, 15):
+        assert worker._filter_two_wheel_fragments(rows, frame, 1000, 800, counter, heavy, two, span) == {20}
+    assert not worker._filter_two_wheel_fragments(rows, 16, 1000, 800, counter, heavy, two, span)
+    # A tempting nearby identity cannot lend its previously counted passage.
+    worker._continuity.resolve(30, (722., 132.), 'motorcycle', 15, 1000, 800, rect=(702., 102., 742., 162.))
+    fresh, stitched = worker._continuity.resolve(20, (720., 130.), 'motorcycle', 16, 1000, 800, rect=rows[0][2])
+    assert fresh < 0 and not stitched and fresh not in (10, 20, 30)
+    assert worker._labels.stable_label(fresh, 'motorcycle')[2] == 0
+    assert counter.update(fresh, (720., 130.), 1000, 800, 16) is None
+    assert counter.update(fresh, (720., 600.), 1000, 800, 17) == 'in'
+    assert (counter.in_count, counter.out_count) == (1, 1)
+    assert worker.state.two_wheel_fragment_releases == 1
+
+
+def test_v05117_quarantined_car_winner_cannot_hide_a_real_heavy_partner():
+    import ast
+    from pathlib import Path
+    import app.worker as worker_module
+    from app.dedup import single_heavy_vehicle_plan, stable_tracking_order
+
+    worker, counter, heavy, two, span = _v05117_fragment_worker()
+    worker._two_wheel_fragment_guard.activate(20, 10, 12)
+    rects = [(100., 100., 300., 300.), (100., 100., 300., 300.)]
+    assert single_heavy_vehicle_plan(rects, ['car', 'truck'], [.99, .55])[0] == [0]
+    tree = ast.parse(Path(worker_module.__file__).read_text())
+    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'PipelineWorker')
+    run = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == 'run')
+    branch = next(n for n in ast.walk(run) if isinstance(n, ast.If)
+                  and any(isinstance(x, ast.Assign) and any(isinstance(t, ast.Name) and t.id == 'xyxy' for t in x.targets) for x in n.body)
+                  and 'boxes.id' in ast.unparse(n.test))
+    def assigns(node, name):
+        return isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == name for t in node.targets)
+    start = next(i for i, n in enumerate(branch.body) if isinstance(n, ast.Assign)
+                 and any(isinstance(t, ast.Tuple) and any(isinstance(v, ast.Name) and v.id == 'keep_indices' for v in t.elts) for t in n.targets))
+    end = next(i for i, n in enumerate(branch.body) if assigns(n, 'visible_raw_centers'))
+    env = dict(self=worker, xyxy=rects, ids=[20, 30], labels=['car', 'truck'], confs=[.99, .55],
+               offset_x=0, offset_y=0, frame_index=13, width=1000, height=800,
+               counter=counter, heavy_rescuer=heavy, two_wheel_rescuer=two, anchor_span_rescuer=span,
+               deterministic_video=True, single_heavy_vehicle_plan=single_heavy_vehicle_plan,
+               stable_tracking_order=stable_tracking_order)
+    exec(compile(ast.fix_missing_locations(ast.Module(body=branch.body[start:end], type_ignores=[])), worker_module.__file__, 'exec'), env)
+    assert env['keep_indices'] == [1]
+    assert env['duplicate_aliases'] == {}
+    assert worker.state.suppressed_class_duplicates_current_frame == 0

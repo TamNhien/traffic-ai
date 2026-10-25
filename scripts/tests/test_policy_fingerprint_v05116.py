@@ -29,6 +29,23 @@ class PolicyFingerprintTests(unittest.TestCase):
                     path.write_bytes(content)
                     self.assertEqual(original, identity.source_fingerprint())
 
+    def test_fragment_ownership_bytes_are_part_of_source_identity_v05117(self):
+        with tempfile.TemporaryDirectory() as folder:
+            app = Path(folder) / 'app'
+            app.mkdir()
+            for source in (ROOT / 'ai-service/app').glob('*.py'):
+                shutil.copyfile(source, app / source.name)
+            spec = importlib.util.spec_from_file_location('isolated_identity_v117', app / 'trace_identity.py')
+            identity = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(identity)
+            original = identity.source_fingerprint()
+            policy = app / 'fragment_ownership.py'
+            content = policy.read_bytes()
+            policy.write_bytes(content + b'\n# changed fragment policy bytes\n')
+            self.assertNotEqual(original, identity.source_fingerprint())
+            policy.write_bytes(content)
+            self.assertEqual(original, identity.source_fingerprint())
+
 
 if __name__ == '__main__':
     unittest.main()
