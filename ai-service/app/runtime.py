@@ -121,6 +121,7 @@ class PipelineState:
     stitch_recoveries: int = 0
     raw_handoff_duplicate_suppressed: int = 0
     endpoint_precision_suppressed: int = 0
+    endpoint_rescue_suppressed: int = 0
     raw_id_discontinuities: int = 0
     short_gap_alias_rejections: int = 0
     stationary_alias_rejections: int = 0

@@ -1,9 +1,10 @@
-"""V0.5.106: bounded finite-endpoint interpolated-crossing precision policy.
+"""Bounded finite-endpoint precision policy (rescued extension: V0.5.118).
 
 A crossing directly at the finite line start endpoint can be lower-quality evidence than one well
 inside the finite gate. For video two-wheel interpolations, require a stable
-center-side confirmation near the start endpoint. Does not act on direct/rescued
-crossings, four-wheel vehicles, missing geometry, or RTSP sources.
+center-side confirmation near the start endpoint. The worker can explicitly
+enable the same check for rescued crossings. Direct crossings, four-wheel
+vehicles and missing geometry remain unaffected; the worker limits use to video.
 
 Caution: this is a policy hypothesis. Benchmark labels are never read by the
 worker. Validate using an A/B video replay; the trace audit is counterfactual.
@@ -21,10 +22,13 @@ def endpoint_precision_rejection(
     label: str,
     method: str | None,
     *,
+    allow_rescued: bool = False,
     edge_fraction: float = 0.08,
     stable_center_side: float = 0.04,
 ) -> dict | None:
-    if method != 'interpolated' or label not in {'motorcycle', 'bicycle'} or direction not in {'in', 'out'}:
+    if method != 'interpolated' and not (allow_rescued and method == 'rescued'):
+        return None
+    if label not in {'motorcycle', 'bicycle'} or direction not in {'in', 'out'}:
         return None
     if crossing_xy is None or center_signed is None:
         return None
@@ -52,7 +56,8 @@ def endpoint_precision_rejection(
         if destination_signed >= stable_center_side:
             return None
         return {
-            'kind': 'finite_endpoint_center_uncertain',
+            'kind': ('finite_endpoint_rescue_center_uncertain'
+                     if method == 'rescued' else 'finite_endpoint_center_uncertain'),
             'projection': round(projection, 6),
             'center_signed': round(float(center_signed), 6),
             'direction': direction, 'method': method,

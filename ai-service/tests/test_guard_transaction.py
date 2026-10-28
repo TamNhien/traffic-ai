@@ -3,6 +3,78 @@ from types import SimpleNamespace
 from app.worker import PipelineWorker, _PendingGuardCrossing
 
 
+def _v05118_execute_first_frame_metadata(worker, counter, writer, frame_index=1):
+    ast, source_path, run = _run_method_ast()
+    first_frame = next(node for node in ast.walk(run) if isinstance(node, ast.If)
+        and isinstance(node.test, ast.Compare) and isinstance(node.test.left, ast.Name)
+        and node.test.left.id == "frame_index" and len(node.test.comparators) == 1
+        and isinstance(node.test.comparators[0], ast.Constant) and node.test.comparators[0].value == 1)
+    namespace = {
+        "self": worker, "counter": counter, "trace_file": writer, "frame_index": frame_index,
+        "width": 1440, "height": 810, "source_frame": SimpleNamespace(shape=(1080, 1920, 3)),
+        "anchor_span_rescuer": None, "heavy_rescuer": None, "two_wheel_rescuer": None,
+    }
+    exec(compile(ast.fix_missing_locations(ast.Module(body=[first_frame], type_ignores=[])),
+                 str(source_path), "exec"), namespace)
+    return namespace["trace_file"]
+
+
+def test_v05118_policy_metadata_follows_geometry_once_without_synthetic_clock() -> None:
+    import io
+    import json
+    from app.counting import CountingLine, LineCrossingCounter
+    worker = _worker()
+    worker._continuity = None
+    worker._human_guard_policy = None
+    worker.payload.confidence_threshold = 0.17
+    counter = LineCrossingCounter(CountingLine(), history_gap_frames=-1)
+    writer = io.StringIO()
+    assert _v05118_execute_first_frame_metadata(worker, counter, writer) is writer
+    assert _v05118_execute_first_frame_metadata(worker, counter, writer, frame_index=2) is writer
+    rows = [json.loads(line) for line in writer.getvalue().splitlines()]
+    assert [row["kind"] for row in rows] == ["geometry_metadata", "policy_metadata"]
+    metadata = rows[1]
+    assert metadata["audit_only"] is True and metadata["camera_id"] == 1 and metadata["session_id"] == 2
+    assert metadata["configuration"]["primary"]["history_gap_frames"] == 2
+    assert metadata["configuration"]["detector"]["confidence_threshold"] == 0.17
+    assert metadata["capture_status"] == "partial"
+    assert "frame_index" not in metadata and "source_time_seconds" not in metadata
+    assert worker.state.total_count == counter.in_count == counter.out_count == 0
+    assert worker.state.last_error is None
+
+
+def test_v05118_policy_capture_failure_is_sanitized_and_optional() -> None:
+    import io
+    import json
+    import app.worker as worker_module
+    from app.counting import CountingLine, LineCrossingCounter
+    worker = _worker()
+    worker._continuity = None
+    worker._human_guard_policy = None
+    counter = LineCrossingCounter(CountingLine())
+    original = worker_module.capture_policy_snapshot
+    calls = []
+
+    def fail_capture(_components):
+        calls.append("capture")
+        raise RuntimeError("secret-token-private-path")
+
+    worker_module.capture_policy_snapshot = fail_capture
+    try:
+        writer = io.StringIO()
+        assert _v05118_execute_first_frame_metadata(worker, counter, writer) is writer
+        rows = [json.loads(line) for line in writer.getvalue().splitlines()]
+        assert rows[1]["capture_status"] == "unavailable" and rows[1]["reason"] == "capture_failed"
+        assert "secret-token" not in writer.getvalue() and "configuration_sha256" not in rows[1]
+        assert worker.state.total_count == counter.in_count == counter.out_count == 0
+        assert worker.state.last_error is None and worker.state.benchmark_trace_warning is None
+        calls.clear()
+        assert _v05118_execute_first_frame_metadata(worker, counter, None) is None
+        assert calls == []
+    finally:
+        worker_module.capture_policy_snapshot = original
+
+
 def _v0563_receipt():
     return {
         "kind": "event_delivery", "audit_only": True,
@@ -1164,6 +1236,7 @@ def test_v0558_session_trace_header_contains_no_synthetic_observation_or_secrets
         "kind": "session_metadata", "audit_only": True, "camera_id": 1, "session_id": 2,
         "source_fps": 25.0, "source_frame_count": 23650, "frame_policy": "all-frames",
         "endpoint_precision_guard_enabled": False,
+        "endpoint_rescue_guard_enabled": False,
         "bicycle_repeated_target_context_enabled": False,
         "stationary_alias_guard_enabled": False,
         "two_wheel_fragment_guard_enabled": False,

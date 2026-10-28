@@ -1880,7 +1880,7 @@ def _benchmark_export_metadata(session: CountingSession | None, camera: Camera |
         "session_model": {
             field: getattr(model, field, None) for field in ("id", "name", "version", "architecture")
         } if model is not None else None,
-        "inference_settings": "Not stored historically; current environment settings are not substituted.",
+        "inference_settings": "Historical settings are never substituted from the current environment. When available, recorded effective parameters are in trace policy_metadata; unrecorded parameters remain unknown.",
     }
     return session_payload, config_payload
 

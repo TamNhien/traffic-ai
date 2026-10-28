@@ -1,3 +1,69 @@
+# Traffic AI V0.5.118 — Rescue đầu vạch và cấu hình phiên
+
+Bản này tiếp tục từ đầy đủ source .117. Giữ bộ lọc ID mảnh, phân loại
+van chở hàng là xe tải và cho phép xe quay lại cắt vạch được đếm tiếp.
+
+- **Giảm đề xuất dư ở đầu vạch:** mở rộng kiểm tra tâm xe sang lượt
+  `rescued` của xe hai bánh trong video. Dùng nguyên vùng đầu vạch 0,08
+  và ngưỡng xác nhận tâm 0,04; lượt trực tiếp, xe bốn bánh và tâm đã qua
+  đủ sâu giữ chính sách cũ. Khi loại đề xuất, trạng thái vạch tiếp tục đóng
+  để tránh tạo lượt bù giả. Đây là chính sách bảo thủ cần chạy A/B video.
+- **Ghi tham số thực tế của phiên:** trace có thêm `policy_metadata` sau
+  `geometry_metadata`, lấy các thuộc tính thuật toán được cho phép từ
+  đối tượng đã khởi tạo. Có SHA256 cấu hình, trạng thái đầy đủ/thiếu và tên
+  trường không đọc được. Không ghi biến môi trường tùy ý, token hay URL.
+  Digest chỉ nhận diện các tham số được liệt kê; không thay thế model,
+  hình học, video hoặc fingerprint source.
+- **Theo dõi riêng lượt rescue bị chặn:** Dashboard và trace thêm
+  `endpoint_rescue_suppressed`, là một phần của `endpoint_precision_suppressed`.
+  Đây là số đề xuất bị chặn tại worker, không phải số dư DB đã đo được.
+
+Mặc định `AI_ENDPOINT_RESCUE_GUARD=1`, chỉ có hiệu lực trong video khi
+`AI_FINITE_ENDPOINT_PRECISION_GUARD` cũng bật. Đặt cờ mới bằng `0` trong
+`.env` và khởi động lại AI để so sánh với chính sách .117. Không thay GT,
+matcher, tolerance hay loại bỏ xe khác chỉ vì hai lượt gần thời gian.
+
+Hồ sơ #85/session212 chạy **AI .117** ghi GT149, AI148, khớp144,
+lọt5, dư4, sai loại2, sai hướng2, F1 **96,9697%**. Đây là kết quả phiên
+cũ, chưa phải điểm .118. Chưa có lần chạy detector/GPU mới để kết luận
+đã hết lọt/dư.
+
+Kiểm tra cố định trên trace #85: 42 đề xuất rescue, chỉ 1 đề xuất bị chặn
+thêm; 41 rescue còn lại và 120 đề xuất phương thức khác giữ nguyên quyết
+định của helper. Cần chạy phiên mới để đo tác động lên DB và F1.
+
+Chép đè source và giữ `.env`, `.git`, models, videos, snapshots, database,
+Docker volumes, backups. Migration `0132_runtime_policy_v05118` chỉ cập nhật
+metadata phiên bản. Nhấn Ctrl+F5 sau khởi động, kiểm tra giao diện/AI đều .118.
+Không cần tạo lại admin.
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+
+# Test
+.\scripts\test.ps1
+
+# Khởi động
+.\scripts\start.ps1
+
+# Tự test, commit, push GitHub, tạo tag v0.5.118 và GitHub Release
+.\scripts\publish.ps1
+```
+
+Đã đạt **1.276 ca kiểm thử offline**, giữ nguyên các hàm/assertion kiểm thử
+cũ. Có 64 ca HTTP/ORM chưa chạy và 1 ca PowerShell bỏ qua trong môi trường
+này; chưa chạy Docker/GPU/video mới hoặc build Vite.
+
+`publish.ps1` đọc VERSION; mặc định chạy test trước khi commit/push, tạo tag
+và chờ GitHub Release hoặc dùng GitHub CLI hoàn tất. Xem `VERIFICATION.md`
+để biết phạm vi kiểm tra thực tế và giới hạn của bản này.
+
+---
+
+## Ghi chú các bản trước
+
 # Traffic AI V0.5.117 — Fragment Ownership and Runtime Versions
 
 ## Nâng cấp chạy thực tế

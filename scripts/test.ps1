@@ -2743,6 +2743,13 @@ Invoke-Step "V0.5.115 verified review track overlay (stdlib-only)" {
   if ($LASTEXITCODE -ne 0) { throw 'V0.5.115 track review overlay tests failed.' }
 }
 
+Invoke-Step "V0.5.118 runtime policy regressions (stdlib-only)" {
+  docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 `
+    -v "${root}:/src" -w /src/ai-service python:3.14.7-slim `
+    python -S -m unittest discover -s tests -p 'test_*_v05118.py' -v
+  if ($LASTEXITCODE -ne 0) { throw 'V0.5.118 runtime policy tests failed.' }
+}
+
 Invoke-Step "V0.5.117 fragment ownership regressions (stdlib-only)" {
   docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 `
     -v "${root}:/src" -w /src/ai-service python:3.14.7-slim `

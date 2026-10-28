@@ -43,6 +43,7 @@ from app.fragment_ownership import FragmentObservation, TwoWheelFragmentOwnershi
 from app.finite_endpoint_guard import endpoint_precision_rejection
 from app.road_gate_diagnostics import road_gate_probe
 from app.trace_identity import metadata as trace_runtime_metadata
+from app.policy_snapshot import capture_policy_snapshot
 from app.flow_calibration import FlowCalibrator
 from app.gate_roi import gate_roi_for_line, road_zone_roi
 from app.human_guard import (
@@ -110,6 +111,12 @@ class PipelineWorker(threading.Thread):
         self._endpoint_precision_guard_enabled = (
             payload.source_type == 'video'
             and os.getenv('AI_FINITE_ENDPOINT_PRECISION_GUARD', '1').strip().lower() not in {'0', 'false', 'off'}
+        )
+        # V0.5.118: apply the existing endpoint/center bounds to rescued video
+        # proposals as well. Both flags are required; direct crossings stay unchanged.
+        self._endpoint_rescue_guard_enabled = (
+            self._endpoint_precision_guard_enabled
+            and os.getenv('AI_ENDPOINT_RESCUE_GUARD', '1').strip().lower() not in {'0', 'false', 'off'}
         )
         self._raw_handoff_guard = RawHandoffCrossingGuard()
         self._raw_handoff_guard_enabled = (
@@ -816,6 +823,27 @@ class PipelineWorker(threading.Thread):
             "line": [[line.x1, line.y1], [line.x2, line.y2]],
             "road_zone": counter.road_zone.normalized_points() if counter.road_zone is not None else None,
         }
+
+    def _benchmark_policy_metadata(
+        self, counter: LineCrossingCounter, anchor_span_rescuer, heavy_rescuer, two_wheel_rescuer,
+    ) -> dict:
+        """Record effective parameters once without affecting counting on failure."""
+        row = {
+            "kind": "policy_metadata", "audit_only": True,
+            "camera_id": self.payload.camera_id, "session_id": self.payload.session_id,
+        }
+        try:
+            row.update(capture_policy_snapshot({
+                "worker": self, "resolver": self._continuity, "primary": counter,
+                "anchor_span": anchor_span_rescuer, "heavy_center": heavy_rescuer,
+                "two_wheel_center": two_wheel_rescuer, "human_guard": self._human_guard_policy,
+                "detector": self.payload,
+            }))
+        except Exception:
+            # Exception text may contain environment paths or credentials.
+            row.update({"schema_version": 1, "digest_scope": "allowlisted_effective_algorithm_parameters",
+                        "capture_status": "unavailable", "reason": "capture_failed"})
+        return row
 
     def _drain_events_before_finish(self, terminal_status: str | None = None) -> None:
         """Keep this worker/session owned until accepted delivery work ends."""
@@ -1724,6 +1752,7 @@ class PipelineWorker(threading.Thread):
                     "source_fps": self.state.source_fps, "source_frame_count": source_frame_count,
                     "frame_policy": self.state.frame_policy,
                     "endpoint_precision_guard_enabled": getattr(self, "_endpoint_precision_guard_enabled", False),
+                    "endpoint_rescue_guard_enabled": getattr(self, "_endpoint_rescue_guard_enabled", False),
                     "bicycle_repeated_target_context_enabled": getattr(self, "_bicycle_repeated_target_context_enabled", False),
                     "stationary_alias_guard_enabled": getattr(self, "_stationary_alias_guard_enabled", False),
                     "two_wheel_fragment_guard_enabled": getattr(self, "_two_wheel_fragment_guard_enabled", False),
@@ -1924,6 +1953,12 @@ class PipelineWorker(threading.Thread):
                     trace_file = self._write_benchmark_trace(
                         trace_file, self._benchmark_geometry_metadata(counter, width, height, source_frame.shape),
                     )
+                    if trace_file is not None:
+                        trace_file = self._write_benchmark_trace(
+                            trace_file, self._benchmark_policy_metadata(
+                                counter, anchor_span_rescuer, heavy_rescuer, two_wheel_rescuer,
+                            ),
+                        )
 
                 roi = None
                 # V0.5.14 decouples detection from counting geometry. The default
@@ -2537,8 +2572,9 @@ class PipelineWorker(threading.Thread):
                                     )
                                     continue
 
-                            # V0.5.106: the geometry gate may accept a borderline
-                            # interpolated anchor crossing right at the finite line start
+                            # V0.5.118 extends the existing V0.5.106 endpoint
+                            # check to rescued proposals when explicitly enabled.
+                            # The geometry gate may accept a borderline anchor crossing at the finite line start
                             # endpoint while the body center has not established
                             # a destination-side passage. Treat that evidence as
                             # inconclusive, never as a second physical identity.
@@ -2550,13 +2586,18 @@ class PipelineWorker(threading.Thread):
                                      (line_b[0] / width, line_b[1] / height)),
                                     ((crossing_x, crossing_y) if crossing_x is not None and crossing_y is not None else None),
                                     center_signed, direction, event_label, crossing_method,
+                                    allow_rescued=getattr(self, '_endpoint_rescue_guard_enabled', False),
                                 )
                                 if endpoint_rejection is not None:
                                     gate_trace_track['endpoint_precision_suppression'] = endpoint_rejection
                                     gate_trace_track['crossing_clock_audit']['producer_decision'] = (
+                                        'finite_endpoint_rescue_center_uncertain_suppressed'
+                                        if crossing_method == 'rescued' else
                                         'finite_endpoint_center_uncertain_suppressed'
                                     )
                                     self.state.endpoint_precision_suppressed += 1
+                                    if crossing_method == 'rescued':
+                                        self.state.endpoint_rescue_suppressed += 1
                                     continue
 
                             if event_label in TWO_WHEEL_LABELS:
@@ -2819,6 +2860,7 @@ class PipelineWorker(threading.Thread):
                         "heavy_stitch_recoveries": self.state.heavy_stitch_recoveries,
                         "raw_handoff_duplicate_suppressed": self.state.raw_handoff_duplicate_suppressed,
                         "endpoint_precision_suppressed": self.state.endpoint_precision_suppressed,
+                        "endpoint_rescue_suppressed": self.state.endpoint_rescue_suppressed,
                         "raw_id_discontinuities": self.state.raw_id_discontinuities,
                         "short_gap_alias_rejections": self.state.short_gap_alias_rejections,
                         "stationary_alias_rejections": self.state.stationary_alias_rejections,

@@ -1,3 +1,99 @@
+# Verification — Traffic AI V0.5.118
+
+## Baseline and recorded run
+
+Built from delivered .117 full-source ZIP,466 files, SHA256
+`bd45055ee4b2a8191f508deb7c3054465c6badc05b0f7f8ebb544a2f5789c0ba`.
+All old paths, test functions and assertions are retained. The only existing
+AI test expectation extended is the session header's new effective guard flag.
+
+The customer benchmark85/session212 ZIP has SHA256
+`62be8d88732572c3a90445aa0de3675804edc1e29caed5a8d544ab7b499e549d`.
+It records AI .117:149GT,148DB events,144matched,5missed,4extra,2class
+mismatches,2direction mismatches,140strict matches,F1 .969697. These are
+historical .117 results, not a .118 detector run or score.
+
+## Recorded-proposal sweep
+
+All six export manifest certificates and the closed gzip source trace were
+verified (418,132,768 decompressed bytes, SHA256
+`419b951b203d4fdecab0933b67a6431d872349b67102392f8f99ebb23419408b`).
+The trace contains23,650 sequential source frames and its .117 fingerprint
+matches delivered source. Of162 recorded primary proposals,42 are rescued.
+With fixed recorded geometry and proposals, the extension newly rejects one:
+frame20327, canonical366576/raw367219, projection .070934, center -.021512.
+The other41 rescued proposals and120 other-method proposals have unchanged
+helper decisions. IDs/frame numbers occur only in this audit; runtime admission
+uses geometry, class, direction and method. This is a helper counterfactual,
+not a stateful full-video replay, physical identity proof or new benchmark F1.
+
+## Runtime scope
+
+The finite endpoint helper preserves its old default API: rescued crossings
+are considered only with explicit `allow_rescued=True`. The worker uses this
+extension only for video with both the existing finite endpoint flag and
+`AI_ENDPOINT_RESCUE_GUARD` enabled. The existing edge_fraction .08 and
+stable_center_side .04 remain unchanged. The new rejection kind is
+`finite_endpoint_rescue_center_uncertain`. Direct crossings, four-wheel
+vehicles, interior crossings and stable destination-side centers are unchanged.
+Suppression leaves the primary gate closed and does not enqueue Human Guard
+or commit an event. The per-rescue counter is a subset of the existing
+aggregate precision counter. It is not an estimate of removed DB false positives.
+
+The extra audit-only `policy_metadata` trace row follows the first geometry
+row and records allowlisted scalar attributes from actual initialized worker,
+resolver, primary and optional rescue/guard/detector components. Missing,
+invalid and unreadable field names are recorded without exception contents.
+Only finite numeric values, exact bool/int types and permitted enum values
+are admitted. No arbitrary environment/object enumeration or secrets are
+serialized. Capture failure is diagnostic and does not stop counting.
+The canonical SHA256 scope is `allowlisted_effective_algorithm_parameters`;
+it is not a complete inference-run identity. Geometry/FPS/model/source
+identity and unrecorded settings remain separate or unknown. Historical
+exports never substitute the current environment for missing settings.
+
+Source fingerprints now attest `policy_snapshot.py` as well as the previous
+nine source files. Benchmark matching, GT and tolerance code is unchanged;
+`backend/app/api/routes.py` changes only its inference-settings explanatory
+string. Release migration0132 updates schema_version metadata only.
+
+## Validation
+
+Final offline result: **1,276 cases passed,0 failures** (AI866,backend134,
+scripts213,benchmark-gate5,backup4,Node54). The20 isolated .118 stdlib tests
+also pass under `python -S`; these are already included in the total. There
+are64 exact pre-existing HTTP/ORM exclusions and1 native PowerShell skip.
+All466 baseline source paths,1,260 old Python test functions and9 byte-identical
+Node test files are retained. The sole changed old test body extends the header
+expected dictionary with the effective guard flag; after removing exactly that
+new false key its AST is identical to baseline. All other old test ASTs match.
+The471-file source passes445 static checks:277 Python files compile; local
+imports, call signatures, state/schema fields, migration chain,39 PowerShell
+CRLF/no-BOM files and79 declared/invoked PowerShell assertions are checked.
+All15 production frontend JS/JSX files pass Babel parsing. The actual version
+contract CLI confirms .118 and migration0132.
+
+The12 new worker/helper endpoint tests cover flags, old interpolation behavior,
+fixed recorded geometry, optout, no Human Guard/context/event/count side effects,
+closed gate on jitter, no repeat OUT and a later clear IN return. The12 snapshot
+stdlib tests and2 actual-worker first-frame tests cover sanitized capture and
+failure behavior. A constructor check captures all195 allowlisted fields from
+actual initialized worker/counter/resolver/rescuer objects without missing or
+invalid fields (dispatcher/encoder constructors inert to avoid I/O).
+
+Checks use real source/test bodies offline. The current environment has no Docker,
+native PowerShell, FastAPI/SQLAlchemy/HTTPX2, Torch or OpenCV. HTTP/ORM tests
+are explicitly excluded, with a fail-closed external HTTPX2 import placeholder
+for worker unit tests. No HTTP success, Windows execution, GPU inference,
+container build, Vite production build, full-video replay or newly measured F1 is claimed.
+
+Run `.\scripts\test.ps1`, `.\scripts\start.ps1`, then
+`.\scripts\publish.ps1` in Windows for the full deployment workflow.
+
+---
+
+## Previous release verification
+
 # Verification — Traffic AI V0.5.117
 
 ## Authoritative source and customer evidence
