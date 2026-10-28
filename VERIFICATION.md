@@ -1,3 +1,94 @@
+# Verification — Traffic AI V0.5.119
+
+## Authoritative baseline and observed run
+
+Built from delivered .118 full source,471 files, SHA256
+`91084df203d00488cb9f7f3d934309380638316ada17e924a286551e85112793`.
+All previous source paths and test functions/assertions are retained.
+
+New input benchmark86/session213 ZIP SHA256:
+`88826aed22fae3183be7ca55b8e2d5f340deeea41fc7d75056b6bd67743b6ba8`.
+All six manifest member certificates are verified; the closed gzip and RAR
+contain the same418,955,190-byte raw trace, SHA256
+`a4caa7eaf36ddbca2d3e54fe4b3542c0d589c712dddad280dd23e3cd0f060eb6`.
+There are23,650 sequential frames with valid clocks. The session header says
+AI .118 and fingerprint `f2ca2262f9217028e449ae41f1f05bab6540c66a614032246eef6327dd935b35`,
+matching the delivered source. Policy snapshot195 fields is complete and its
+canonical configuration digest validates. RAR contains160JPEGs plus raw trace.
+
+Observed #85→#86:149GT unchanged,AI148→147,matched144 unchanged,missed5
+unchanged,extra4→3,class2/direction2 unchanged,strict140 unchanged,
+F1 .969697→.972973. All149 normalized GT rows including notes are equal.
+The only config JSON difference is the inference_settings explanatory string;
+geometry,tolerance,current camera and model fields match. All147 remaining
+normalized events are exactly equal, including canonical IDs, coordinates,
+confidence,class,direction,source times/frames and method. Only OUT366576 at
+812.5773s is removed; no event is added. These are measured .118 outcomes,
+not a .119 detector replay or score.
+
+## New read-only functionality
+
+The AI endpoint reads a bounded trace prefix for the requested session and
+validates the recorded policy using the explicit scalar wire schema, type
+checks, session identity and canonical digest. It does not treat an absent
+legacy policy as disabled. The backend requests this optional diagnostic
+through a bounded, timed stream and returns sanitized status on failure.
+The new benchmark panel loads the selected session's recorded policy on
+expansion, with loading/retry states and stale-request cleanup. It displays
+capture scope, historical AI runtime, flags, missing values and searchable
+recorded parameters. No current-environment fallback or editable runtime
+configuration is introduced. This metadata-only/prefix check does not certify
+whole-trace closure, model weights, media identity or full reproducibility.
+
+Worker, counting, tracking, classification, finite endpoint and fragment
+ownership source bytes remain .118. Existing benchmark report/matching/GT/
+tolerance logic is unchanged. Source identity additionally attests the new
+recorded policy reader. Migration0133 updates release metadata only.
+
+## Remaining evidence and limits
+
+Around754s, actual images18860/18870 show a rider traveling OUT while the raw
+identity borrows a long-lived parked canonical and proposes IN754.0452s.
+The later OUT754.6878s is observed but backend deduplicates it as
+same-track-direction-flip. Removing the established-heading exemption would
+break the tested stopped-then-moving continuity contract. No general safe
+replacement has been proven, so this is a diagnosed case rather than a .119
+counting fix. The591s window contains no road/gate track evidence sufficient
+to recover an event. Cargo van class and genuine returns remain preserved.
+
+## Validation
+
+**1,316 offline cases passed,0 failures:** AI883,backend147,scripts215,
+benchmark-gate5,backup4,Node62. The31 isolated .119 stdlib cases (17AI,
+13backend,1schema drift) also pass with `python -S`; they are already included
+in the total. There are64 exact pre-existing HTTP/ORM exclusions and1 native
+PowerShell skip, unchanged from baseline. All471 old paths,1,287 old Python
+test ASTs and9 byte-identical old Node test files are retained. No existing
+Python test body or assertion changes in .119. The480-file source passes450
+static checks:283 Python files compile, local imports/signatures/globals/state
+and schema fields resolve,39 PS1 files retain CRLF/noBOM and79 PowerShell
+assertions remain declared/invoked. All17 production JS/JSX files pass Babel
+parsing. The actual version contract CLI validates .119/migration0133.
+
+New API tests cover historical scalar/digest validation, partial/legacy/missing
+states, wrong sessions, duplicate metadata/keys, unknown fields, nonfinite and
+wrong scalar types, prefix/line/response limits, malformed bytes, network-error
+redaction and route no-store/404/session forwarding. Route function statements
+are exercised via AST without a native HTTP stack. Frontend unit tests cover
+available/unknown/partial states, absent versus false, wrong-session and unsafe
+payload rejection, plus filtering. The actual #86 raw prefix passes through
+the production AI reader, backend validator and frontend helper, showing195
+parameters, AI .118,complete,0 missing fields and both endpoint flags enabled.
+No browser rendering or end-to-end network success is inferred from this.
+
+Offline checks do not substitute for HTTP/ORM integration, Docker, native
+Windows PowerShell, Vite build or new GPU/video inference. No newly measured
+.119 F1 is claimed.
+
+---
+
+## Previous release verification
+
 # Verification — Traffic AI V0.5.118
 
 ## Baseline and recorded run

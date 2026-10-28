@@ -252,3 +252,27 @@
 .runtime-release{margin:0 0 14px;color:#8fa0b5;font-size:12px;text-align:right;overflow-wrap:anywhere}
 .runtime-release-mismatch{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;border-color:rgba(251,191,36,.4);background:rgba(120,53,15,.2);color:#fde68a}
 .runtime-release-mismatch button{background:#243951;border:1px solid #526783;color:#f2f6ff;border-radius:8px;padding:7px 12px;cursor:pointer}
+
+/* V0.5.119: historical per-session algorithm parameters, loaded on demand. */
+.runtime-policy{margin:12px 0;border:1px solid #345b75;border-radius:10px;background:rgba(16,43,71,.5);min-width:0;overflow:hidden}
+.runtime-policy>summary{padding:11px 12px;color:#d9ecff;font-size:.83rem;font-weight:700;cursor:pointer;line-height:1.4}
+.runtime-policy>summary small{display:block;color:#9eb8d3;font-size:.75rem;font-weight:400;margin-top:3px}
+.runtime-policy summary:focus-visible{outline:2px solid #5eead4;outline-offset:-2px}
+.runtime-policy-body{padding:0 12px 12px;font-size:.79rem;color:#c4d9ef;line-height:1.5;overflow-wrap:anywhere}
+.runtime-policy-body>p{margin:5px 0 10px}
+.runtime-policy-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin:10px 0}
+.runtime-policy-summary>div{background:rgba(7,24,43,.55);border:1px solid #2b4a67;border-radius:7px;padding:8px;min-width:0}
+.runtime-policy-summary dt{font-size:.73rem;color:#9eb8d3}
+.runtime-policy-summary dd{margin:3px 0 0;color:#e6f1ff;font-weight:700}
+.runtime-policy-note{font-size:.75rem;color:#a5bfd9}
+.runtime-policy-parameters{margin:10px 0;border-top:1px solid #2b4a67;padding-top:8px}
+.runtime-policy-parameters>summary{cursor:pointer;color:#b8d8f5;font-weight:700;line-height:1.5}
+.runtime-policy-parameters code{display:block;color:#b9d9f1;font-size:.7rem;overflow-wrap:anywhere;margin-top:3px}
+.runtime-policy-parameters label{display:grid;gap:4px;margin:10px 0;font-size:.76rem;color:#a9c1db}
+.runtime-policy-parameters input{width:100%;min-width:0;box-sizing:border-box;background:#07182b;border:1px solid #365777;color:#edf5ff;border-radius:7px;padding:8px}
+.runtime-policy-table{max-height:330px;overflow:auto;border:1px solid #2b4a67;border-radius:7px}
+.runtime-policy-table table{border-collapse:collapse;width:100%;font-size:.73rem;text-align:left}
+.runtime-policy-table th,.runtime-policy-table td{padding:7px 8px;border-bottom:1px solid #29435e;vertical-align:top;overflow-wrap:anywhere}
+.runtime-policy-table th{position:sticky;top:0;background:#15304b;color:#dcecff}
+.runtime-policy-table td:nth-child(2){word-break:break-word}
+@media(max-width:460px){.runtime-policy-summary{grid-template-columns:1fr}.runtime-policy-table th,.runtime-policy-table td{padding:6px}}

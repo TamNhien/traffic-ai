@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.runtime import registry
 from app.benchmark_trace import ensure_closed_compressed_trace, diagnose_trace, trace_path
+from app.recorded_policy import read_recorded_policy
 from app.schemas import AnnotationBulkAcceptRequest, AnnotationSaveRequest, BenchmarkTraceDiagnoseRequest, DatasetAutoLabelRequest, DatasetExtractRequest, DatasetPrepareRequest, DatasetPurgeRequest, PipelineStart, SourceValidationRequest, TrainingStartRequest
 from app.sources import inspect_source, list_video_sources, read_source_preview, resolve_video_path
 from app.training import auto_label, dataset_stats, extract_frames, prepare_dataset, purge_dataset, reset_dataset_labels, training_registry
@@ -18,7 +19,7 @@ from app.annotation import accept_safe_annotations, get_annotation, get_annotati
 
 from app.trace_identity import TRACE_RUNTIME_VERSION
 
-APP_VERSION = '0.5.118'
+APP_VERSION = '0.5.119'
 if TRACE_RUNTIME_VERSION != APP_VERSION:
     raise RuntimeError('AI runtime/version trace drift; rebuild ai-service')
 app = FastAPI(title='Traffic AI Service', version=APP_VERSION)
@@ -93,6 +94,12 @@ def health() -> dict:
 @app.post('/benchmark-traces/{session_id}/diagnose')
 def benchmark_trace_diagnose(session_id: int, payload: BenchmarkTraceDiagnoseRequest) -> dict:
     return diagnose_trace(session_id, payload.times, payload.window_seconds, tracking_ids=payload.tracking_ids)
+
+
+@app.get('/benchmark-traces/{session_id}/policy')
+def benchmark_trace_policy(session_id: int, response: Response) -> dict:
+    response.headers['Cache-Control'] = 'no-store'
+    return read_recorded_policy(trace_path(session_id), session_id)
 
 
 @app.get('/benchmark-traces/{session_id}/download')

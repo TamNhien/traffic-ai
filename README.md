@@ -1,3 +1,74 @@
+# Traffic AI V0.5.119 — Xem cấu hình thực tế của phiên benchmark
+
+Màn hình benchmark có mục **Cấu hình thực tế của phiên**. Mở mục này để xem
+phiên bản AI đã ghi trace, trạng thái cấu hình, các cờ bộ lọc và tham số đã
+chạy. Phiên cũ không ghi cấu hình được hiển thị là chưa có dữ liệu; giá trị
+thiếu không bị coi là tắt. Có thể tìm trong danh sách tham số và tải lại khi
+AI tạm thời chưa phản hồi.
+
+Dữ liệu lấy từ `policy_metadata` của đúng phiên đã chọn, được kiểm tra schema,
+kiểu giá trị và digest. API chỉ đọc phần đầu trace theo giới hạn byte/dòng;
+lỗi tệp hoặc AI không ngăn xem điểm benchmark. Việc này không thay cấu hình
+đang chạy hay dùng môi trường hiện tại để đoán cấu hình cũ. Digest xác nhận
+các tham số trong danh sách đã ghi, không xác nhận toàn bộ video/model/lần
+chạy; phần đầu trace không thay chứng nhận đóng toàn bộ hồ sơ.
+
+## Kết quả thực tế bạn vừa gửi
+
+| Chỉ số | #85 / AI .117 | #86 / AI .118 |
+|---|---:|---:|
+| GT | 149 | 149 |
+| AI lưu DB | 148 | 147 |
+| Khớp | 144 | 144 |
+| Lọt | 5 | 5 |
+| Dư | 4 | 3 |
+| Sai loại | 2 | 2 |
+| Sai hướng | 2 | 2 |
+| F1 | 96,9697% | 97,2973% |
+
+GT chuẩn hóa và ghi chú giống nhau. 147 event còn lại giữ nguyên thời gian,
+điểm cắt, loại, hướng, confidence và canonical ID; chỉ lượt OUT dư tại
+812,5773 giây được bỏ. Đây là kết quả **.118**, chưa phải điểm .119.
+
+Chính sách đếm/nối ID của .118 được giữ nguyên. Trường hợp sai hướng quanh
+754 giây có bằng chứng xe đang OUT nhận ID của xe đỗ cũ; cần thêm kiểm chứng
+để thay quy tắc nối ID mà vẫn bảo vệ xe dừng rồi đi tiếp. Các lượt gần GT
+không tự động bị xóa/đổi loại. Van chở hàng vẫn là xe tải và lượt quay lại
+hợp lệ tiếp tục được đếm. Không sửa GT, matcher hay tolerance.
+
+## Cập nhật và chạy
+
+Chép đè source nhưng giữ `.env`, `.git`, models, videos, snapshots, database,
+Docker volumes và backups. Migration `0133_recorded_policy_v05119` chỉ cập
+nhật metadata phiên bản. Không cần tạo lại admin. Nhấn Ctrl+F5 rồi kiểm tra
+giao diện/AI đều .119; mở benchmark #86 để xem cấu hình của phiên213 (.118).
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+
+# Test
+.\scripts\test.ps1
+
+# Khởi động
+.\scripts\start.ps1
+
+# Tự test, commit, push GitHub, tạo tag v0.5.119 và GitHub Release
+.\scripts\publish.ps1
+```
+
+Đã đạt **1.316 ca kiểm thử offline**; giữ nguyên toàn bộ 1.287 hàm kiểm
+thử Python cũ và 9 tệp kiểm thử Node cũ. 64 ca HTTP/ORM chưa chạy và
+1 ca PowerShell bỏ qua; chưa chạy Docker, trình duyệt, Vite build hoặc
+video/GPU mới trong môi trường này.
+
+Xem `VERIFICATION.md` để biết phạm vi kiểm tra và giới hạn thực tế.
+
+---
+
+## Ghi chú các bản trước
+
 # Traffic AI V0.5.118 — Rescue đầu vạch và cấu hình phiên
 
 Bản này tiếp tục từ đầy đủ source .117. Giữ bộ lọc ID mảnh, phân loại

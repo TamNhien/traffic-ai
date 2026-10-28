@@ -2743,6 +2743,21 @@ Invoke-Step "V0.5.115 verified review track overlay (stdlib-only)" {
   if ($LASTEXITCODE -ne 0) { throw 'V0.5.115 track review overlay tests failed.' }
 }
 
+Invoke-Step "V0.5.119 recorded policy regressions (stdlib-only)" {
+  docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 `
+    -v "${root}:/src" -w /src/ai-service python:3.14.7-slim `
+    python -S -m unittest discover -s tests -p 'test_*_v05119.py' -v
+  if ($LASTEXITCODE -ne 0) { throw 'V0.5.119 AI recorded policy tests failed.' }
+  docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 `
+    -v "${root}:/src" -w /src/backend python:3.14.7-slim `
+    python -S -m unittest discover -s tests -p 'test_*_v05119.py' -v
+  if ($LASTEXITCODE -ne 0) { throw 'V0.5.119 backend recorded policy tests failed.' }
+  docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 `
+    -v "${root}:/src" -w /src python:3.14.7-slim `
+    python -S -m unittest discover -s scripts/tests -p 'test_recorded_policy_schema_v05119.py' -v
+  if ($LASTEXITCODE -ne 0) { throw 'V0.5.119 recorded policy wire schema tests failed.' }
+}
+
 Invoke-Step "V0.5.118 runtime policy regressions (stdlib-only)" {
   docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 `
     -v "${root}:/src" -w /src/ai-service python:3.14.7-slim `

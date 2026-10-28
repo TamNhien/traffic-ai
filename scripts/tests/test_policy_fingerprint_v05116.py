@@ -64,5 +64,23 @@ class PolicyFingerprintTests(unittest.TestCase):
             self.assertEqual(original, identity.source_fingerprint())
 
 
+    def test_recorded_policy_reader_is_attested_v05119(self):
+        with tempfile.TemporaryDirectory() as folder:
+            app = Path(folder) / 'app'
+            app.mkdir()
+            for source in (ROOT / 'ai-service/app').glob('*.py'):
+                shutil.copyfile(source, app / source.name)
+            spec = importlib.util.spec_from_file_location('isolated_identity_v119', app / 'trace_identity.py')
+            identity = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(identity)
+            original = identity.source_fingerprint()
+            policy = app / 'recorded_policy.py'
+            content = policy.read_bytes()
+            policy.write_bytes(content + b'\n# changed recorded policy reader bytes\n')
+            self.assertNotEqual(original, identity.source_fingerprint())
+            policy.write_bytes(content)
+            self.assertEqual(original, identity.source_fingerprint())
+
+
 if __name__ == '__main__':
     unittest.main()

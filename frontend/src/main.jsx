@@ -11,8 +11,9 @@ import { verifiedPassageSummary } from './passage-evidence-summary.js'
 import { buildHumanGuardAuditView } from './human-guard-audit.js'
 import { buildObservedTrackAuditView } from './observed-track-audit.js'
 import { runtimeReleaseStatus } from './runtime-release-status.js'
+import { RuntimePolicyPanel } from './runtime-policy-panel.jsx'
 
-const APP_VERSION = '0.5.118'
+const APP_VERSION = '0.5.119'
 const vehicleLabels = {
   motorcycle: 'Xe máy', bicycle: 'Xe đạp', car: 'Ô tô', bus: 'Xe buýt', truck: 'Xe tải', other: 'Khác'
 }
@@ -1049,6 +1050,7 @@ function GroundTruthBenchmark({ selectedCameraId, sessions }) {
     <article className="panel benchmark-report-panel">
       <div className="panel-head"><div><span className="panel-kicker">BENCHMARK REPORT</span><h2>Xe lọt / đếm dư theo timecode</h2></div></div>
       {detail && <><div className="tolerance-row"><label>Cửa sổ ghép ± giây<input type="number" min="0.05" max="3" step="0.05" value={tolerance} onChange={e=>setTolerance(e.target.value)} /></label><button className="secondary" disabled={busy || reconciling || exporting} onClick={saveTolerance}>Áp dụng</button><button disabled={busy || reconciling || exporting || !hasGroundTruth} onClick={reconcileBenchmark}>{reconciling ? 'Đang đối chiếu…' : 'Đối chiếu lại'}</button><button className="secondary" disabled={busy || reconciling || exporting} onClick={exportBenchmark}>{exporting ? 'Đang đóng gói…' : 'Tải hồ sơ benchmark'}</button></div>{reconcileStatus && <div className="benchmark-reconcile-status">{reconcileStatus}</div>}</>}
+      {detail && Number(detail.id) === Number(selectedBenchmarkId) && Number(detail.camera_id) === Number(selectedCameraId) && <RuntimePolicyPanel key={`${selectedCameraId}:${detail.id}:${detail.session_id}`} benchmarkId={detail.id} sessionId={detail.session_id} />}
       {report ? <>
         {!reportScoringAvailable && <><div className="source-status warn"><strong>Chưa có Ground Truth để chấm điểm</strong><span>AI đã ghi nhận {report.ai_total} lượt. Hãy sao chép GT từ benchmark cùng clip và vạch, hoặc đánh dấu xe trên video. Khi GT còn trống, điểm số và chẩn đoán lọt/dư chưa được tính.</span></div>{compatibleCloneSource && <button className="secondary benchmark-clone-gt" disabled={busy} onClick={cloneGroundTruthIntoCurrent}>Sao chép {compatibleCloneSource.mark_count} GT từ Benchmark #{compatibleCloneSource.id} sang Benchmark #{detail.id}</button>}</>}
         <div className="benchmark-metrics"><div><span>Ground truth</span><strong>{report.ground_truth_total}</strong></div><div><span>AI đếm</span><strong>{report.ai_total}</strong></div><div><span>Khớp</span><strong>{reportScoringAvailable ? report.matched : '—'}</strong></div><div className={reportScoringAvailable && report.missed ? 'metric-bad' : ''}><span>Lọt không đếm</span><strong>{reportScoringAvailable ? report.missed : '—'}</strong></div><div className={reportScoringAvailable && report.false_positives ? 'metric-warn' : ''}><span>Đếm dư</span><strong>{reportScoringAvailable ? report.false_positives : '—'}</strong></div><div><span>Sai số tổng</span><strong>{reportScoringAvailable ? `${report.count_error > 0 ? '+' : ''}${report.count_error}` : '—'}</strong></div></div>

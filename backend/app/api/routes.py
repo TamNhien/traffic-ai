@@ -14,6 +14,7 @@ from app.core.config import settings
 from app.db.session import get_db
 from app.geometry import validate_counting_geometry
 from app.shadow_guard import direct_ultra_spatial_shadow_duplicate
+from app.recorded_policy import fetch_recorded_policy
 from app.benchmarking import (
     BENCHMARK_TRACE_EXPORT_MAX_BYTES, BenchmarkTraceArchive, BenchmarkTraceTooLarge,
     build_benchmark_export, match_crossings, read_benchmark_trace_chunks,
@@ -1849,6 +1850,15 @@ def _build_benchmark_report(
         "ready": report["report_readiness"]["scoring_available"],
     })
     return report
+
+
+@router.get("/benchmarks/{benchmark_id}/runtime-policy")
+def benchmark_runtime_policy(benchmark_id: int, response: Response, db: Session = Depends(get_db)) -> dict:
+    benchmark = db.get(CountingBenchmark, benchmark_id)
+    if benchmark is None:
+        raise HTTPException(status_code=404, detail="Benchmark not found")
+    response.headers["Cache-Control"] = "no-store"
+    return fetch_recorded_policy(benchmark.session_id, settings.ai_service_url, httpx)
 
 
 @router.get("/benchmarks/{benchmark_id}/report")
