@@ -1,3 +1,80 @@
+# Traffic AI V0.5.124 — Sửa kiểm tra npm bị sót sau nâng cấp
+
+Log Windows 29/10/2026 cho thấy `scripts/test.ps1` dừng tại
+`Assert-ObservedPathCleanFrameV0552Contract` (line 1674): thông báo muốn
+`npm@12.2.1` nhưng điều kiện cũ vẫn tìm `npm@12.2.0` (và loại `12.1.0`).
+Trong source V0.5.123, frontend/Dockerfile và ba GitHub workflows đã dùng
+đúng `npm@12.2.1`. Đây là false negative của preflight, không phải lỗi
+`npm install` hay thuật toán AI.
+
+V0.5.124 lấy npm version duy nhất từ `frontend/package.json` (`packageManager`),
+kiểm tra bốn file installer có một pin duy nhất khớp tuyệt đối với manifest;
+báo rõ file và pin tìm thấy nếu lệch. Đồng thời sửa kiểm tra NumPy cũ
+`2.4.6`: file `requirements-test.txt` đã pin `2.5.4`. Thêm 6 bài regression stdlib trước Docker
+build/frontend install; không bỏ `npm audit`, không thay `start.ps1`, không đổi
+tracking/counting/GT/matching. Metadata Alembic `0138` chỉ cập nhật version,
+không đụng bảng đếm xe hay Docker volumes.
+
+Để cập nhật: giải nén ZIP đè source ở `D:\LienThongDH\DoAn\traffic-ai`,
+**giữ `.env`, `.git`, videos, models, backups và Docker volumes**. Không giải nén
+song song khi đang chạy `publish.ps1`. Chạy:
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+.\scripts\test.ps1
+.\scripts\start.ps1
+.\scripts\publish.ps1
+```
+
+`publish.ps1` sẽ chạy lại test trước khi commit/tag/push. Nếu kiểm thử chưa qua
+thì không phát hành, và không sửa tag GitHub cũ.
+
+Giới hạn: kiểm thử offline trong môi trường đóng gói không thay thế test thực
+tế trên Windows/Docker/GPU/GitHub Actions; xem VERIFICATION.md.
+
+---
+
+# Traffic AI V0.5.123 — Fix CI Node.js + ngăn phát hành sai tag
+
+Nhật ký Windows 29/10/2026 xác nhận V0.5.122 khởi động thành công,
+nhưng `scripts/test.ps1` báo workflow chưa dùng Node 26.13.0 vì **biểu thức
+kiểm tra vẫn cố định ở 26.10.0**. Test nay đọc `.nvmrc`, đối chiếu cả ba
+workflow `setup-node@v7` và Dockerfile frontend; không còn phải cập nhật một
+literal cũ mỗi khi nâng Node.
+
+Nhật ký GitHub cùng ngày cho thấy một lần chạy `publish.ps1` bắt đầu với
+tag `v0.5.121` nhưng source được commit đã chứa `VERSION=0.5.122`.
+GitHub Actions từ chối Release là **đúng** để tránh tag sai. Nguyên nhân
+có thể là working tree thay đổi trong khi đợi bộ test lâu; log không đủ để
+chứng minh thao tác cụ thể. V0.5.123 bổ sung kiểm tra version trước/sau test,
+trước khi stage/commit/push và đối chiếu VERSION + package.json trong Git
+index, HEAD và tag; phát hiện lệch thì dừng, không đẩy tag mới hoặc tạo Release
+trực tiếp sai version. Tag `v0.5.121` đã có trên GitHub không bị sửa/đẩy lại.
+
+Chỉ thay hạ tầng CI/phát hành và metadata version (migration `0137`); không
+động thuật toán đếm, Ground Truth, mô hình AI, cấu hình tracking, hay dữ liệu
+trong Docker volumes. Có thêm bốn kiểm thử stdlib về chốt phát hành.
+
+**Chạy trên Windows (tránh vừa giải nén source vừa publish):**
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+.\scripts\test.ps1
+.\scripts\start.ps1
+.\scripts\publish.ps1
+```
+
+`publish.ps1` sẽ tự chạy lại toàn bộ test trước khi commit/push. Không sửa
+hay force-push tag cũ để bỏ qua lỗi VERSION/tag; luôn dùng version mới.
+
+**Phạm vi xác minh:** regression offline được chạy trong môi trường này;
+PowerShell trên Windows, Docker/GPU thật và GitHub Release cần chạy/kiểm tra
+trên máy người dùng. Xem `VERIFICATION.md`.
+
+---
+
 # Traffic AI V0.5.122 — Framework/Package upgrade
 
 For new direct dependency pins, compatibility notes and installation verification limits see [DEPENDENCIES_V05122.md](DEPENDENCIES_V05122.md). Source based on V0.5.121.

@@ -1,3 +1,38 @@
+# Verification V0.5.124 — stale npm preflight pin
+
+- Reproduced stale `-notmatch 'npm@12\.2\.0'` in V0.5.123's
+  `Assert-ObservedPathCleanFrameV0552Contract` despite correct npm 12.2.1
+  pins in frontend/Dockerfile and all three GitHub Actions workflows.
+- Fixed legacy contract to derive package-manager pin from frontend/package.json.
+  Require exactly one distinct npm@x.y.z per installer file.
+- Also fixed stale NumPy 2.4.6 check in the same V0.5.52 contract;
+  current ai-service/requirements-test.txt pins NumPy 2.5.4.
+- Added six stdlib regression cases and metadata-only Alembic 0138.
+- No changes to Python dependencies, Node/Vite/React versions, AI engine,
+  tracking, Ground Truth, saved events or Docker volumes.
+- Offline verified: 6 new npm/NumPy regressions, 6 V0.5.122 dependency
+  checks, 5 version-contract checks, 4 V0.5.123 CI/publish safeguards,
+  5 release-EOL checks, 5 frontend security, 5 Rolldown checks,
+  12 AI raw-motion and 14 backend raw-motion tests, plus 74 Node tests:
+  136 targeted tests passed. Node tests ran on available Node v22.16.0,
+  NOT the configured production Node 26.13.0.
+- Parsed 296 Python files (AST), verified CRLF/no BOM in 38 PowerShell scripts;
+  all 26 technology literal source checks match. Verified ZIP checksum/integrity.
+- PowerShell `scripts/test.ps1`, full Docker/GPU run and GitHub Release must be
+  rechecked on Windows; offline tests do not prove these runtime workflows.
+
+---
+
+# Verification V0.5.123 — CI/publish race safeguards
+
+- Source based on V0.5.122; project version V0.5.123 and metadata-only Alembic 0137.
+- Fixed `scripts/test.ps1` using outdated `26.10.0` check against current `26.13.0` workflows; CI version is now derived from `.nvmrc` and checked against Dockerfile.
+- Added fail-closed checks in `scripts/publish.ps1` after tests, before staging and pushing, and for Git index, HEAD and tag contents to block VERSION/tag drift (including GH CLI fallback).
+- Previously pushed `v0.5.121` tag with `VERSION=0.5.122` is **not overwritten** by this source. New source should be released only as `v0.5.123`.
+- Verified offline: 74/74 Node tests; 46 Python assertions passed across CI/publish/dependency/release/security/version/portability/raw-ID groups, with one native-PowerShell-only case skipped; 12/12 AI raw-motion and 14/14 backend raw-motion tests passed. **146 passed, one skipped** across selected groups. Version/migration contract passed. One Python-cache regression group exceeded the local timeout, and broad Python discovery exceeded the environment timeout; neither is counted as passing. This environment cannot execute PowerShell or Windows Docker/GPU; GitHub creation is not claimed.
+
+---
+
 # Verification — Traffic AI V0.5.122
 
 Scoped package/framework modernization, 29 October 2026. The release is NOT certified as a successful Docker/GPU deployment; see detailed `DEPENDENCIES_V05122.md`.

@@ -54,6 +54,37 @@ function Assert-GitHubPushTarget {
   }
 }
 
+# Fail closed if a newer source was copied into the working directory during a long test.
+# Never reuse the startup tag with a different VERSION or package version.
+function Assert-ReleaseVersionStable([string]$Phase) {
+  $current = (Get-Content $versionFile -Raw -Encoding utf8).Trim()
+  if ($current -ne $Version) {
+    throw "Source thay đổi trong lúc publish ($Phase): tag=$tag nhưng VERSION=$current. Không commit/push/release. Hãy chạy lại publish.ps1 cho phiên bản hiện tại."
+  }
+  $package = Get-Content (Join-Path $root "frontend/package.json") -Raw -Encoding utf8 | ConvertFrom-Json
+  if ($package.version -ne $Version) {
+    throw "Source không đồng bộ ($Phase): tag=$tag nhưng frontend/package.json=$($package.version). Không commit/push/release."
+  }
+}
+
+function Assert-GitTreeReleaseVersion([string]$Reference) {
+  # HEAD and tag trees must contain the same version as the release being published.
+  $versionSpec = if ($Reference -eq "INDEX") { ":VERSION" } else { "${Reference}:VERSION" }
+  $packageSpec = if ($Reference -eq "INDEX") { ":frontend/package.json" } else { "${Reference}:frontend/package.json" }
+  $treeVersion = @(& git show $versionSpec 2>$null)
+  if ($LASTEXITCODE -ne 0) { throw "Không đọc được VERSION từ Git ref '$Reference'." }
+  $foundVersion = ($treeVersion -join "`n").Trim()
+  if ($foundVersion -ne $Version) {
+    throw "Git ref '$Reference' chứa VERSION=$foundVersion, khác tag $tag. Không push hoặc tạo GitHub Release."
+  }
+  $treePackage = @(& git show $packageSpec 2>$null)
+  if ($LASTEXITCODE -ne 0) { throw "Không đọc được frontend/package.json từ Git ref '$Reference'." }
+  $treePkg = (($treePackage -join "`n") | ConvertFrom-Json)
+  if ($treePkg.version -ne $Version) {
+    throw "Git ref '$Reference' chứa frontend/package.json=$($treePkg.version), khác tag $tag."
+  }
+}
+
 function Assert-NoTrackedSecrets {
   $tracked = @(git ls-files)
   if ($LASTEXITCODE -ne 0) { throw "Không đọc được danh sách file Git theo dõi." }
@@ -82,6 +113,8 @@ function Assert-NoStagedBenchmarkArtifacts {
 
 function New-DirectGitHubRelease([string]$Tag) {
   Write-Host "[Traffic AI] Chuyển sang tạo Release trực tiếp bằng GitHub CLI..." -ForegroundColor Yellow
+  Assert-ReleaseVersionStable -Phase "GitHub CLI fallback"
+  Assert-GitTreeReleaseVersion -Reference "refs/tags/$Tag"
   # Chỉ thay các artifact của release này; giữ các bản phát hành khác.
   $distRoot = Join-Path (Join-Path $root "dist-release") $Tag
   New-Item -ItemType Directory -Path $distRoot -Force | Out-Null
@@ -157,6 +190,7 @@ if ($pkg.version -ne $Version) {
 $global:LASTEXITCODE = 0
 & "$PSScriptRoot/normalize-line-endings.ps1"
 if ($LASTEXITCODE -ne 0) { throw "Chuẩn hóa line endings thất bại." }
+Assert-ReleaseVersionStable -Phase "sau khi chuẩn hóa"
 
 if (-not $SkipTests) {
   Write-Host "`n[BƯỚC 1/6] Chạy toàn bộ kiểm thử..." -ForegroundColor Cyan
@@ -168,6 +202,8 @@ if (-not $SkipTests) {
 } else {
   Write-Host "`n[BƯỚC 1/6] Bỏ qua kiểm thử theo yêu cầu -SkipTests." -ForegroundColor Yellow
 }
+
+Assert-ReleaseVersionStable -Phase "sau kiểm thử, trước GitHub"
 
 Write-Host "`n[BƯỚC 2/6] Kiểm tra/tạo repository GitHub..." -ForegroundColor Cyan
 $global:LASTEXITCODE = 0
@@ -196,6 +232,8 @@ $tagStatus = $tagProbe.ExitCode
 if ($tagStatus -notin @(0, 1)) { throw "Không kiểm tra được tag local $tag." }
 $localTagExists = ($tagStatus -eq 0)
 
+Assert-ReleaseVersionStable -Phase "trước git add"
+
 Write-Host "`n[BƯỚC 4/6] Commit source và tạo/kiểm tra tag $tag..." -ForegroundColor Cyan
 Invoke-Checked { git add -A } "git add thất bại."
 Assert-NoTrackedSecrets
@@ -215,12 +253,15 @@ if (($localTagExists -or $remoteTagSha) -and $pending.Count -gt 0) {
   throw "Tag $tag đã tồn tại nhưng source còn thay đổi. Tăng VERSION cho thay đổi mới; không di chuyển tag đã phát hành."
 }
 if ($pending.Count -gt 0) {
+  Assert-GitTreeReleaseVersion -Reference "INDEX"
   Invoke-Checked { git commit -m "chore(release): $tag" } "git commit thất bại. Hãy cấu hình git user.name và user.email nếu cần."
 } else {
   Write-Host "[OK] Không có thay đổi source mới cần commit." -ForegroundColor Green
 }
 $headSha = (git rev-parse --verify HEAD).Trim()
 if ($LASTEXITCODE -ne 0) { throw "Repository chưa có commit để phát hành." }
+Assert-ReleaseVersionStable -Phase "sau git commit"
+Assert-GitTreeReleaseVersion -Reference "HEAD"
 if ($localTagExists) {
   $localTagSha = (git rev-parse "refs/tags/$tag^{commit}").Trim()
   if ($LASTEXITCODE -ne 0 -or $localTagSha -ne $headSha) {
@@ -244,6 +285,10 @@ if (-not $localTagExists) {
     Invoke-Checked { git tag -a $tag -m "Traffic AI $tag" } "Tạo tag $tag thất bại."
   }
 }
+
+Assert-ReleaseVersionStable -Phase "trước git push"
+Assert-GitTreeReleaseVersion -Reference "HEAD"
+Assert-GitTreeReleaseVersion -Reference "refs/tags/$tag"
 
 Write-Host "`n[BƯỚC 5/6] Đẩy source và tag lên GitHub..." -ForegroundColor Cyan
 Invoke-Checked { git push -u origin $Branch } "Đẩy nhánh $Branch lên GitHub thất bại. Chạy lại publish sau khi xử lý lỗi; tag local được giữ để tiếp tục."

@@ -44,7 +44,7 @@ class DependencyUpgradeContract(unittest.TestCase):
 
     def test_react_plugin_and_build_tool_immutable(self):
         p = json.loads(src('frontend/package.json'))
-        self.assertEqual(p['version'], '0.5.122')
+        self.assertEqual(p['version'], src('VERSION').strip())
         self.assertEqual(p['dependencies'], {'react': '19.3.1','react-dom': '19.3.1'})
         self.assertEqual(p['devDependencies'], {'@vitejs/plugin-react':'6.1.2','vite':'8.3.5'})
         self.assertEqual(p['overrides']['rolldown'], '1.2.15')
@@ -90,7 +90,7 @@ class DependencyUpgradeContract(unittest.TestCase):
         self.assertIn("value='0.5.122'",t)
         self.assertIn("value='0.5.121'",t)
         self.assertNotRegex(t, r'(?im)\b(insert|delete|drop|truncate|alter|create)\s+(table|into|from|database)\b')
-        self.assertEqual(src('VERSION').strip(),'0.5.122')
+        self.assertRegex(src('VERSION').strip(), r'^0\.5\.\d+$')
 
     def test_node_compatibility_and_npm_audit_not_bypassed(self):
         for p in ('frontend/Dockerfile','scripts/test.ps1','.github/workflows/ci.yml', '.github/workflows/ci-release-reusable.yml','.github/workflows/release.yml'):

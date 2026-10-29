@@ -260,9 +260,18 @@ function Assert-CiNodePortabilityV0510Contract {
       throw "GitHub Actions chưa bootstrap writable runtime paths bằng RUNNER_TEMP + GITHUB_ENV."
     }
   }
+  $nodeVersion = (Get-Content (Join-Path $root ".nvmrc") -Raw -Encoding UTF8).Trim()
+  if ($nodeVersion -notmatch '^\d+\.\d+\.\d+$') {
+    throw "Phiên bản Node.js trong .nvmrc không hợp lệ."
+  }
+  $expectedNodeVersionLine = "node-version: '$nodeVersion'"
+  $nodeDockerText = Get-Content (Join-Path $root "frontend\Dockerfile") -Raw -Encoding UTF8
+  if (-not $nodeDockerText.Contains("FROM node:$nodeVersion-alpine")) {
+    throw "Frontend Dockerfile không dùng Node.js $nodeVersion theo .nvmrc."
+  }
   foreach ($text in @($releaseText, $ciText, $reusableText)) {
-    if ($text -match 'Set up Node\.js' -and ($text -notmatch 'actions/setup-node@v7' -or $text -notmatch "node-version: '26\.10\.0'")) {
-      throw "Workflow frontend chưa dùng setup-node@v7 + Node.js 26.13.0."
+    if ($text -match 'Set up Node\.js' -and ($text -notmatch 'actions/setup-node@v7' -or -not $text.Contains($expectedNodeVersionLine))) {
+      throw "Workflow frontend chưa dùng setup-node@v7 + Node.js $nodeVersion."
     }
     if ($text -match '(?m)^\s*cache:\s*npm\s*$' -or $text -match 'cache-dependency-path:\s*frontend/package\.json') {
       throw "Workflow đang bật npm cache nhưng repo không có frontend/package-lock.json; setup-node có thể fail. Dùng package-manager-cache: false cho tới khi commit lockfile."
@@ -1659,17 +1668,30 @@ function Assert-ObservedPathCleanFrameV0552Contract {
   $contextTests = Get-Content (Join-Path $root "ai-service\tests\test_worker_context.py") -Raw -Encoding UTF8
   $aiRequirements = Get-Content (Join-Path $root "ai-service\requirements-test.txt") -Raw -Encoding UTF8
   $package = Get-Content (Join-Path $root "frontend\package.json") -Raw -Encoding UTF8 | ConvertFrom-Json
-  if ($package.packageManager -ne "npm@12.2.1") { throw "Frontend phải dùng npm@12.2.1." }
+  # Read the canonical npm pin from the package manifest, never keep an old
+  # hard-coded regex in this legacy contract after dependency upgrades.
+  $expectedNpm = [string]$package.packageManager
+  if ($expectedNpm -cnotmatch '^npm@\d+\.\d+\.\d+$') {
+    throw "frontend/package.json phải có packageManager dạng npm@major.minor.patch."
+  }
   foreach ($relative in @("frontend\Dockerfile", ".github\workflows\ci.yml", ".github\workflows\ci-release-reusable.yml", ".github\workflows\release.yml")) {
     $text = Get-Content (Join-Path $root $relative) -Raw -Encoding UTF8
-    if ($text -notmatch 'npm@12\.2\.0' -or $text -match 'npm@12\.1\.0') { throw "npm chưa đồng bộ 12.2.1 trong $relative." }
+    $pins = @([regex]::Matches($text, 'npm@\d+\.\d+\.\d+') | ForEach-Object { $_.Value } | Select-Object -Unique)
+    if ($pins.Count -ne 1 -or $pins[0] -cne $expectedNpm) {
+      throw "npm packageManager lệch trong ${relative}: cần $expectedNpm; tìm thấy $($pins -join ', ')."
+    }
   }
   if ($counting -notmatch 'def observed_gate_crossing' -or $counting -notmatch 'commit: bool = True') { throw "V0.5.52 thiếu observed path / secondary admission contract." }
   if ($worker -notmatch '_prepare_processing_frames' -or $worker -notmatch 'analysis_frame' -or $worker -notmatch '_record_bicycle_xframe_observations' -or $worker -notmatch 'commit=False') { throw "V0.5.52 thiếu clean inference frame / context admission / center transaction." }
   if ($publish -notmatch 'gh release upload' -or $publish -notmatch '--clobber' -or $publish -notmatch 'headSha -eq \$headSha -and' -or $publish -notmatch 'event -eq "push"') { throw "V0.5.52 thiếu publish retry hoặc chọn đúng run của tag." }
   if ($release -notmatch 'RELEASE_TAG' -or $release -notmatch 'inputs.tag' -or $release -notmatch 'refs/tags/\$tag\^\{commit\}') { throw "Release workflow chưa chạy đúng immutable tag khi dispatch." }
   if ($aiTests -notmatch 'test_v0552_' -or $contextTests -notmatch 'test_v0552_preview_drawing_cannot_modify_analysis_pixels') { throw "V0.5.52 thiếu regression tests." }
-  if ($aiRequirements -notmatch '(?m)^numpy==2\.4\.6\s*$') { throw "Pixel regression test V0.5.52 thiếu dependency NumPy được pin." }
+  # A separately upgraded requirements-test.txt may pin newer NumPy;
+  # validate that NumPy is pinned exactly once instead of comparing to the old 2.4.6.
+  $numpyPins = @([regex]::Matches($aiRequirements, '(?m)^numpy==\d+\.\d+\.\d+\s*$'))
+  if ($numpyPins.Count -ne 1) {
+    throw "Pixel regression test V0.5.52 cần đúng một NumPy version pin trong ai-service/requirements-test.txt."
+  }
   Write-Host "[OK] Observed Path + Clean Frame + Release Automation V0.5.52" -ForegroundColor Green
 }
 
@@ -2529,6 +2551,18 @@ Invoke-Step "V0.5.121 frontend Rolldown registry availability (stdlib-only)" {
     -v "${root}:/src" -w /src python:3.14.10-slim `
     python -S -m unittest discover -s scripts/tests -p test_frontend_rolldown_v05121.py -v
   if ($LASTEXITCODE -ne 0) { throw 'V0.5.121 frontend dependency pin regression failed.' }
+}
+
+Invoke-Step "V0.5.124 dynamic npm preflight regression (stdlib-only)" {
+  docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 -v "${root}:/src" -w /src python:3.14.10-slim `
+    python -S -m unittest discover -s scripts/tests -p test_npm_preflight_v05124.py -v
+  if ($LASTEXITCODE -ne 0) { throw "V0.5.124 npm preflight regression failed." }
+}
+
+Invoke-Step "V0.5.123 CI Node / GitHub publication guards (stdlib-only)" {
+  docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 -v "${root}:/src" -w /src python:3.14.10-slim `
+    python -S -m unittest discover -s scripts/tests -p test_ci_publish_guard_v05123.py -v
+  if ($LASTEXITCODE -ne 0) { throw "V0.5.123 CI/publish guard tests failed." }
 }
 
 Invoke-Step "V0.5.122 dependency upgrade compatibility (stdlib-only)" {
