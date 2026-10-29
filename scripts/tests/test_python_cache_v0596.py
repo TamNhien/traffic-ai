@@ -151,13 +151,13 @@ class PythonDockerCacheCoverage(unittest.TestCase):
         test_script = (ROOT / "scripts/test.ps1").read_text("utf-8")
         logical_lines = re.sub(r"`[ \t]*\r?\n", " ", test_script)
         commands = re.findall(r"(?m)^\s*docker run --rm[^\n]+", logical_lines)
-        python_commands = [line for line in commands if "python:3.14.7-slim" in line]
+        python_commands = [line for line in commands if "python:3.14.10-slim" in line]
         self.assertGreaterEqual(len(python_commands), 20)
         for command in python_commands:
             with self.subTest(command=command.strip()[:150]):
                 self.assertIn("-e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache", command)
                 self.assertIn("-e PYTHONDONTWRITEBYTECODE=1", command)
-                self.assertLess(command.index("PYTHONPYCACHEPREFIX="), command.index("python:3.14.7-slim"))
+                self.assertLess(command.index("PYTHONPYCACHEPREFIX="), command.index("python:3.14.10-slim"))
                 self.assertNotRegex(command, r"-v\s+\S*traffic-ai-test-pycache")
 
     def test_real_cache_regression_runs_in_normal_test_command(self):

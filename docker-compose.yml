@@ -105,7 +105,7 @@ services:
       - traffic-ai-net
 
   gateway:
-    image: nginx:1.31.6-alpine
+    image: nginx:1.31.8-alpine
     container_name: traffic-ai-gateway
     restart: unless-stopped
     depends_on:

@@ -1,4 +1,4 @@
-FROM python:3.14.7-slim
+FROM python:3.14.10-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -11,7 +11,7 @@ RUN apt-get update \
 
 WORKDIR /opt/traffic-ai
 COPY requirements.txt .
-RUN python -m pip install --no-cache-dir --upgrade pip==26.2.1 \
+RUN python -m pip install --no-cache-dir --upgrade pip==26.2.2 \
     && python -m pip install --no-cache-dir -r requirements.txt
 COPY app ./app
 

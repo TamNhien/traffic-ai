@@ -276,3 +276,12 @@
 .runtime-policy-table th{position:sticky;top:0;background:#15304b;color:#dcecff}
 .runtime-policy-table td:nth-child(2){word-break:break-word}
 @media(max-width:460px){.runtime-policy-summary{grid-template-columns:1fr}.runtime-policy-table th,.runtime-policy-table td{padding:6px}}
+
+/* V0.5.120: keep raw box motion separate from identity handoff jumps. */
+.raw-motion-measurements{display:grid;gap:6px;margin:10px 0;font-size:.76rem}
+.raw-motion-measurements>div{display:grid;grid-template-columns:minmax(130px,1fr) minmax(0,1.4fr);gap:8px}
+.raw-motion-measurements dt{color:#a2bdd7}
+.raw-motion-measurements dd{margin:0;color:#dcecff;overflow-wrap:anywhere}
+.raw-motion-handoff{padding:8px 10px;border-left:2px solid #648bad;background:rgba(87,130,171,.08);margin:9px 0}
+.raw-motion-handoff p{margin:4px 0}
+@media(max-width:460px){.raw-motion-measurements>div{grid-template-columns:1fr;gap:2px}}

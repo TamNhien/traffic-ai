@@ -15,6 +15,7 @@ from app.db.session import get_db
 from app.geometry import validate_counting_geometry
 from app.shadow_guard import direct_ultra_spatial_shadow_duplicate
 from app.recorded_policy import fetch_recorded_policy
+from app.raw_motion_audit import scope_raw_motion_audit
 from app.benchmarking import (
     BENCHMARK_TRACE_EXPORT_MAX_BYTES, BenchmarkTraceArchive, BenchmarkTraceTooLarge,
     build_benchmark_export, match_crossings, read_benchmark_trace_chunks,
@@ -1745,6 +1746,12 @@ def _attach_benchmark_trace_diagnosis(item: dict, diagnosis: dict) -> None:
     """Keep class evidence scoped to the matched canonical event track."""
     attached = dict(diagnosis)
     tracking_id = item.get("ai_tracking_id")
+    if "raw_motion_audit" in attached:
+        raw_motion = scope_raw_motion_audit(attached["raw_motion_audit"], tracking_id)
+        if raw_motion is None:
+            attached.pop("raw_motion_audit")
+        else:
+            attached["raw_motion_audit"] = raw_motion
     if "observed_track_audit" in attached:
         observed = _scope_observed_track_audit(attached["observed_track_audit"], tracking_id)
         if observed is None:

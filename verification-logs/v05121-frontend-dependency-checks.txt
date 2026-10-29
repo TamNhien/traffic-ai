@@ -1,0 +1,25 @@
+Traffic AI 0.5.121 - scoped offline verification, 2026-10-29
+
+Input: traffic-ai-v0.5.120-full-source(2).zip and frontend failure log.
+Log failed on rolldown 1.2.16 E404 during npm install; backend/AI and worker
+had passed prior steps in the user's Docker environment.
+
+Fix: frontend/package.json overrides.rolldown = 1.2.15 while keeping
+vite = 8.3.5, other dependencies and npm audit gates unchanged.
+
+Local targeted tests:
+  Frontend Rolldown release test ................ 5 passed
+  Vite security test ........................... 5 passed
+  Version consistency test ..................... 5 passed
+  PowerShell EOL/release test ................... 5 passed
+  Runtime fingerprint test ..................... 5 passed
+  Previous raw-motion AI test ................. 12 passed
+  Previous raw-motion backend test ............ 14 passed
+  Native frontend Node tests ................... 74 passed
+                                             Total 125 passed
+
+Additional: scripts/version-contract.py OK; Python compileall OK.
+Limits: No Docker, no Windows PowerShell, npm registry DNS EAI_AGAIN.
+No Vite build, Docker image, browser smoke, GPU inference or end-to-end test
+was performed here; full standalone scripts suite did not complete locally.
+The Windows customer must confirm scripts/test.ps1 returns [SUCCESS].

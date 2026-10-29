@@ -14,7 +14,7 @@ class EndpointRunnerRegression(unittest.TestCase):
         start = source.index('Invoke-Step "V0.5.106 finite endpoint precision regression (stdlib-only)"')
         stop = source.index('Invoke-Step "V0.5.107 pytest-free endpoint runner contract', start)
         block = source[start:stop]
-        self.assertIn('python:3.14.7-slim', block)
+        self.assertIn('python:3.14.10-slim', block)
         self.assertIn('python -S -m unittest discover -s tests -p test_finite_endpoint_guard_v05106.py -v', block)
         self.assertNotIn('python -m pytest', block)
         self.assertNotIn('pip install', block)

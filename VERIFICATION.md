@@ -1,3 +1,152 @@
+# Verification — Traffic AI V0.5.122
+
+Scoped package/framework modernization, 29 October 2026. The release is NOT certified as a successful Docker/GPU deployment; see detailed `DEPENDENCIES_V05122.md`.
+
+- Exact direct pins were aligned across production/test requirements, Dockerfile, CI and Windows test script.
+- New migration `0136_dependencies_v05122` is version metadata only. V0.5.121 historical migration preserved.
+- Native frontend Node.js tests: 74 passed (using available Node v22 for JS tests only, not the pinned production Node 26.13.0).
+- Offline stdlib tests for new dependency pin, frontend Rolldown, Vite security, release metadata passed (6+5+5+5 = 21 cases).
+- Raw-motion audit regressions: 12 AI-service and 14 backend offline tests passed.
+- Combined targeted test coverage: 21 dependency/security/version + 26 raw-motion + 74 Node frontend = **121 tests passed**.
+- Python scripts broad discovery is not a meaningful green integration result: `test_benchmark_gate.py` imports pytest, which is not available under Python -S. A separate large unittest invocation exceeded the execution window.
+- Real npm/pip dependency installation, npm audit and Docker/frontend production build, PostgreSQL migration, CUDA / inference benchmark remain unverified due network/Docker/GPU limitations.
+- Historical vehicle-count benchmark not rerun; no recall/precision uplift claimed.
+
+---
+
+# Verification — Traffic AI V0.5.121 (frontend dependency release)
+
+## Customer-provided failure evidence, 29 October 2026
+
+Source: `traffic-ai-v0.5.120-full-source(2).zip` and terminal log.
+`./scripts/test.ps1`: backend 222 passed / 28 subtests; AI 898 passed /
+55 subtests; backup worker 4 passed; source contracts passed, then frontend
+`npm install` failed fetching `rolldown-1.2.16.tgz` (HTTP 404). There is no
+new GPU replay, ground-truth score or database mutation evidence in the log.
+
+## Scoped change
+
+Vite 8.3.5 depends on `rolldown: ~1.2.14`. The npm registry version page
+shows 1.2.15 as published, whereas npm's original resolution selected 1.2.16,
+whose tarball returned 404. Pin `frontend/package.json` `overrides.rolldown`
+exactly to `1.2.15`, while preserving the existing `source-map-js` override,
+Vite security pin, npm audit gate and installation routes in PowerShell, CI
+and frontend Dockerfile. No counting or benchmark logic changed.
+
+Added 5 offline release guards (`test_frontend_rolldown_v05121.py`) and wired
+into `scripts/test.ps1` ahead of install. App/backend/AI/worker metadata all
+bumped to 0.5.121; Alembic head `0135_frontend_pin_v05121` only updates
+`system_settings.schema_version`.
+
+## Locally completed checks on the 0.5.121 source ZIP
+
+- 5 V0.5.121 dependency guard tests passed.
+- 5 previous Vite security tests, 5 version-contract tests, 5 PowerShell
+  line-ending/release safety tests and 5 fingerprint contract tests passed.
+- 12 AI plus 14 backend previous raw-motion tests passed (`python -S`).
+- 74 frontend native Node tests passed (`node --test`).
+- Python `compileall` for app/tests/scripts and `scripts/version-contract.py` passed.
+- These are **125 targeted tests**, not a successful complete Docker suite.
+- A broad scripts unittest attempt did not finish under the packaging runtime
+  limit; it is not counted among the 125 passing tests.
+
+## Verification limits
+
+New offline guards and version-contract tests can be run locally. **No Docker,
+PowerShell or network access to npm registry in the packaging environment:**
+`npm view rolldown@1.2.15` encountered DNS `EAI_AGAIN`, so `npm install`,
+Vite build, browser smoke test and GPU/video inference remain unverified for
+.121. The customer must confirm `scripts/test.ps1` finishes on Windows.
+
+---
+
+# Verification — Traffic AI V0.5.120
+
+## Baseline and current evidence
+
+Baseline delivered .119 source ZIP:480files,SHA256
+`63d84e4631a33fd7d81b0652adf153030e0f3cfc5104453b258b2fcfcb3b0909`.
+All prior paths and test functions/assertions are retained.
+
+Customer #87/session214 ZIP SHA256
+`3592d9d242588ab4da236d773ac6c02adf657ea0215a469638617b72a2be3a4b`.
+Six manifest certificates,23,650 sequential frame clocks and closed gzip
+source were verified. RAR160JPEGs plus raw trace match418,974,845bytes,
+SHA256 `7f480e23a6539dcb250a21e882b3dd4fc757419b5af510ed957b2b33f65c6faf`.
+Header runtime .119/fingerprint
+`3d417ba11176a0774e9503fc93ce7200bfd57b89112ebf53198edb00d9b7fa28`
+matches delivered source. Its195 effective-policy fields are complete with
+digest `821ab9d456acefae1590e03c6830805907b61bb44f5633d65b76eba514d2cbfd`.
+
+#86→#87 normalized149GT including notes,config and all147 persisted event
+signatures (canonical ID,clock,point,confidence,class,direction,method) are
+identical:0added/0removed. Measured .119 remains144matched,5missed,3extra,
+2class/2direction mismatches,140strict,F1 .972973. No .120 inference score
+or count improvement is inferred from this diagnostic upgrade.
+
+## Per-raw motion functionality
+
+The new bounded audit is scoped to one requested canonical owner but measures
+box-center displacement only within the same raw token on consecutive source
+frames with increasing clocks. Raw changes,missing/invalid target observations
+and source-frame gaps split segments. At least2 samples are needed. Synthetic
+audit rows and metadata are excluded. Identical duplicate frames are ignored;
+conflicting duplicates or out-of-order frames fail closed. Bounds are256frames,
+64tracks per frame and8 output segments with explicit truncation.
+
+The backend returns only whitelisted numeric evidence for the requested owner,
+validating segment chronology,contiguity,count,gap,finite vectors and rounded
+per-frame consistency. The UI adds a separate card to class/direction/extra
+cases,seek controls and an optional comparison between an exact matching
+handoff jump and the new raw's contiguous motion. Cosine is descriptive only;
+physical identity,crossing validity and IN/OUT are not automatically inferred.
+Existing observed-track evidence remains separate and retains its schema.
+
+Actual754s fixture: raw312739 forms18834–18842,9samples,dy+.0025px;
+raw331821 forms18860–18870,11samples,dx−41.2415/dy−74.505px. The18-frame
+handoff displacement dy+229.647px is not folded into either raw segment.
+The historical rescued IN754.0452 was created and later OUT754.6878 was
+deduplicated as same-track-direction-flip. Future opposing motion alone can
+also follow a genuine U-turn, so it is insufficient to authorize suppressing
+that earlier event. The established-heading stop-go contract remains intact.
+
+Worker/counting/tracking/classification/fragment ownership/endpoint policies
+remain .119. Only read-only trace aggregation and diagnostic projection/rendering
+change; no GT/matcher/tolerance or saved events are edited. Source identity
+additionally attests the raw-motion audit module; migration0134 changes only
+release metadata. Legacy traces without usable raw rectangles have no motion
+segments rather than fabricated movement.
+
+## Validation
+
+**1,355 offline cases passed,0 failures:** AI895,backend161,scripts216,
+benchmark-gate5,backup4,Node74. The26 isolated .120 stdlib cases (12AI,
+14backend) also pass under `python -S`; these overlap the total above.
+The64 exact pre-existing HTTP/ORM exclusions and1 native PowerShell skip
+are unchanged. All480 old paths,1,319 old Python test ASTs and10 byte-identical
+old Node test files are retained. No old test function body or assertion changes.
+The488-file source passes456 static checks;288 Python files compile, local
+imports/call signatures/state-schema references resolve,39 PS1 files retain
+CRLF/noBOM and79 declared PowerShell assertions remain invoked. All19
+production JS/JSX files pass Babel parsing; actual .120/migration0134 version
+contract CLI passes.
+
+New tests exercise same-raw grouping and ID/frame-gap splitting, missing raw
+values, malformed geometry/types/nonfinite data, duplicate/conflicting/out-of-
+order frames, record/sample bounds,truncation and detached results. Production
+`diagnose_trace` runs on both a synthetic handoff and actual session214's stored
+trace. Actual diagnosis → backend raw/observed scopes → frontend helper yields
+2 segments and separate jump/motion vectors,cosine−.733142. No score/direction
+inference is made. Actual backend attach statements are tested via AST seams;
+this does not claim a running HTTP/ORM stack or browser-rendered interaction.
+
+Offline checks do not claim native HTTP/ORM,PowerShell,Docker,browser/Vite
+build or new GPU/video inference. No newly measured .120 F1 is claimed.
+
+---
+
+## Previous release verification
+
 # Verification — Traffic AI V0.5.119
 
 ## Authoritative baseline and observed run

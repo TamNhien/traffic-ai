@@ -1,3 +1,111 @@
+# Traffic AI V0.5.122 — Framework/Package upgrade
+
+For new direct dependency pins, compatibility notes and installation verification limits see [DEPENDENCIES_V05122.md](DEPENDENCIES_V05122.md). Source based on V0.5.121.
+
+---
+
+# Traffic AI V0.5.121 — Sửa lỗi cài dependency Frontend (Rolldown E404)
+
+Trong log `scripts/test.ps1` ngày 29/10/2026, backend (222 tests), AI service
+(898 tests) và backup worker (4 tests) đã đạt; bước **Frontend build** dừng
+trong `npm install` vì yêu cầu tải `rolldown-1.2.16.tgz` trả `E404`.
+
+Vite `8.3.5` khai báo Rolldown `~1.2.14`; range này có thể chọn patch
+`1.2.16` chưa tải được tại thời điểm log. V0.5.121 **giữ Vite 8.3.5** và
+thêm `overrides.rolldown = "1.2.15"` (bản khả dụng đã đối chiếu trên npm),
+để các đường cài đặt thông thường Docker, CI và test đều giải quyết dependency
+qua package.json giống nhau. Không tắt `npm audit` và không downgrade Vite.
+
+Bổ sung 5 kiểm thử regression stdlib chạy trước frontend build. Version ở
+backend/AI/worker/frontend được đồng bộ; Alembic migration `0135` chỉ đổi
+metadata phiên bản, không tác động dữ liệu đếm. Thuật toán đếm, báo cáo,
+Ground Truth, matching và cấu hình tracking **không đổi so với .120**.
+
+**Lưu ý xác minh:** Môi trường tạo bản ZIP này không có Docker/PowerShell và
+không truy cập được npm registry (`EAI_AGAIN`), vì vậy chưa thể chứng nhận
+`npm install` hay Vite build thật đã chạy thành công. Chạy `scripts/test.ps1`
+trên máy Windows có Docker để xác nhận lỗi đã được giải quyết.
+
+## Cập nhật và kiểm tra bản .121
+
+Giải nén full source vào `D:\LienThongDH\DoAn\traffic-ai` (giữ nguyên
+`.env`, model, video, dữ liệu, backup và Docker volumes). Không tạo lại Admin.
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+.\scripts\test.ps1
+.\scripts\start.ps1
+```
+
+Nếu còn E404, kiểm tra proxy/cache/npm registry trên Docker; không dùng
+`npm audit --force`, không bỏ kiểm tra audit và không sửa nguồn dữ liệu benchmark.
+
+---
+
+# Traffic AI V0.5.120 — Xem chuyển động riêng của từng raw ID
+
+Trong các thẻ sai hướng, sai loại hoặc đếm dư, mở **Chuyển động theo raw ID**
+để xem các đoạn quan sát liên tiếp của từng token ByteTrack. Mỗi đoạn có
+frame, timecode, số mẫu, độ dịch tâm box, vận tốc đo từ box và vận tốc đã lọc
+của canonical. Nút xem đầu/cuối đoạn đưa video tới đúng mốc để đối chiếu.
+
+Khi có đổi raw ID, bước nhảy nối ID được hiển thị riêng với độ cùng chiều
+so với chuyển động của raw mới. ID thay đổi hoặc frame bị thiếu luôn ngắt
+đoạn; bước nhảy giữa hai ID không được tính là chuyển động riêng của một raw.
+Dữ liệu xung đột, khác track hoặc không đủ hai mẫu liên tiếp không tạo đoạn.
+Đây là bằng chứng để xem lại video, không tự xác nhận cùng xe, hướng cắt vạch
+hay sửa điểm benchmark.
+
+Tại ca754s của phiên214, raw312739 gần như đứng yên ở frame18834–18842;
+raw331821 ở frame18860–18870 dịch tâm lên74,505px trong11 mẫu. Bước nối
+ID có độ dịch xuống229,647px, được giữ riêng khỏi đoạn raw mới. Chức năng
+mới giúp phân biệt bước nối canonical với chuyển động box đã quan sát.
+
+## Hồ sơ chạy thực tế
+
+Benchmark #87 chạy AI .119 ghi149GT,147AI,144khớp,5lọt,3dư,
+2sai loại,2sai hướng,F1 **97,2973%**. GT/ghi chú/cấu hình và147 event
+chuẩn hóa giống #86. Đây là điểm của .119; chưa có lần chạy video/GPU .120
+mới để đo mức thay đổi. Bản .120 bổ sung chức năng xem bằng chứng, giữ
+thuật toán đếm/nối ID, GT, matcher và tolerance. Van chở hàng vẫn là xe tải;
+lượt quay lại hợp lệ tiếp tục được đếm.
+
+## Cập nhật và sử dụng
+
+Chép đè source nhưng giữ `.env`, `.git`, models, videos, snapshots, database,
+Docker volumes và backups. Migration `0134_raw_motion_audit_v05120` chỉ cập
+nhật metadata phiên bản; không cần tạo lại admin.
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+
+# Test
+.\scripts\test.ps1
+
+# Khởi động
+.\scripts\start.ps1
+
+# Tự test, commit, push GitHub, tạo tag v0.5.120 và GitHub Release
+.\scripts\publish.ps1
+```
+
+Nhấn Ctrl+F5, mở benchmark #87, bấm **Đối chiếu lại**, rồi xem thẻ sai hướng
+quanh754s và mở **Chuyển động theo raw ID**. Chức năng đọc lại trace đã lưu;
+không cần chạy detector mới nếu trace phiên214 vẫn còn.
+
+Đã đạt **1.355 ca kiểm thử offline**; giữ nguyên 1.319 hàm kiểm thử Python
+cũ và 10 tệp kiểm thử Node cũ. 64 ca HTTP/ORM chưa chạy và 1 ca PowerShell
+bỏ qua; chưa chạy Docker, browser/Vite build hoặc video/GPU mới.
+
+Xem `VERIFICATION.md` để biết phạm vi kiểm chứng và giới hạn.
+
+---
+
+## Ghi chú các bản trước
+
 # Traffic AI V0.5.119 — Xem cấu hình thực tế của phiên benchmark
 
 Màn hình benchmark có mục **Cấu hình thực tế của phiên**. Mở mục này để xem
