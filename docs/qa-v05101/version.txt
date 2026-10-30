@@ -1,1 +1,0 @@
-[OK] Version metadata and migration chain are consistent: 0.5.101

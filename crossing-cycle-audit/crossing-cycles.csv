@@ -1,6 +1,0 @@
-﻿prior_ai_event_id,current_ai_event_id,canonical_track_id,prior_time,current_time,gap_seconds,prior_direction,current_direction,prior_method,current_method,prior_extra,current_extra,prior_raw_track_id,current_raw_track_id,prior_witness_frame,current_witness_frame,raw_provenance,identity_proven,review_action
-12992,12996,86667,241.9594,250.5291,8.5697,out,in,rescued,interpolated,False,False,86667,90705,6050,6264,raw_alias_changed,False,Xem clip: xác nhận xe quay đầu/cắt hai lần hay tracker nối nhầm; không tự trừ số.
-12998,13000,95080,257.9647,266.16,8.1953,out,in,rescued,direct,False,False,,99035,,6655,insufficient_frame_witness,False,Xem clip: xác nhận xe quay đầu/cắt hai lần hay tracker nối nhầm; không tự trừ số.
-13030,13031,175996,478.4633,485.5047,7.0414,out,in,rescued,interpolated,False,False,176337,177611,11961,12139,raw_alias_changed,False,Xem clip: xác nhận xe quay đầu/cắt hai lần hay tracker nối nhầm; không tự trừ số.
-13044,13045,248105,631.9924,637.9877,5.9953,in,out,rescued,rescued,True,True,248964,254925,15803,15949,raw_alias_changed,False,Xem clip: xác nhận xe quay đầu/cắt hai lần hay tracker nối nhầm; không tự trừ số.
-13077,13079,345897,811.64,815.2484,3.6084,in,out,direct,rescued,True,True,369724,369724,20292,20382,same_raw_observed,False,Xem clip: xác nhận xe quay đầu/cắt hai lần hay tracker nối nhầm; không tự trừ số.

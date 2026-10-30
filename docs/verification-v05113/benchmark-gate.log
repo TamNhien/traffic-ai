@@ -1,8 +1,0 @@
-.....                                                                    [100%]
-=============================== warnings summary ===============================
-scripts/tests/test_benchmark_gate.py::test_v0572_integrity_failure_blocks_release
-  /usr/lib/python3.13/zipfile/__init__.py:1642: UserWarning: Duplicate name: 'report.json'
-    return self._open_to_write(zinfo, force_zip64=force_zip64)
-
--- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-5 passed, 1 warning in 0.09s

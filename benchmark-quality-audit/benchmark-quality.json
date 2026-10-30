@@ -1,0 +1,630 @@
+{
+  "format": "traffic-ai-benchmark-quality-audit",
+  "schema_version": 1,
+  "benchmark_id": 88,
+  "session_id": 248,
+  "gt": 149,
+  "ai": 148,
+  "matched": 144,
+  "missed": 5,
+  "extra": 4,
+  "direction_mismatches": 2,
+  "class_mismatches": 2,
+  "review_count": 13,
+  "source_fps": 25.0,
+  "window_seconds": 1.0,
+  "trace_source_sha256": "060fc3062d5974c3d87bf02cb3daca4501651e360c7d267091dac01c757599d8",
+  "camera_images_indexed": 0,
+  "read_only": true,
+  "accuracy_improvement_claimed": false,
+  "warnings": [
+    "A source-time match is not proof of the same physical vehicle.",
+    "Camera JPEGs are snapshots; use the full original video to verify identity and direction.",
+    "A track observed on both sides is only a review candidate, not permission to auto-count.",
+    "Original benchmark GT/AI events and matching are not modified."
+  ],
+  "issues": [
+    {
+      "kind": "extra",
+      "time": 54.294,
+      "timecode": "00:00:54.294",
+      "ground_truth_id": null,
+      "ai_event_id": 16417,
+      "tracking_id": 15369,
+      "ground_truth_direction": null,
+      "ai_direction": "out",
+      "ground_truth_class": null,
+      "ai_class": "motorcycle",
+      "crossing_method": "rescued",
+      "audit_reason": "rescued_gap_unmatched",
+      "review_action": "Check original video and contiguous raw motion before changing crossing policy.",
+      "identity_proven": false,
+      "trace": {
+        "frames_in_window": 50,
+        "tracks_observed_both_sides": 1,
+        "near_line_tracks": 2,
+        "nearby_proposals": [
+          {
+            "time": 54.2942,
+            "track_id": 15369,
+            "direction": "out",
+            "method": "rescued"
+          }
+        ],
+        "nearby_deliveries": [
+          {
+            "time": 54.294,
+            "event_id": 16417,
+            "outcome": "created",
+            "dedup_reason": null,
+            "track_id": 15369,
+            "direction": "out",
+            "crossing_method": "rescued"
+          }
+        ]
+      },
+      "camera_image": null,
+      "camera_gap_seconds": null,
+      "review_id": "REVIEW-01"
+    },
+    {
+      "kind": "direction",
+      "time": 58.984,
+      "timecode": "00:00:58.984",
+      "ground_truth_id": 12823,
+      "ai_event_id": 16418,
+      "tracking_id": 14,
+      "ground_truth_direction": "out",
+      "ai_direction": "in",
+      "ground_truth_class": "motorcycle",
+      "ai_class": "motorcycle",
+      "crossing_method": "interpolated",
+      "audit_reason": "time_matched_direction_conflict",
+      "review_action": "Inspect original MP4 for two distinct vehicles and actual IN/OUT at the line.",
+      "identity_proven": false,
+      "trace": {
+        "frames_in_window": 50,
+        "tracks_observed_both_sides": 1,
+        "near_line_tracks": 4,
+        "nearby_proposals": [
+          {
+            "time": 58.894,
+            "track_id": 14,
+            "direction": "in",
+            "method": "interpolated"
+          }
+        ],
+        "nearby_deliveries": [
+          {
+            "time": 58.894,
+            "event_id": 16418,
+            "outcome": "created",
+            "dedup_reason": null,
+            "track_id": 14,
+            "direction": "in",
+            "crossing_method": "interpolated"
+          }
+        ]
+      },
+      "camera_image": null,
+      "camera_gap_seconds": null,
+      "review_id": "REVIEW-02"
+    },
+    {
+      "kind": "missed",
+      "time": 59.446,
+      "timecode": "00:00:59.446",
+      "ground_truth_id": 12824,
+      "ai_event_id": null,
+      "tracking_id": null,
+      "ground_truth_direction": "in",
+      "ai_direction": null,
+      "ground_truth_class": "motorcycle",
+      "ai_class": null,
+      "crossing_method": null,
+      "audit_reason": "persisted_event_claimed_by_other_gt",
+      "review_action": "Compare multiple vehicles around the same time; nearby AI is assigned to another GT.",
+      "identity_proven": false,
+      "trace": {
+        "frames_in_window": 50,
+        "tracks_observed_both_sides": 1,
+        "near_line_tracks": 4,
+        "nearby_proposals": [
+          {
+            "time": 58.894,
+            "track_id": 14,
+            "direction": "in",
+            "method": "interpolated"
+          }
+        ],
+        "nearby_deliveries": [
+          {
+            "time": 58.894,
+            "event_id": 16418,
+            "outcome": "created",
+            "dedup_reason": null,
+            "track_id": 14,
+            "direction": "in",
+            "crossing_method": "interpolated"
+          }
+        ]
+      },
+      "camera_image": null,
+      "camera_gap_seconds": null,
+      "review_id": "REVIEW-03"
+    },
+    {
+      "kind": "missed",
+      "time": 237.042,
+      "timecode": "00:03:57.042",
+      "ground_truth_id": 12854,
+      "ai_event_id": null,
+      "tracking_id": null,
+      "ground_truth_direction": "out",
+      "ai_direction": null,
+      "ground_truth_class": "motorcycle",
+      "ai_class": null,
+      "crossing_method": null,
+      "audit_reason": "persisted_event_claimed_by_other_gt",
+      "review_action": "Compare multiple vehicles around the same time; nearby AI is assigned to another GT.",
+      "identity_proven": false,
+      "trace": {
+        "frames_in_window": 50,
+        "tracks_observed_both_sides": 1,
+        "near_line_tracks": 1,
+        "nearby_proposals": [
+          {
+            "time": 236.2994,
+            "track_id": 84351,
+            "direction": "in",
+            "method": "interpolated"
+          }
+        ],
+        "nearby_deliveries": [
+          {
+            "time": 236.299,
+            "event_id": 16447,
+            "outcome": "created",
+            "dedup_reason": null,
+            "track_id": 84351,
+            "direction": "in",
+            "crossing_method": "interpolated"
+          }
+        ]
+      },
+      "camera_image": null,
+      "camera_gap_seconds": null,
+      "review_id": "REVIEW-04"
+    },
+    {
+      "kind": "class",
+      "time": 289.45,
+      "timecode": "00:04:49.450",
+      "ground_truth_id": 12865,
+      "ai_event_id": 16458,
+      "tracking_id": 25767,
+      "ground_truth_direction": null,
+      "ai_direction": null,
+      "ground_truth_class": "bicycle",
+      "ai_class": "motorcycle",
+      "crossing_method": null,
+      "audit_reason": "time_matched_class_conflict",
+      "review_action": "Inspect original MP4, class-refinement evidence and annotated identity before relabeling.",
+      "identity_proven": false,
+      "trace": {
+        "frames_in_window": 50,
+        "tracks_observed_both_sides": 1,
+        "near_line_tracks": 2,
+        "nearby_proposals": [
+          {
+            "time": 289.6168,
+            "track_id": 25767,
+            "direction": "in",
+            "method": "interpolated"
+          }
+        ],
+        "nearby_deliveries": [
+          {
+            "time": 289.617,
+            "event_id": 16458,
+            "outcome": "created",
+            "dedup_reason": null,
+            "track_id": 25767,
+            "direction": "in",
+            "crossing_method": "interpolated"
+          }
+        ]
+      },
+      "camera_image": null,
+      "camera_gap_seconds": null,
+      "review_id": "REVIEW-05"
+    },
+    {
+      "kind": "missed",
+      "time": 289.824,
+      "timecode": "00:04:49.824",
+      "ground_truth_id": 12866,
+      "ai_event_id": null,
+      "tracking_id": null,
+      "ground_truth_direction": "in",
+      "ai_direction": null,
+      "ground_truth_class": "motorcycle",
+      "ai_class": null,
+      "crossing_method": null,
+      "audit_reason": "persisted_event_claimed_by_other_gt",
+      "review_action": "Compare multiple vehicles around the same time; nearby AI is assigned to another GT.",
+      "identity_proven": false,
+      "trace": {
+        "frames_in_window": 50,
+        "tracks_observed_both_sides": 1,
+        "near_line_tracks": 3,
+        "nearby_proposals": [
+          {
+            "time": 289.6168,
+            "track_id": 25767,
+            "direction": "in",
+            "method": "interpolated"
+          }
+        ],
+        "nearby_deliveries": [
+          {
+            "time": 289.617,
+            "event_id": 16458,
+            "outcome": "created",
+            "dedup_reason": null,
+            "track_id": 25767,
+            "direction": "in",
+            "crossing_method": "interpolated"
+          }
+        ]
+      },
+      "camera_image": null,
+      "camera_gap_seconds": null,
+      "review_id": "REVIEW-06"
+    },
+    {
+      "kind": "extra",
+      "time": 292.862,
+      "timecode": "00:04:52.862",
+      "ground_truth_id": null,
+      "ai_event_id": 16459,
+      "tracking_id": 110284,
+      "ground_truth_direction": null,
+      "ai_direction": "out",
+      "ground_truth_class": null,
+      "ai_class": "motorcycle",
+      "crossing_method": "interpolated",
+      "audit_reason": "interpolated_unmatched",
+      "review_action": "Check original video and contiguous raw motion before changing crossing policy.",
+      "identity_proven": false,
+      "trace": {
+        "frames_in_window": 50,
+        "tracks_observed_both_sides": 1,
+        "near_line_tracks": 4,
+        "nearby_proposals": [
+          {
+            "time": 292.8624,
+            "track_id": 110284,
+            "direction": "out",
+            "method": "interpolated"
+          }
+        ],
+        "nearby_deliveries": [
+          {
+            "time": 292.862,
+            "event_id": 16459,
+            "outcome": "created",
+            "dedup_reason": null,
+            "track_id": 110284,
+            "direction": "out",
+            "crossing_method": "interpolated"
+          }
+        ]
+      },
+      "camera_image": null,
+      "camera_gap_seconds": null,
+      "review_id": "REVIEW-07"
+    },
+    {
+      "kind": "missed",
+      "time": 406.488,
+      "timecode": "00:06:46.488",
+      "ground_truth_id": 12888,
+      "ai_event_id": null,
+      "tracking_id": null,
+      "ground_truth_direction": "out",
+      "ai_direction": null,
+      "ground_truth_class": "motorcycle",
+      "ai_class": null,
+      "crossing_method": null,
+      "audit_reason": "persisted_event_claimed_by_other_gt",
+      "review_action": "Compare multiple vehicles around the same time; nearby AI is assigned to another GT.",
+      "identity_proven": false,
+      "trace": {
+        "frames_in_window": 50,
+        "tracks_observed_both_sides": 1,
+        "near_line_tracks": 2,
+        "nearby_proposals": [
+          {
+            "time": 406.9688,
+            "track_id": 149040,
+            "direction": "in",
+            "method": "rescued"
+          }
+        ],
+        "nearby_deliveries": [
+          {
+            "time": 406.969,
+            "event_id": 16481,
+            "outcome": "created",
+            "dedup_reason": null,
+            "track_id": 149040,
+            "direction": "in",
+            "crossing_method": "rescued"
+          }
+        ]
+      },
+      "camera_image": null,
+      "camera_gap_seconds": null,
+      "review_id": "REVIEW-08"
+    },
+    {
+      "kind": "missed",
+      "time": 591.091,
+      "timecode": "00:09:51.091",
+      "ground_truth_id": 12908,
+      "ai_event_id": null,
+      "tracking_id": null,
+      "ground_truth_direction": "in",
+      "ai_direction": null,
+      "ground_truth_class": "bicycle",
+      "ai_class": null,
+      "crossing_method": null,
+      "audit_reason": "no_verified_event",
+      "review_action": "Review original video and trace for detection, track and gate crossing.",
+      "identity_proven": false,
+      "trace": {
+        "frames_in_window": 50,
+        "tracks_observed_both_sides": 0,
+        "near_line_tracks": 1,
+        "nearby_proposals": [],
+        "nearby_deliveries": []
+      },
+      "camera_image": null,
+      "camera_gap_seconds": null,
+      "review_id": "REVIEW-09"
+    },
+    {
+      "kind": "class",
+      "time": 641.981,
+      "timecode": "00:10:41.981",
+      "ground_truth_id": 12914,
+      "ai_event_id": 16505,
+      "tracking_id": 254022,
+      "ground_truth_direction": null,
+      "ai_direction": null,
+      "ground_truth_class": "car",
+      "ai_class": "truck",
+      "crossing_method": null,
+      "audit_reason": "time_matched_class_conflict",
+      "review_action": "Inspect original MP4, class-refinement evidence and annotated identity before relabeling.",
+      "identity_proven": false,
+      "trace": {
+        "frames_in_window": 50,
+        "tracks_observed_both_sides": 1,
+        "near_line_tracks": 4,
+        "nearby_proposals": [
+          {
+            "time": 641.9304,
+            "track_id": 254022,
+            "direction": "out",
+            "method": "interpolated"
+          }
+        ],
+        "nearby_deliveries": [
+          {
+            "time": 641.93,
+            "event_id": 16505,
+            "outcome": "created",
+            "dedup_reason": null,
+            "track_id": 254022,
+            "direction": "out",
+            "crossing_method": "interpolated"
+          }
+        ]
+      },
+      "camera_image": null,
+      "camera_gap_seconds": null,
+      "review_id": "REVIEW-10"
+    },
+    {
+      "kind": "direction",
+      "time": 754.558,
+      "timecode": "00:12:34.558",
+      "ground_truth_id": 12930,
+      "ai_event_id": 16521,
+      "tracking_id": 296297,
+      "ground_truth_direction": "out",
+      "ai_direction": "in",
+      "ground_truth_class": "motorcycle",
+      "ai_class": "motorcycle",
+      "crossing_method": "rescued",
+      "audit_reason": "time_matched_direction_conflict",
+      "review_action": "Inspect original MP4 for two distinct vehicles and actual IN/OUT at the line.",
+      "identity_proven": false,
+      "trace": {
+        "frames_in_window": 50,
+        "tracks_observed_both_sides": 1,
+        "near_line_tracks": 4,
+        "nearby_proposals": [
+          {
+            "time": 754.0457,
+            "track_id": 296297,
+            "direction": "in",
+            "method": "rescued"
+          },
+          {
+            "time": 754.6873,
+            "track_id": 296297,
+            "direction": "out",
+            "method": "rescued"
+          }
+        ],
+        "nearby_deliveries": [
+          {
+            "time": 754.046,
+            "event_id": 16521,
+            "outcome": "created",
+            "dedup_reason": null,
+            "track_id": 296297,
+            "direction": "in",
+            "crossing_method": "rescued"
+          },
+          {
+            "time": 754.687,
+            "event_id": 16521,
+            "outcome": "deduplicated",
+            "dedup_reason": "same-track-direction-flip",
+            "track_id": 296297,
+            "direction": "out",
+            "crossing_method": "rescued"
+          }
+        ]
+      },
+      "camera_image": null,
+      "camera_gap_seconds": null,
+      "review_id": "REVIEW-11"
+    },
+    {
+      "kind": "extra",
+      "time": 759.52,
+      "timecode": "00:12:39.520",
+      "ground_truth_id": null,
+      "ai_event_id": 16524,
+      "tracking_id": 333263,
+      "ground_truth_direction": null,
+      "ai_direction": "out",
+      "ground_truth_class": null,
+      "ai_class": "motorcycle",
+      "crossing_method": "direct",
+      "audit_reason": "spatial_duplicate_near_gt",
+      "review_action": "Inspect both track identities and the entire passage; proximity does not prove a duplicate.",
+      "identity_proven": false,
+      "trace": {
+        "frames_in_window": 51,
+        "tracks_observed_both_sides": 3,
+        "near_line_tracks": 2,
+        "nearby_proposals": [
+          {
+            "time": 759.52,
+            "track_id": 333263,
+            "direction": "out",
+            "method": "direct"
+          },
+          {
+            "time": 759.7307,
+            "track_id": 333263,
+            "direction": "in",
+            "method": "rescued"
+          },
+          {
+            "time": 760.1737,
+            "track_id": 336361,
+            "direction": "out",
+            "method": "interpolated"
+          },
+          {
+            "time": 760.0242,
+            "track_id": 333263,
+            "direction": "out",
+            "method": "rescued"
+          }
+        ],
+        "nearby_deliveries": [
+          {
+            "time": 759.52,
+            "event_id": 16524,
+            "outcome": "created",
+            "dedup_reason": null,
+            "track_id": 333263,
+            "direction": "out",
+            "crossing_method": "direct"
+          },
+          {
+            "time": 759.731,
+            "event_id": 16524,
+            "outcome": "deduplicated",
+            "dedup_reason": "same-track-direction-flip",
+            "track_id": 333263,
+            "direction": "in",
+            "crossing_method": "rescued"
+          },
+          {
+            "time": 760.174,
+            "event_id": 16525,
+            "outcome": "created",
+            "dedup_reason": null,
+            "track_id": 336361,
+            "direction": "out",
+            "crossing_method": "interpolated"
+          },
+          {
+            "time": 760.024,
+            "event_id": 16524,
+            "outcome": "deduplicated",
+            "dedup_reason": "same-track-repeat-jitter",
+            "track_id": 333263,
+            "direction": "out",
+            "crossing_method": "rescued"
+          }
+        ]
+      },
+      "camera_image": null,
+      "camera_gap_seconds": null,
+      "review_id": "REVIEW-12"
+    },
+    {
+      "kind": "extra",
+      "time": 882.291,
+      "timecode": "00:14:42.291",
+      "ground_truth_id": null,
+      "ai_event_id": 16546,
+      "tracking_id": 286434,
+      "ground_truth_direction": null,
+      "ai_direction": "in",
+      "ground_truth_class": null,
+      "ai_class": "truck",
+      "crossing_method": "interpolated",
+      "audit_reason": "interpolated_unmatched",
+      "review_action": "Check original video and contiguous raw motion before changing crossing policy.",
+      "identity_proven": false,
+      "trace": {
+        "frames_in_window": 50,
+        "tracks_observed_both_sides": 1,
+        "near_line_tracks": 3,
+        "nearby_proposals": [
+          {
+            "time": 882.2908,
+            "track_id": 286434,
+            "direction": "in",
+            "method": "interpolated"
+          }
+        ],
+        "nearby_deliveries": [
+          {
+            "time": 882.291,
+            "event_id": 16546,
+            "outcome": "created",
+            "dedup_reason": null,
+            "track_id": 286434,
+            "direction": "in",
+            "crossing_method": "interpolated"
+          }
+        ]
+      },
+      "camera_image": null,
+      "camera_gap_seconds": null,
+      "review_id": "REVIEW-13"
+    }
+  ]
+}

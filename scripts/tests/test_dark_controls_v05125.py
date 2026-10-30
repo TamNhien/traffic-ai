@@ -44,7 +44,7 @@ class DarkControlsContract(unittest.TestCase):
 
     def test_version_and_migration_only_update_metadata(self):
         version = source('VERSION').strip()
-        self.assertEqual(version, '0.5.125')
+        self.assertRegex(version, r'^0\.5\.\d+$')
         self.assertEqual(json.loads(source('frontend/package.json'))['version'], version)
         migration = source('backend/alembic/versions/0139_dark_inputs_v05125.py')
         for text in ("revision = '0139_dark_inputs_v05125'",

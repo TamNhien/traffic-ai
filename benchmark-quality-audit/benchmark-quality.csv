@@ -1,0 +1,14 @@
+﻿review_id,timecode,kind,ground_truth_id,ai_event_id,tracking_id,ground_truth_direction,ai_direction,ground_truth_class,ai_class,crossing_method,audit_reason,camera_image,camera_gap_seconds,review_action
+REVIEW-01,00:00:54.294,extra,,16417,15369,,out,,motorcycle,rescued,rescued_gap_unmatched,,,Check original video and contiguous raw motion before changing crossing policy.
+REVIEW-02,00:00:58.984,direction,12823,16418,14,out,in,motorcycle,motorcycle,interpolated,time_matched_direction_conflict,,,Inspect original MP4 for two distinct vehicles and actual IN/OUT at the line.
+REVIEW-03,00:00:59.446,missed,12824,,,in,,motorcycle,,,persisted_event_claimed_by_other_gt,,,Compare multiple vehicles around the same time; nearby AI is assigned to another GT.
+REVIEW-04,00:03:57.042,missed,12854,,,out,,motorcycle,,,persisted_event_claimed_by_other_gt,,,Compare multiple vehicles around the same time; nearby AI is assigned to another GT.
+REVIEW-05,00:04:49.450,class,12865,16458,25767,,,bicycle,motorcycle,,time_matched_class_conflict,,,"Inspect original MP4, class-refinement evidence and annotated identity before relabeling."
+REVIEW-06,00:04:49.824,missed,12866,,,in,,motorcycle,,,persisted_event_claimed_by_other_gt,,,Compare multiple vehicles around the same time; nearby AI is assigned to another GT.
+REVIEW-07,00:04:52.862,extra,,16459,110284,,out,,motorcycle,interpolated,interpolated_unmatched,,,Check original video and contiguous raw motion before changing crossing policy.
+REVIEW-08,00:06:46.488,missed,12888,,,out,,motorcycle,,,persisted_event_claimed_by_other_gt,,,Compare multiple vehicles around the same time; nearby AI is assigned to another GT.
+REVIEW-09,00:09:51.091,missed,12908,,,in,,bicycle,,,no_verified_event,,,"Review original video and trace for detection, track and gate crossing."
+REVIEW-10,00:10:41.981,class,12914,16505,254022,,,car,truck,,time_matched_class_conflict,,,"Inspect original MP4, class-refinement evidence and annotated identity before relabeling."
+REVIEW-11,00:12:34.558,direction,12930,16521,296297,out,in,motorcycle,motorcycle,rescued,time_matched_direction_conflict,,,Inspect original MP4 for two distinct vehicles and actual IN/OUT at the line.
+REVIEW-12,00:12:39.520,extra,,16524,333263,,out,,motorcycle,direct,spatial_duplicate_near_gt,,,Inspect both track identities and the entire passage; proximity does not prove a duplicate.
+REVIEW-13,00:14:42.291,extra,,16546,286434,,in,,truck,interpolated,interpolated_unmatched,,,Check original video and contiguous raw motion before changing crossing policy.

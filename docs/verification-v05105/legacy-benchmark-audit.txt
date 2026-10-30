@@ -1,3 +1,0 @@
-Benchmark #75 / Session #202: 12 gate cases, 23650 frames verified
-Runtime evidence: legacy-unattested / unknown
-Reports: /mnt/data/benchmark75-gate-audit-v105
