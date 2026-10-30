@@ -14,7 +14,7 @@ import { RawMotionAudit } from './raw-motion-audit.jsx'
 import { runtimeReleaseStatus } from './runtime-release-status.js'
 import { RuntimePolicyPanel } from './runtime-policy-panel.jsx'
 
-const APP_VERSION = '0.5.126'
+const APP_VERSION = '0.5.128'
 const vehicleLabels = {
   motorcycle: 'Xe máy', bicycle: 'Xe đạp', car: 'Ô tô', bus: 'Xe buýt', truck: 'Xe tải', other: 'Khác'
 }

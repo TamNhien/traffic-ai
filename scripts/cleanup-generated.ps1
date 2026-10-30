@@ -15,6 +15,7 @@ $names = @(
     'raw-id-audit-report',
     'replay-diff-report',
     'benchmark-quality-audit',
+    'benchmark-repeatability-audit',
     'benchmark-forensics-report',
     'passage-evidence-audit'
 )

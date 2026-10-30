@@ -2419,6 +2419,23 @@ Write-Host '[OK] Passage-owned clock hints V0.5.98 contract' -ForegroundColor Gr
 & (Join-Path $PSScriptRoot "tests/test-docker-engine-v0595.ps1")
 Assert-TrafficDockerEngine
 
+# Run repeatability preflight first; do not wait for expensive backend/AI suites.
+Invoke-Step "V0.5.128 isolated repeatability runner regression (stdlib-only)" {
+  docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 `
+    -v "${root}:/src" -w /src python:3.14.10-slim `
+    python -B -m unittest discover -s scripts/tests -p test_repeatability_runner_v05128.py -v
+  if ($LASTEXITCODE -ne 0) { throw 'V0.5.128 repeatability runner regression failed.' }
+}
+
+
+Invoke-Step "V0.5.127 verified repeatability regression (stdlib-only)" {
+  # Run the isolated Python tests in Docker; the host does not need Python.
+  docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 `
+    -v "${root}:/src" -w /src python:3.14.10-slim `
+    python -B -m unittest discover -s scripts/tests -p test_benchmark_repeatability_v05127.py -v
+  if ($LASTEXITCODE -ne 0) { throw 'V0.5.127 repeatability regression failed.' }
+}
+
 # Keep Python caches inside each disposable container. Same-size release edits can
 # share extracted ZIP timestamps; -B alone still reads stale host .pyc files.
 Invoke-Step "Isolated Python bytecode cache V0.5.96 (stdlib-only)" {

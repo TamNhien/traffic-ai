@@ -1,4 +1,4 @@
-# Traffic AI V0.5.126 — Tài liệu duy nhất / Hướng dẫn sử dụng
+# Traffic AI V0.5.128 — Tài liệu duy nhất / Hướng dẫn sử dụng
 
 > **Một `README.md`** ở thư mục gốc. Bản phân phối V0.5.126 đã hợp nhất
 > nội dung của `VERIFICATION.md` và `DEPENDENCIES_V05122.md` vào cuối tệp này.
@@ -6,8 +6,45 @@
 > chúng không chứa mã ứng dụng cần thiết, nhưng nếu máy bạn còn các báo cáo đó
 > thì chỉ nên tự xóa sau khi đã sao lưu những kết quả cần lưu trữ.
 
+## Cập nhật V0.5.128 — khắc phục lỗi kiểm thử repeatability
+
+- Khắc phục lỗi PowerShell `The expression after '&' ... was not valid` ở cuối `scripts/test.ps1`:
+  kiểm thử hồi quy V0.5.127 trước đó gọi `$python.Source` dù không tạo biến `$python`.
+- Cả bài kiểm thử repeatability V0.5.127 và bài kiểm tra mới V0.5.128 đều dùng
+  **Python 3.14.10 trong Docker** với môi trường bytecode riêng, không phụ thuộc
+  vào Python cài trên Windows; lỗi trả về dừng phát hành trước bước GitHub.
+- Thêm `scripts/tests/test_repeatability_runner_v05128.py` để kiểm tra lỗi
+  `$python.Source` không quay lại, có `docker run --rm`, lệnh unittest, mã trả về
+  và việc kiểm thử được đưa lên trước các bộ test backend/AI tốn thời gian;
+  vẫn giữ chế độ chỉ đọc benchmark.
+- Đồng bộ version `0.5.128` và Alembic `0142_repeatability_runner_v05128`.
+  **Không thay đổi thuật toán AI, Ground Truth, dữ liệu nghiệp vụ hay quyền truy cập.**
+- Kết quả trên máy người dùng ở V0.5.127 trước khi gặp lỗi: **222 backend**,
+  **898 AI**, **4 backup-worker** tests đạt. Cần chạy lại `test.ps1` trên Windows
+  để xác nhận toàn bộ luồng và kiểm tra frontend/build thực tế.
+
+## Cập nhật V0.5.127 — đối chiếu lỗi lặp lại
+
+- Đối chiếu thực tế Benchmark #88 / Session #248 và #89 / Session #249 trên cùng clip/GT: **149 GT, 148 AI, khớp 144, lọt 5, dư 4, sai hướng 2, sai loại 2** ở cả hai.
+- SHA-256 JSON và trace được xác minh: **148/148 chữ ký crossing AI trùng nhau, 13/13 hồ sơ sai lệch có chữ ký lặp, 0 hồ sơ mới, 0 hồ sơ được loại**, tham số thuật toán hiệu lực (`policy_metadata.configuration_sha256`) cũng giống nhau. Đây **không phải** một cải thiện về độ chính xác.
+- Thêm `scripts/audit-benchmark-repeatability.py` và `scripts/audit-benchmark-repeatability.ps1` để so sánh hai ZIP đã chấm GT, phát hiện hồ sơ lỗi lặp và xuất **JSON, CSV, Markdown**. Tool dừng nếu GT/nguồn/geometry khác nhau, không dùng ID database để suy ra cùng một xe, không sửa số đếm.
+- Bằng chứng camera RAR #249 được rà soát tại các mốc 54s, 59s, 289s, 293s, 642s, 754s, 760s, 882s. Ảnh tĩnh không đủ chứng minh trùng xe hoặc sai nhãn, do đó **không bật chặn bổ sung làm giảm Recall/Precision** trong bản này.
+- Migration `0141_repeatability_v05127` chỉ cập nhật metadata phiên bản, **không thay đổi bảng dữ liệu, thuật toán hoặc model**.
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+.\scripts\audit-benchmark-repeatability.ps1 `
+  -Prior '.\traffic-ai-benchmark-88-session-248.zip' `
+  -Current '.\traffic-ai-benchmark-89-session-249.zip' `
+  -OutputDirectory '.\benchmark-repeatability-audit'
+```
+
+**Gợi ý thử nghiệm tiếp:** quay lại clip tại 13 timecode ghi trong báo cáo để xác nhận bằng video liên tục/GT; chỉ điều chỉnh chính sách đếm nếu có phản thực nghiệm trên chính bộ GT này và kiểm tra thêm clip độc lập.
+
 ## Mục lục nhanh
 
+- [Cập nhật V0.5.128](#cập-nhật-v05128--khắc-phục-lỗi-kiểm-thử-repeatability)
+- [Cập nhật V0.5.127](#cập-nhật-v05127--đối-chiếu-lỗi-lặp-lại)
 - [Cập nhật V0.5.126](#cập-nhật-v05126)
 - [Chạy thử và phát hành](#chạy-thử-và-phát-hành)
 - [Dọn thư mục an toàn](#dọn-thư-mục-an-toàn)

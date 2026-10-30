@@ -37,3 +37,7 @@ Thumbs.db
 /traffic-ai-benchmark-*.zip
 /benchmark-comparison/
 /camera_*.rar
+
+# Generated read-only benchmark repeatability reports
+/benchmark-repeatability-audit/
+/benchmark-quality-audit/
