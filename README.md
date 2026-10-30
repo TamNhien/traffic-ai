@@ -1,3 +1,19 @@
+## V0.5.125 — Giao diện ô nhập liệu tối đồng bộ
+
+Điều chỉnh nền trắng mặc định của form trong **Dataset Studio / Clean Retrain**,
+**Fine-tune YOLO26**, các trường chọn dataset, và các trang **đăng nhập / đổi
+mật khẩu / quản trị người dùng**, đồng thời áp dụng đồng bộ cho các form camera,
+benchmark và báo cáo. Nền `#0b1a2f`, viền `#2d4a69`, chữ sáng `#edf5ff`.
+Dropdown native và spinner số dùng `color-scheme: dark`; Chrome/Edge autofill
+không đổi ô mật khẩu trở lại nền vàng/trắng. Nút bấm, checkbox, file upload,
+placeholder và trạng thái focus vẫn tách biệt, bảo toàn khả năng dùng bàn phím.
+
+Thay đổi chỉ ở CSS, bài kiểm thử UI (Node stdlib), runtime version và migration
+metadata `0139`; không sửa AI detector, training pipeline, dữ liệu camera,
+Ground Truth, database nghiệp vụ hay Docker volumes. Test `npm test` tự chạy
+các bài hồi quy giao diện mới. Chạy `test.ps1` trước `publish.ps1` và giữ lại
+`.env`, `.git`, videos, models, backups, Docker volumes khi giải nén ZIP.
+
 # Traffic AI V0.5.124 — Sửa kiểm tra npm bị sót sau nâng cấp
 
 Log Windows 29/10/2026 cho thấy `scripts/test.ps1` dừng tại

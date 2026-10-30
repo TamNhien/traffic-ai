@@ -2553,6 +2553,12 @@ Invoke-Step "V0.5.121 frontend Rolldown registry availability (stdlib-only)" {
   if ($LASTEXITCODE -ne 0) { throw 'V0.5.121 frontend dependency pin regression failed.' }
 }
 
+Invoke-Step "V0.5.125 dark form controls regression (stdlib-only)" {
+  docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 -v "${root}:/src" -w /src python:3.14.10-slim `
+    python -S -m unittest discover -s scripts/tests -p test_dark_controls_v05125.py -v
+  if ($LASTEXITCODE -ne 0) { throw "V0.5.125 dark controls regression failed." }
+}
+
 Invoke-Step "V0.5.124 dynamic npm preflight regression (stdlib-only)" {
   docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 -v "${root}:/src" -w /src python:3.14.10-slim `
     python -S -m unittest discover -s scripts/tests -p test_npm_preflight_v05124.py -v

@@ -59,7 +59,7 @@ class DynamicNpmPreflightTests(unittest.TestCase):
 
     def test_version_migration_does_not_change_business_tables(self):
         version = source('VERSION').strip()
-        self.assertEqual(version, '0.5.124')
+        self.assertRegex(version, r'^0\.5\.\d+$')
         self.assertEqual(json.loads(source('frontend/package.json'))['version'], version)
         migration = source('backend/alembic/versions/0138_npm_contract_v05124.py')
         self.assertIn("revision = '0138_npm_contract_v05124'", migration)

@@ -285,3 +285,58 @@
 .raw-motion-handoff{padding:8px 10px;border-left:2px solid #648bad;background:rgba(87,130,171,.08);margin:9px 0}
 .raw-motion-handoff p{margin:4px 0}
 @media(max-width:460px){.raw-motion-measurements>div{grid-template-columns:1fr;gap:2px}}
+
+
+/* V0.5.125: coherent native dark-mode controls in every app and sign-in form.
+   The browser otherwise paints unstyled text/number/select inputs white.
+   Native pickers, select popups, autofill and number steppers honor dark scheme. */
+:root {
+  color-scheme: dark;
+  --traffic-field-bg: #0b1a2f;
+  --traffic-field-border: #2d4a69;
+  --traffic-field-text: #edf5ff;
+  --traffic-field-placeholder: #91a8c4;
+}
+:where(.app-shell, .auth-page) :is(
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="hidden"]):not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="color"]),
+  select,
+  textarea
+) {
+  background: var(--traffic-field-bg);
+  color: var(--traffic-field-text);
+  border: 1px solid var(--traffic-field-border);
+  border-radius: 8px;
+  padding: 9px 11px;
+  min-width: 0;
+  color-scheme: dark;
+  caret-color: #e2f4ff;
+}
+:where(.app-shell, .auth-page) :is(input, textarea)::placeholder {
+  color: var(--traffic-field-placeholder);
+  opacity: 1;
+}
+:where(.app-shell, .auth-page) select :is(option, optgroup) {
+  background: var(--traffic-field-bg);
+  color: var(--traffic-field-text);
+}
+:where(.app-shell, .auth-page) :is(input, select, textarea):focus-visible {
+  outline: 2px solid #60a5fa;
+  outline-offset: 1px;
+  border-color: #60a5fa;
+}
+:where(.app-shell, .auth-page) :is(input, select, textarea):disabled {
+  opacity: .65;
+  cursor: not-allowed;
+}
+:where(.app-shell, .auth-page) :is(input[type="checkbox"], input[type="radio"]) {
+  accent-color: #2dd4bf;
+}
+/* Chrome/Edge account/password autofill must not paint light yellow/white. */
+:where(.app-shell, .auth-page) input:-webkit-autofill,
+:where(.app-shell, .auth-page) input:-webkit-autofill:hover,
+:where(.app-shell, .auth-page) input:-webkit-autofill:focus {
+  -webkit-box-shadow: 0 0 0 1000px var(--traffic-field-bg) inset;
+  -webkit-text-fill-color: var(--traffic-field-text);
+  caret-color: var(--traffic-field-text);
+  border-color: var(--traffic-field-border);
+}

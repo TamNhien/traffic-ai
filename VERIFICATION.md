@@ -1,3 +1,19 @@
+## V0.5.125 - Dark form controls smoke checks
+
+- Change: frontend/src/styles.css only for UI skin; dark backgrounds cover
+  Dataset/Clean Retrain, Fine-tune, camera, benchmark, sign-in/password/user forms.
+  Buttons, checkboxes, file upload and range controls intentionally exempt.
+- Node stdlib frontend regression tests: 79/79 passed on Node 22 (installed
+  here; production Docker version remains Node 26.13.0).
+- Offline preflight: 6 dark controls + 6 npm consistency + 4 CI/publish +
+  5 CRLF + 5 frontend Vite security + 6 dependency upgrade + 5 Rolldown +
+  5 version checks = 42/42 Python tests passed. Combined Node/Python: 121/121
+  targeted tests passed. CSS parsed cleanly with tinycss2. Version schema head 0139_dark_inputs_v05125 (metadata-only).
+- Parsed 298 Python files for syntax, and validated CRLF for 39 PowerShell files.
+- This workspace could not render a browser screenshot in headless Chromium
+  (process timed out). Docker build, HTTPS login and GPU were not rerun here.
+  Validate via scripts/test.ps1 then scripts/start.ps1 on Windows.
+
 # Verification V0.5.124 — stale npm preflight pin
 
 - Reproduced stale `-notmatch 'npm@12\.2\.0'` in V0.5.123's
