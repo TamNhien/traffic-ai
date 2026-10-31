@@ -2419,6 +2419,22 @@ Write-Host '[OK] Passage-owned clock hints V0.5.98 contract' -ForegroundColor Gr
 & (Join-Path $PSScriptRoot "tests/test-docker-engine-v0595.ps1")
 Assert-TrafficDockerEngine
 
+# V0.5.131: dark benchmark focus button styling (before full frontend build).
+Invoke-Step "V0.5.131 dark benchmark focus button regression (stdlib-only)" {
+  docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 `
+    -v "${root}:/src" -w /src python:3.14.10-slim `
+    python -B -m unittest discover -s scripts/tests -p test_focus_button_v05131.py -v
+  if ($LASTEXITCODE -ne 0) { throw "V0.5.131 benchmark focus dark-mode regression failed." }
+}
+
+# V0.5.130: read-only local trend audit must run before expensive suites.
+Invoke-Step "V0.5.130 multi-run benchmark trend + review focus regression (stdlib-only)" {
+  docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 `
+    -v "${root}:/src" -w /src python:3.14.10-slim `
+    python -B -m unittest discover -s scripts/tests -p test_benchmark_trend_v05130.py -v
+  if ($LASTEXITCODE -ne 0) { throw 'V0.5.130 trend audit tests failed.' }
+}
+
 # Run repeatability preflight first; do not wait for expensive backend/AI suites.
 Invoke-Step "V0.5.128 isolated repeatability runner regression (stdlib-only)" {
   docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 `

@@ -1,4 +1,53 @@
-# Traffic AI V0.5.128 — Tài liệu duy nhất / Hướng dẫn sử dụng
+# Traffic AI V0.5.131 — Tài liệu duy nhất / Hướng dẫn sử dụng
+
+## V0.5.131 — Sửa lỗi Dark Mode benchmark focus, chạy local trên Windows
+
+- Khắc phục `scripts/test.ps1` dừng ở bài kiểm thử Dark Mode V0.5.125 do ba khai báo `!important` trong `.benchmark-focus-button` từ V0.5.130.
+- Áp dụng `.panel button.benchmark-focus-button` với độ ưu tiên CSS phù hợp, giữ màu tối, viền, trạng thái focus và hành vi tua video tại timecode.
+- Sửa bài kiểm thử xu hướng V0.5.130 không khóa cứng số phiên bản của những bản phát hành sau; bổ sung 4 bài kiểm thử chống tái phát cho V0.5.131.
+- Đồng bộ frontend/backend/AI/backup-worker/VERSION và Alembic `0144_focus_css_v05131` (chỉ metadata). **Không thay đổi thuật toán đếm xe, PostgreSQL nghiệp vụ, Ground Truth, Docker volumes hoặc cấu hình GPU. Không thêm Google Drive/rclone.**
+- Sau khi cài source mới, chạy `test.ps1`. Chỉ khi kiểm thử đạt mới chạy `start.ps1` và `publish.ps1`. Giữ nguyên `.env`, `.git`, models, datasets, videos, snapshots và training-runs hiện có.
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+.\scripts\test.ps1
+.\scripts\start.ps1
+.\scripts\publish.ps1
+```
+
+---
+
+## V0.5.130 — Local-only, không sử dụng Google Drive
+
+**Nhánh này xây dựng trực tiếp từ V0.5.128.** V0.5.129 từng được phát hành riêng cho phương án Google Drive, nhưng người dùng đã quyết định giữ toàn bộ dữ liệu, Docker và RTX 3060 trên Windows. Để tránh trùng tag/phiên bản trên GitHub, bản local-only dùng **V0.5.130** và **KHÔNG** thêm rclone, kết nối Google, cloud backup hoặc lịch upload. Migration `0143_local_trend_v05130` nối tiếp Alembic `0142_repeatability_runner_v05128` và **chỉ cập nhật metadata**.
+
+- Benchmark #88/#89/#90 (Session #248/#249/#250): cùng GT 149, AI 148, khớp 144, lọt 5, dư 4, sai hướng 2, sai loại 2. So sánh SHA-256 đã chứng thực cho thấy cả 148 chữ ký sự kiện AI và 13 chữ ký hồ sơ lỗi đều lặp cả ba lần. Không có cải thiện đo được; không can thiệp chính sách đếm bằng cách suy diễn từ ảnh tĩnh.
+- **Mới:** `scripts/audit-benchmark-trend.py` + `.ps1` so sánh **3–12 benchmark** đã chấm GT, từ chối GT/nguồn/hình học không tương thích, kiểm tra SHA-256, nhận diện vấn đề tái diễn và phân nhóm: xe GT cạnh tranh thời gian, xe đạp lọt, rescue qua gap, nội suy qua vạch, khả năng trùng track, sai hướng và sai loại. Xuất `benchmark-trend.json`, `.csv`, `.md` (chỉ đọc).
+- **Mới:** phần *Ưu tiên xem bằng chứng* trong màn hình Benchmark: gom mốc thời gian cần rà soát, bấm để tua video trước mốc 0,75 giây; không tự sửa GT, không cộng/trừ xe.
+- Dữ liệu và mô hình không thay đổi; kiểm toán lỗi không chứng minh hai sự kiện gần thời gian thuộc cùng một xe. Cần xác nhận từ video liên tục trước khi thay đổi thuật toán trên clip kiểm tra độc lập.
+
+**Chạy trên Windows (đã có Docker Desktop, không yêu cầu Python host):**
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+.\scripts\test.ps1
+.\scripts\start.ps1
+
+.\scripts\audit-benchmark-trend.ps1 `
+  -Exports @('.\traffic-ai-benchmark-88-session-248.zip', '.\traffic-ai-benchmark-89-session-249.zip', '.\traffic-ai-benchmark-90-session-250.zip') `
+  -OutputDirectory '.\benchmark-trend-audit'
+
+# Chi phat hanh khi test thanh cong
+.\scripts\publish.ps1
+```
+
+Giữ nguyên `.env`, `.git`, `datasets`, `videos`, `models`, `training-runs`, snapshots và volumes PostgreSQL khi giải nén. Các kết quả báo cáo có thể được dọn riêng; không xóa PostgreSQL volume, không xóa VHDX Docker Desktop.
+
+---
+
+## Lịch sử: Traffic AI V0.5.128
 
 > **Một `README.md`** ở thư mục gốc. Bản phân phối V0.5.126 đã hợp nhất
 > nội dung của `VERIFICATION.md` và `DEPENDENCIES_V05122.md` vào cuối tệp này.

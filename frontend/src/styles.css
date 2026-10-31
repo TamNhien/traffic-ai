@@ -340,3 +340,15 @@
   caret-color: var(--traffic-field-text);
   border-color: var(--traffic-field-border);
 }
+
+/* V0.5.130: local read-only benchmark focus navigation */
+/* V0.5.131: .panel button specificity overrides generic blue buttons without priority overrides. */
+.benchmark-focus-panel{border:1px solid #264967;border-radius:12px;background:#0b1b30;padding:12px;margin:10px 0 14px;color:#daeafe}
+.benchmark-focus-panel summary{cursor:pointer;font-weight:700;line-height:1.5}
+.benchmark-focus-panel summary small{color:#94b7ce;font-weight:500;margin-left:8px}
+.benchmark-focus-hint{font-size:.8rem;color:#adc3dc;margin:8px 0}
+.benchmark-focus-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:7px;margin-top:9px}
+.panel button.benchmark-focus-button{display:flex;flex-direction:column;align-items:flex-start;gap:4px;min-width:0;white-space:normal;text-align:left;background:#132943;border:1px solid #315274;color:#cfe5ff}
+.benchmark-focus-button strong{color:#73e2dd;font-size:.84rem}
+.benchmark-focus-button span{font-size:.8rem}
+.benchmark-focus-button:focus-visible{outline:2px solid #5fbfea;outline-offset:2px}

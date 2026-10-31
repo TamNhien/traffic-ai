@@ -6,6 +6,7 @@ import { BackupPanel } from './backup-panel.jsx'
 import { TrafficReports } from './traffic-reports.jsx'
 import { shouldShowTemporalCompetitionReview } from './benchmark-review.js'
 import { buildReviewQueue, filterReviewQueue, reviewSeekStart } from './benchmark-review-navigator.js'
+import { buildBenchmarkFocusQueue } from './benchmark-focus.js'
 import { buildPassageCycleReview } from './benchmark-passage-cycles.js'
 import { verifiedPassageSummary } from './passage-evidence-summary.js'
 import { buildHumanGuardAuditView } from './human-guard-audit.js'
@@ -14,7 +15,7 @@ import { RawMotionAudit } from './raw-motion-audit.jsx'
 import { runtimeReleaseStatus } from './runtime-release-status.js'
 import { RuntimePolicyPanel } from './runtime-policy-panel.jsx'
 
-const APP_VERSION = '0.5.128'
+const APP_VERSION = '0.5.131'
 const vehicleLabels = {
   motorcycle: 'Xe máy', bicycle: 'Xe đạp', car: 'Ô tô', bus: 'Xe buýt', truck: 'Xe tải', other: 'Khác'
 }
@@ -808,6 +809,7 @@ function GroundTruthBenchmark({ selectedCameraId, sessions }) {
   const reportScoringAvailable = reportIsScorable(report)
   const hasGroundTruth = (detail?.marks?.length || 0) > 0
   const reviewCases = useMemo(() => buildReviewQueue(report, reportScoringAvailable), [report, reportScoringAvailable])
+  const focusCases = useMemo(() => buildBenchmarkFocusQueue(report, reportScoringAvailable), [report, reportScoringAvailable])
   const passageCyclePairs = useMemo(() => reportScoringAvailable ? buildPassageCycleReview(report) : [], [report, reportScoringAvailable])
   const filteredCases = useMemo(() => filterReviewQueue(reviewCases, caseFilter), [reviewCases, caseFilter])
   const activeCaseIndex = filteredCases.findIndex(item => item.key === activeReviewCase)
@@ -1054,6 +1056,11 @@ function GroundTruthBenchmark({ selectedCameraId, sessions }) {
       {detail && Number(detail.id) === Number(selectedBenchmarkId) && Number(detail.camera_id) === Number(selectedCameraId) && <RuntimePolicyPanel key={`${selectedCameraId}:${detail.id}:${detail.session_id}`} benchmarkId={detail.id} sessionId={detail.session_id} />}
       {report ? <>
         {!reportScoringAvailable && <><div className="source-status warn"><strong>Chưa có Ground Truth để chấm điểm</strong><span>AI đã ghi nhận {report.ai_total} lượt. Hãy sao chép GT từ benchmark cùng clip và vạch, hoặc đánh dấu xe trên video. Khi GT còn trống, điểm số và chẩn đoán lọt/dư chưa được tính.</span></div>{compatibleCloneSource && <button className="secondary benchmark-clone-gt" disabled={busy} onClick={cloneGroundTruthIntoCurrent}>Sao chép {compatibleCloneSource.mark_count} GT từ Benchmark #{compatibleCloneSource.id} sang Benchmark #{detail.id}</button>}</>}
+        {focusCases.length > 0 && <details className="benchmark-focus-panel">
+          <summary>Ưu tiên xem bằng chứng V{APP_VERSION} <small>{focusCases.length} hồ sơ · không tự sửa GT/AI</small></summary>
+          <p className="benchmark-focus-hint">Các ca cạnh tranh timecode không chứng minh cùng một xe. Nhấn mốc để xem video trước khi thay đổi chính sách đếm.</p>
+          <div className="benchmark-focus-list">{focusCases.map(item=><button type="button" className="secondary benchmark-focus-button" key={item.key} onClick={()=>seekTo(Math.max(0,item.time-0.75))} title="Mở video trước mốc 0,75 giây"><strong>{formatVideoTime(item.time)}</strong><span>{item.label}</span></button>)}</div>
+        </details>}
         <div className="benchmark-metrics"><div><span>Ground truth</span><strong>{report.ground_truth_total}</strong></div><div><span>AI đếm</span><strong>{report.ai_total}</strong></div><div><span>Khớp</span><strong>{reportScoringAvailable ? report.matched : '—'}</strong></div><div className={reportScoringAvailable && report.missed ? 'metric-bad' : ''}><span>Lọt không đếm</span><strong>{reportScoringAvailable ? report.missed : '—'}</strong></div><div className={reportScoringAvailable && report.false_positives ? 'metric-warn' : ''}><span>Đếm dư</span><strong>{reportScoringAvailable ? report.false_positives : '—'}</strong></div><div><span>Sai số tổng</span><strong>{reportScoringAvailable ? `${report.count_error > 0 ? '+' : ''}${report.count_error}` : '—'}</strong></div></div>
         <div className="benchmark-scores"><span>Counting Recall <strong>{reportScoringAvailable ? `${(Number(report.counting_recall || 0)*100).toFixed(1)}%` : '—'}</strong></span><span>Precision <strong>{reportScoringAvailable ? `${(Number(report.counting_precision || 0)*100).toFixed(1)}%` : '—'}</strong></span><span>F1 <strong>{reportScoringAvailable ? `${(Number(report.counting_f1 || 0)*100).toFixed(1)}%` : '—'}</strong></span><span>Class đúng <strong>{!reportScoringAvailable || report.class_accuracy == null ? '—' : `${(report.class_accuracy*100).toFixed(1)}%`}</strong></span><span title="Trong các cặp khớp timecode, có bao nhiêu cặp đúng hướng IN/OUT">Hướng đúng <strong>{!reportScoringAvailable || report.direction_accuracy == null ? '—' : `${(report.direction_accuracy*100).toFixed(1)}%`}</strong></span><span title="Phải khớp timecode, đúng loại xe và đúng hướng; chỉ là chỉ số bổ sung, không sửa benchmark cũ">Khớp đủ 3 <strong>{!reportScoringAvailable || report.strict_matches == null ? '—' : report.strict_matches}</strong></span><span title="GT lọt và AI dư gần nhau ngoài cửa sổ chấm điểm; chỉ phục vụ review, không đổi Recall/Precision">Review gần <strong>{reportScoringAvailable ? (report.unmatched_review_links ?? 0) : '—'}</strong></span></div>
         {verifiedPassageSummary(report, reportScoringAvailable) && <div className="benchmark-temporal-note" role="note"><strong>Kiểm toán bằng chứng V0.5.100:</strong> {verifiedPassageSummary(report, reportScoringAvailable).detail} Xuất ZIP benchmark và dùng <code>audit-error-evidence.ps1</code> để xem từng trường hợp theo timecode.</div>}

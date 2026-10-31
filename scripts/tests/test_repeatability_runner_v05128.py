@@ -36,7 +36,7 @@ class IsolatedRepeatabilityRunnerTests(unittest.TestCase):
                         test_script.index('Invoke-Step "Backend unit tests"'))
 
     def test_current_version_and_metadata_only_migration(self):
-        self.assertEqual((ROOT / 'VERSION').read_text('utf-8').strip(), '0.5.128')
+        self.assertGreaterEqual(tuple(map(int,(ROOT / 'VERSION').read_text('utf-8').strip().split('.'))),(0,5,128))
         migration = (ROOT / 'backend/alembic/versions/0142_repeatability_runner_v05128.py').read_text('utf-8')
         self.assertIn("down_revision = '0141_repeatability_v05127'", migration)
         self.assertIn("value='0.5.128'", migration)
