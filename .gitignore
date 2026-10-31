@@ -41,3 +41,6 @@ Thumbs.db
 # Generated read-only benchmark repeatability reports
 /benchmark-repeatability-audit/
 /benchmark-quality-audit/
+
+# Session-scoped local camera review artifacts
+/benchmark-frame-evidence-audit/

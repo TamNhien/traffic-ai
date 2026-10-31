@@ -2419,6 +2419,14 @@ Write-Host '[OK] Passage-owned clock hints V0.5.98 contract' -ForegroundColor Gr
 & (Join-Path $PSScriptRoot "tests/test-docker-engine-v0595.ps1")
 Assert-TrafficDockerEngine
 
+# V0.5.132: session-scoped camera evidence regression (read-only, before frontend build).
+Invoke-Step "V0.5.132 verified session camera frame evidence (stdlib-only)" {
+  docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 `
+    -v "${root}:/src" -w /src python:3.14.10-slim `
+    python -B -m unittest discover -s scripts/tests -p test_camera_evidence_v05132.py -v
+  if ($LASTEXITCODE -ne 0) { throw "V0.5.132 camera evidence regression failed." }
+}
+
 # V0.5.131: dark benchmark focus button styling (before full frontend build).
 Invoke-Step "V0.5.131 dark benchmark focus button regression (stdlib-only)" {
   docker run --rm -e PYTHONPYCACHEPREFIX=/tmp/traffic-ai-test-pycache -e PYTHONDONTWRITEBYTECODE=1 `

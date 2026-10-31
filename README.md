@@ -1,3 +1,27 @@
+# Traffic AI V0.5.132 — Tài liệu duy nhất / Local-only
+
+## V0.5.132 — Kiểm toán ảnh camera đúng session, không sửa thuật toán
+
+- Bản nâng cấp tiếp từ V0.5.131, chạy trên Windows / RTX 3060 / Docker Desktop / PostgreSQL tại máy; KHÔNG có Google Drive hoặc rclone.
+- Công cụ mới `scripts/audit-benchmark-frame-evidence.ps1` đối chiếu Benchmark ZIP có SHA-256 hợp lệ với các ảnh JPG đã giải nén từ Camera RAR. Bắt buộc **cùng Session ID**, không lấy nhầm ảnh từ phiên cũ khi hai phiên có số frame giống nhau.
+- Xuất `camera-review.json`, `.csv`, `.md` và tối đa một ảnh JPG gần timecode cho mỗi hồ sơ cần review (giới hạn 0,8 giây mặc định). Ca thiếu ảnh đủ gần ghi `insufficient_frame_coverage`, KHÔNG suy diễn không có xe.
+- Chỉ dùng ảnh overlay để điều hướng; ảnh tĩnh không chứng minh danh tính, hướng di chuyển hoặc xe đã qua vạch. Cần video clip gốc để kết luận. **Không thêm/xóa lượt đếm, không chỉnh GT, không chạm database**.
+- Để chạy trên Windows: giải nén RAR ra `D:\TrafficAI-Camera-251` (thư mục có các file `session_251_..._frame_N.jpg`). Có thể chứa lẫn Session #250; tool tự loại ảnh của session khác.
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+.\scripts\audit-benchmark-frame-evidence.ps1 `
+  -Export ".\traffic-ai-benchmark-91-session-251.zip" `
+  -CameraFolder "D:\TrafficAI-Camera-251" `
+  -OutputDirectory ".\benchmark-frame-evidence-audit"
+```
+
+- Lưu ý: `OutputDirectory` phải mới hoặc rỗng; nếu muốn chạy lại hãy chọn tên output khác. Các đầu vào được mount `:ro` vào Docker; không ghi đè thư mục camera.
+- Kết quả cố định #91 / Session #251: GT 149, AI 148, matched 144, missed 5, extra 4, direction 2, class 2; Benchmark #88–#91 có 13/13 lỗi lặp. Phiên mới **chưa cải thiện độ chính xác đếm**; báo cáo bổ sung nhằm tìm bằng chứng tốt hơn.
+- Trên máy: chạy `scripts/test.ps1`, sau khi đạt `scripts/start.ps1`, sau đó `scripts/publish.ps1`.
+
+---
+
 # Traffic AI V0.5.131 — Tài liệu duy nhất / Hướng dẫn sử dụng
 
 ## V0.5.131 — Sửa lỗi Dark Mode benchmark focus, chạy local trên Windows

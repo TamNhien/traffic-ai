@@ -4,7 +4,7 @@ from __future__ import annotations
 from hashlib import sha256
 from pathlib import Path
 
-TRACE_RUNTIME_VERSION = '0.5.131'
+TRACE_RUNTIME_VERSION = '0.5.132'
 TRACE_GATE_DECISION_SCHEMA = 1
 
 
