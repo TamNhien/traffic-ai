@@ -44,3 +44,7 @@ Thumbs.db
 
 # Session-scoped local camera review artifacts
 /benchmark-frame-evidence-audit/
+
+# Local-only continuous benchmark video review clips (never push footage)
+/benchmark*-video-review/
+/benchmark-video-review/

@@ -87,7 +87,7 @@ class CameraEvidenceRegression(unittest.TestCase):
         test=(ROOT/'scripts/test.ps1').read_text('utf-8')
         self.assertIn('test_camera_evidence_v05132.py',test)
         self.assertLess(test.index('test_camera_evidence_v05132.py'),test.index('Invoke-Step "Frontend build"'))
-        self.assertEqual((ROOT/'VERSION').read_text().strip(),'0.5.132')
+        self.assertGreaterEqual(int((ROOT/'VERSION').read_text().strip().split('.')[-1]), 132)
         self.assertEqual(sorted(p.name for p in ROOT.glob('*.md')),['README.md'])
 
 if __name__=='__main__':unittest.main()

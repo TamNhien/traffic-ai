@@ -1,3 +1,32 @@
+# Traffic AI V0.5.133 — Local Only · Video Review Evidence
+
+## V0.5.133 — Xuất clip video liên tục từ 13 hồ sơ lỗi đã xác minh
+
+- Nâng cấp từ V0.5.132, vẫn chạy local với Docker Desktop, RTX 3060 và PostgreSQL. Không có tính năng Google Drive hoặc rclone.
+- Với Benchmark #92 / Session #252: Ground Truth 149, AI 148, khớp 144, lọt 5, dư 4, sai hướng 2, sai loại 2. Chưa có cải thiện kết quả đếm đo được. 13 hồ sơ lỗi được nối với 161 ảnh Session #252, trong đó 12 hồ sơ có ảnh gần mốc 0,8 giây; ca xe đạp 591,091s còn thiếu ảnh.
+- **Mới:** `scripts/export-benchmark-review-clips.ps1` xuất các đoạn MP4 chuyển động liên tục bao quanh **cả 4 loại lỗi** (lọt/dư/sai hướng/sai loại), tự gộp timecode gần nhau tránh trùng clip. Mỗi clip có start/end, case IDs và SHA-256 trong `review-clips.json`, `review-clips.csv`, `review-clips.md`. Bản manifest chỉ xuất hiện sau khi các MP4 đã render xong.
+- Benchmark ZIP được kiểm tra SHA-256 trước khi đọc; video MP4 được kiểm tra đúng basename `source_url`, FPS, thời lượng, frame count và kích thước từ trace. SHA-256 của chính file video được ghi lại. **Các thuộc tính đó không chứng minh tuyệt đối video đúng với phiên lịch sử**; phải xem trực tiếp. Không tự động sửa nhãn, GT, AI events hay model.
+- Video nguồn phải là file MP4 gốc đã dùng cho Session #252, ví dụ `videos\clip1.mp4`, không dùng ảnh RAR hoặc preview chất lượng thấp để thay thế. Script dùng FFmpeg có trong image `traffic-ai-ai-service:latest`, không cần cài thêm FFmpeg trên Windows. Đầu vào `:ro`, `--network none`, output mới/rỗng, không ghi đè hồ sơ trước.
+
+```powershell
+cd D:\LienThongDH\DoAn\traffic-ai
+Get-ChildItem .\scripts -Recurse -Filter *.ps1 | Unblock-File
+.\scripts\test.ps1
+.\scripts\start.ps1
+.\scripts\export-benchmark-review-clips.ps1 `
+  -Export ".\traffic-ai-benchmark-92-session-252.zip" `
+  -Video ".\videos\clip1.mp4" `
+  -ExpectedSession 252 `
+  -HalfWindow 2 `
+  -OutputDirectory ".\benchmark92-video-review"
+.\scripts\publish.ps1
+```
+
+- Trước khi publish GitHub, bảo đảm tất cả test đã đạt. Đừng commit MP4 gốc, `.env`, data PostgreSQL, dataset hoặc các thư mục review có thông tin camera nhạy cảm.
+- Migration `0146_video_review_v05133` chỉ thay đổi metadata schema_version và không đụng dữ liệu nghiệp vụ.
+
+---
+
 # Traffic AI V0.5.132 — Tài liệu duy nhất / Local-only
 
 ## V0.5.132 — Kiểm toán ảnh camera đúng session, không sửa thuật toán
